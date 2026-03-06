@@ -1011,7 +1011,7 @@ async function fetchNews(ticker) {
 // ======================================================
 // API — CLAUDE
 // ======================================================
-async function callClaude(prompt) {
+async function callClaude(messages) {
   const key = S.data.settings.claudeApiKey;
   if (!key) throw new Error('Clé API Anthropic non configurée. Allez dans ⚙️ Paramètres.');
   const resp = await fetch(CLAUDE_URL, {
@@ -1020,8 +1020,19 @@ async function callClaude(prompt) {
     body: JSON.stringify({
       model: CLAUDE_MODEL,
       max_tokens: 2048,
-      system: `Tu es un conseiller financier expert en bourse, ETF et gestion de patrimoine, spécialisé dans le PEA français. Tu analyses les portefeuilles avec rigueur, identifies les risques clairement, et donnes des recommandations pratiques et personnalisées. Réponds toujours en français avec du Markdown bien structuré. Rappelle toujours que tu ne fournis pas de conseil financier officiel et que l'investisseur doit faire ses propres recherches.`,
-      messages: [{ role: 'user', content: prompt }]
+      system: `Tu es un gérant de portefeuille senior avec 20 ans d'expérience en gestion d'actifs, niveau CFA, spécialisé ETF et allocation d'actifs dans le cadre du PEA français. Tu penses et parles comme un professionnel chez Amundi, Blackrock ou une banque privée de premier rang.
+
+RÈGLES ABSOLUES DE TES RÉPONSES :
+1. VERDICTS CLAIRS — chaque position, chaque ETF reçoit un verdict explicite : ✅ Renforcer / ⏸ Maintenir / ⚠️ Surveiller / 🔴 Alléger. Jamais de flou.
+2. CHIFFRES PRÉCIS — prix d'entrée cibles, montants exacts en €, nombre de parts, niveaux d'alerte. Pas de "environ" sans fourchette précise.
+3. CONTEXTE MARCHÉ — intègre systématiquement les tendances macro actuelles (taux Fed/BCE, dollar, croissance, inflation), les rotations sectorielles, et les news disponibles pour justifier chaque recommandation.
+4. ALLER AU-DELÀ — ne te contente pas de décrire le portefeuille existant. Identifie ce qui manque, ce qui devrait être ajouté, ce qui devrait être réduit, et POURQUOI maintenant.
+5. PLAN D'ACTION — termine toujours par une liste d'actions concrètes, classées par priorité, avec des niveaux de cours si disponibles.
+6. TON PROFESSIONNEL — direct, confiant, sans excès de précautions. Tu donnes ton avis d'expert, pas une liste de possibilités.
+
+FORMAT : Markdown structuré avec titres ##, tableaux pour les comparaisons, bullets pour les actions. Concis et dense, pas de rembourrage.
+NOTE : Analyse à titre informatif — l'investisseur garde la responsabilité finale.`,
+      messages: Array.isArray(messages) ? messages : [{ role: 'user', content: messages }]
     })
   });
   if (!resp.ok) {
@@ -1967,7 +1978,9 @@ async function aiRun(prompt) {
   const btn = document.getElementById('btn-ai-send');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'; }
   try {
-    const res = await callClaude(prompt);
+    // Passer l'historique complet pour que Claude garde le contexte de la conversation
+    const messages = S.ai.map(m => ({ role: m.role, content: m.content }));
+    const res = await callClaude(messages);
     S.ai.push({ role:'assistant', content:res, time:new Date().toLocaleTimeString('fr-FR') });
   } catch(e) {
     S.ai.push({ role:'assistant', content:`❌ Erreur: ${e.message}`, time:new Date().toLocaleTimeString('fr-FR') });
@@ -1988,42 +2001,118 @@ function buildPortfolioContext() {
   const { positions, cash, deposited, portValue, totalCost, pnl, pnlP } = computeSummary();
   const recent = [...S.data.transactions].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10);
   const plan = S.data.planItems.filter(p=>p.active);
-  const news = Object.entries(S.newsCache).flatMap(([t,items])=>items.slice(0,3).map(n=>`[${t}] ${n.title}`)).slice(0,15);
+  const news = Object.entries(S.newsCache).flatMap(([t,items])=>items.slice(0,5).map(n=>`[${t}] ${n.title}${n.desc?' — '+n.desc.slice(0,120):''}`.trim())).slice(0,20);
+  const today = new Date().toLocaleDateString('fr-FR');
 
-  return `**PORTEFEUILLE PEA — DONNÉES AU ${new Date().toLocaleDateString('fr-FR')}**
+  const posLines = positions.map(p => {
+    const cache = S.data.priceCache[p.ticker];
+    const prix = cache?.price ? fc(cache.price) : 'N/A';
+    const var1j = cache?.changePercent != null ? fp(cache.changePercent) : 'N/A';
+    const poids = portValue > 0 ? (p.marketValue / portValue * 100).toFixed(1) : '0';
+    return `• ${p.ticker} (${p.name})\n  Parts: ${fn(p.quantity,4)} | PRU: ${fc(p.avgPrice)} | Cours actuel: ${prix} (${var1j} aujourd'hui) | Valeur: ${fc(p.marketValue)} (${poids}% du PF) | P&L: ${p.pnl!==null?fc(p.pnl):'N/A'} (${p.pnlPct!==null?fp(p.pnlPct):'N/A'})`;
+  }).join('\n') || '• Aucune position';
 
-📊 RÉSUMÉ:
-• Valeur portefeuille: ${fc(portValue)}
-• Capital investi: ${fc(totalCost)}
-• Plus-value latente: ${fc(pnl)} (${fp(pnlP)})
-• Liquidités: ${fc(cash)}
-• Total versé (vs plafond 150k€): ${fc(deposited)} (${(deposited/PEA_MAX*100).toFixed(1)}%)
-• Budget mensuel: ${fc(S.data.settings.monthlyBudget)}
+  const planLines = plan.map(p => {
+    const cache = S.data.priceCache[p.ticker];
+    const prix = cache?.price ? fc(cache.price) : 'N/A';
+    const budget = fc(S.data.settings.monthlyBudget * p.allocationPct / 100);
+    return `• ${p.ticker} (${p.name}): cible ${p.allocationPct}% → ${budget}/mois | Cours: ${prix}`;
+  }).join('\n') || '• Aucun planning';
 
-💼 POSITIONS (${positions.length} ligne${positions.length!==1?'s':''}):
-${positions.map(p=>`• ${p.ticker} (${p.name}): ${fn(p.quantity)} parts @ ${fc(p.avgPrice)} moy | Valeur: ${fc(p.marketValue)} | P&L: ${p.pnl!==null?fc(p.pnl):'N/A'} (${p.pnlPct!==null?fp(p.pnlPct):'N/A'}) | Poids: ${portValue>0?(p.marketValue/portValue*100).toFixed(1):'0'}%`).join('\n') || '• Aucune position'}
+  return `=== DONNÉES PORTEFEUILLE PEA — ${today} ===
 
-📅 PLANNING MENSUEL:
-${plan.map(p=>`• ${p.ticker} (${p.name}): ${p.allocationPct}% = ${fc(S.data.settings.monthlyBudget*p.allocationPct/100)}/mois`).join('\n') || '• Aucun planning défini'}
+RÉSUMÉ FINANCIER:
+• Valeur totale: ${fc(portValue)} | Capital investi: ${fc(totalCost)} | P&L latente: ${fc(pnl)} (${fp(pnlP)})
+• Liquidités disponibles: ${fc(cash)}
+• Plafond PEA utilisé: ${fc(deposited)} / 150 000 € (${(deposited/PEA_MAX*100).toFixed(1)}%)
+• Budget mensuel d'investissement: ${fc(S.data.settings.monthlyBudget)}
 
-🔄 TRANSACTIONS RÉCENTES:
-${recent.map(tx=>`• ${fd(tx.date)}: ${txLbl(tx.type)} ${fn(tx.quantity)} x ${tx.ticker} @ ${fc(tx.price)}`).join('\n') || '• Aucune'}
+POSITIONS EN PORTEFEUILLE (${positions.length}):
+${posLines}
 
-📰 ACTUALITÉS (si chargées dans l'onglet Actualités):
-${news.length?news.join('\n'):'• Chargez les actualités depuis l\'onglet 📰 Actualités pour les inclure dans l\'analyse'}`;
+STRATÉGIE D'ALLOCATION CIBLE:
+${planLines}
+
+HISTORIQUE RÉCENT (10 dernières opérations):
+${recent.map(tx=>`• ${fd(tx.date)}: ${txLbl(tx.type)} ${fn(tx.quantity,4)} x ${tx.ticker} @ ${fc(tx.price)} (frais: ${fc(tx.fees||0)})`).join('\n') || '• Aucune'}
+
+ACTUALITÉS RÉCENTES (${news.length} titres chargés):
+${news.length ? news.map((n,i)=>`${i+1}. ${n}`).join('\n') : '⚠️ Aucune actualité chargée — va dans l\'onglet 📰 Actualités pour enrichir l\'analyse'}
+=== FIN DES DONNÉES ===`;
 }
 
 async function aiAnalyze() {
   const ctx = buildPortfolioContext();
-  await aiRun(`${ctx}\n\n**DEMANDE:**\nFais une analyse complète de ce portefeuille PEA:\n1. Évaluation de la performance et de la stratégie\n2. Diversification (géographique, sectorielle, par actifs)\n3. Concentration des risques\n4. Cohérence avec une approche long-terme\n5. Recommandations concrètes pour les prochains achats (budget: ${fc(S.data.settings.monthlyBudget)}/mois)`);
+  await aiRun(`${ctx}
+
+MISSION — ANALYSE DE PORTEFEUILLE NIVEAU INSTITUTIONNEL:
+
+## 1. VERDICT GLOBAL (note /10 + justification en 3 lignes max)
+Dis clairement si ce portefeuille est bien construit ou s'il faut le revoir en profondeur. Pas de diplomatie inutile.
+
+## 2. ANALYSE POSITION PAR POSITION
+Pour chaque ligne du portefeuille, donne :
+- Verdict : ✅ Renforcer / ⏸ Maintenir / ⚠️ Surveiller / 🔴 Alléger
+- Justification : performance récente, tendance, valorisation actuelle vs historique
+- Action recommandée : montant précis à investir ou % à réduire
+
+## 3. CONTEXTE MACRO ACTUELLEMENT FAVORABLE OU NON ?
+Quelles forces macro (taux BCE/Fed, dollar/euro, croissance US/EU, inflation) jouent POUR ou CONTRE chaque position en ce moment ? Utilise les news disponibles pour contextualiser.
+
+## 4. CE QUI MANQUE À CE PORTEFEUILLE
+Y a-t-il des expositions absentes qui devraient y être ? Des ETF éligibles PEA qui amélioreraient le profil rendement/risque ? Donne des noms précis (ticker) et explique pourquoi maintenant.
+
+## 5. PLAN D'ACTION — PRIORITÉS CE MOIS
+Liste ordonnée d'actions concrètes à réaliser, avec montants, prix cibles si pertinents, et raison du timing.`);
 }
+
 async function aiMonthly() {
   const ctx = buildPortfolioContext();
-  await aiRun(`${ctx}\n\n**DEMANDE:**\nDonne-moi un plan d'achat précis pour ce mois avec mon budget de ${fc(S.data.settings.monthlyBudget)}, en tenant compte des cours actuels, de l'équilibre du portefeuille, et des actualités récentes. Justifie chaque choix.`);
+  await aiRun(`${ctx}
+
+MISSION — PLAN D'INVESTISSEMENT MENSUEL PROFESSIONNEL (budget: ${fc(S.data.settings.monthlyBudget)}):
+
+## 1. TABLEAU DE DÉCISION DU MOIS
+Construis un tableau précis :
+| ETF/Titre | Cours actuel | Signal technique | Montant conseillé | Nb parts | Priorité | Raison |
+Justifie chaque ligne avec les données de cours actuels et les actualités disponibles.
+
+## 2. EST-CE LE BON MOMENT D'ACHETER ?
+Analyse le timing : les marchés sont-ils sur des niveaux d'entrée corrects ou faut-il attendre un repli ? Sur quels ETF spécifiquement ? Donne des niveaux de cours concrets pour déclencher l'achat si tu conseilles d'attendre.
+
+## 3. IMPACT DES ACTUALITÉS SUR LES CHOIX DU MOIS
+Comment les news récentes chargées modifient-elles les priorités d'achat de ce mois ? Y a-t-il un secteur ou une zone géographique à favoriser ou éviter en ce moment ?
+
+## 4. RÉPARTITION OPTIMALE vs RÉPARTITION ACTUELLE
+Compare l'allocation actuelle à l'allocation idéale selon toi. Quel écart combler en priorité avec le budget disponible ?
+
+## 5. INSTRUCTIONS FINALES — CE QU'IL FAUT FAIRE CETTE SEMAINE
+Actions classées par ordre de priorité, avec montant exact, prix d'entrée cible, et conditions d'exécution.`);
 }
+
 async function aiRisk() {
   const ctx = buildPortfolioContext();
-  await aiRun(`${ctx}\n\n**DEMANDE:**\nAnalyse en détail les risques de ce portefeuille: concentration, corrélation entre les actifs, exposition géographique et sectorielle, risque de change, volatilité. Propose des améliorations concrètes.`);
+  await aiRun(`${ctx}
+
+MISSION — ANALYSE DES RISQUES NIVEAU PROFESSIONNEL:
+
+## 1. RISQUES CRITIQUES IDENTIFIÉS
+Pour chaque risque : niveau (🔴 Élevé / 🟠 Modéré / 🟡 Faible), impact potentiel estimé en € sur le portefeuille, horizon temporel probable.
+
+## 2. TESTS DE RÉSISTANCE (STRESS TESTS)
+- Scénario Krach -30% (type 2022 ou 2008) : perte estimée en € et en %, positions les plus touchées
+- Scénario Récession US+EU : impact sur chaque ETF du portefeuille
+- Scénario Remontée rapide des taux (+200bp) : quel impact sur les valorisations ?
+- Scénario Dollar fort (+15%) : impact sur les ETF exposés aux marchés US
+
+## 3. CORRÉLATION RÉELLE & DIVERSIFICATION EFFECTIVE
+Ces positions sont-elles vraiment diversifiées ou corrélées à 90% ? Donne un score de diversification réelle (1-10) et explique pourquoi. Quels actifs bougent ensemble ?
+
+## 4. RECOMMANDATIONS POUR RÉDUIRE LES RISQUES
+Actions concrètes et chiffrées : quel % réallouer, vers quels actifs moins corrélés éligibles PEA, comment protéger les plus-values latentes sans tout vendre.
+
+## 5. NIVEAUX D'ALERTE & DÉCLENCHEURS D'ACTION
+Pour chaque position : quel cours ou quel événement macro déclencherait une révision de la stratégie ? Donne des seuils précis (prix, % de baisse, événements) qui justifieraient une action immédiate.`);
 }
 
 // ======================================================

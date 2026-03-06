@@ -1,0 +1,2726 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PEA Manager 2026</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#0f172a;--surface:#1e293b;--surface2:#263548;--border:#334155;
+      --accent:#3b82f6;--accent-h:#2563eb;--success:#22c55e;--danger:#ef4444;
+      --warning:#f59e0b;--text:#f8fafc;--muted:#94a3b8;--sidebar:240px
+    }
+    body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;font-size:14px}
+    a{color:var(--accent)}
+
+    /* ===== SIDEBAR ===== */
+    #sidebar{width:var(--sidebar);background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:100;overflow-y:auto}
+    .logo{padding:18px 20px 14px;border-bottom:1px solid var(--border)}
+    .logo h1{font-size:1.1rem;font-weight:700;color:var(--accent);letter-spacing:-0.02em}
+    .logo p{font-size:0.72rem;color:var(--muted);margin-top:3px}
+    .nav-section{font-size:0.65rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);padding:14px 20px 4px}
+    .nav-item{display:flex;align-items:center;gap:10px;padding:9px 20px;cursor:pointer;color:var(--muted);font-size:0.82rem;font-weight:500;transition:all 0.12s;border-left:3px solid transparent;user-select:none}
+    .nav-item:hover{color:var(--text);background:var(--surface2)}
+    .nav-item.active{color:var(--accent);background:rgba(59,130,246,0.1);border-left-color:var(--accent)}
+    .nav-item .icon{font-size:1rem;width:18px;text-align:center}
+    .sidebar-footer{margin-top:auto;padding:16px;border-top:1px solid var(--border)}
+    .ceiling-label{font-size:0.72rem;font-weight:600;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em}
+    .ceiling-amount{font-size:0.72rem;color:var(--muted);margin-top:4px}
+
+    /* ===== MAIN ===== */
+    #main{margin-left:var(--sidebar);flex:1;padding:24px;min-height:100vh}
+    .page{display:none}
+    .page.active{display:block}
+
+    /* ===== TYPOGRAPHY ===== */
+    h2{font-size:1.35rem;font-weight:700;letter-spacing:-0.02em}
+    .page-sub{color:var(--muted);font-size:0.8rem;margin-top:3px;margin-bottom:20px}
+    .page-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px}
+    .page-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+    .section-title{font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin-bottom:10px}
+
+    /* ===== CARDS ===== */
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px}
+    .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
+    .grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:20px}
+    .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px}
+    .stat-val{font-size:1.6rem;font-weight:700;margin-top:4px;letter-spacing:-0.02em}
+    .stat-sub{font-size:0.75rem;margin-top:3px}
+
+    /* ===== COLORS ===== */
+    .positive{color:var(--success)}.negative{color:var(--danger)}.neutral{color:var(--muted)}.warning{color:var(--warning)}
+
+    /* ===== TABLES ===== */
+    .table-wrap{overflow-x:auto}
+    table{width:100%;border-collapse:collapse;min-width:600px}
+    th{text-align:left;font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+    td{padding:10px;border-bottom:1px solid rgba(51,65,85,0.4);font-size:0.82rem;vertical-align:middle}
+    tr:last-child td{border-bottom:none}
+    tbody tr:hover td{background:rgba(255,255,255,0.02)}
+
+    /* ===== BUTTONS ===== */
+    .btn{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:8px;font-size:0.8rem;font-weight:500;cursor:pointer;border:none;transition:all 0.12s;white-space:nowrap;font-family:inherit}
+    .btn:disabled{opacity:0.5;cursor:not-allowed}
+    .btn-primary{background:var(--accent);color:#fff}.btn-primary:hover:not(:disabled){background:var(--accent-h)}
+    .btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}.btn-secondary:hover:not(:disabled){background:var(--border)}
+    .btn-danger{background:var(--danger);color:#fff}.btn-danger:hover:not(:disabled){background:#dc2626}
+    .btn-success{background:var(--success);color:#fff}
+    .btn-sm{padding:4px 9px;font-size:0.75rem;border-radius:6px}
+    .btn-icon{background:transparent;border:none;cursor:pointer;padding:4px;border-radius:4px;color:var(--muted);font-size:1rem;transition:color 0.12s}
+    .btn-icon:hover{color:var(--danger)}
+
+    /* ===== BADGES ===== */
+    .badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:9999px;font-size:0.72rem;font-weight:600}
+    .badge-buy{background:rgba(34,197,94,0.15);color:var(--success)}
+    .badge-sell{background:rgba(239,68,68,0.15);color:var(--danger)}
+    .badge-dividend{background:rgba(245,158,11,0.15);color:var(--warning)}
+    .badge-deposit{background:rgba(59,130,246,0.15);color:var(--accent)}
+    .badge-withdrawal{background:rgba(239,68,68,0.15);color:var(--danger)}
+
+    /* ===== TICKER CHIP ===== */
+    .chip{display:inline-flex;align-items:center;padding:1px 7px;background:rgba(59,130,246,0.15);color:var(--accent);border-radius:5px;font-size:0.75rem;font-weight:700;font-family:monospace;letter-spacing:0.03em}
+
+    /* ===== FORMS ===== */
+    .form-group{margin-bottom:14px}
+    .form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    label{display:block;font-size:0.75rem;font-weight:600;color:var(--muted);margin-bottom:5px}
+    input,select,textarea{width:100%;padding:8px 11px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:0.82rem;font-family:inherit;transition:border-color 0.12s}
+    input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+    input::placeholder{color:var(--muted)}
+    textarea{resize:vertical;min-height:70px}
+    select option{background:var(--surface)}
+
+    /* ===== MODALS ===== */
+    .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:1000;align-items:center;justify-content:center;padding:16px}
+    .modal-overlay.open{display:flex}
+    .modal{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px;width:460px;max-width:100%;max-height:90vh;overflow-y:auto}
+    .modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+    .modal-title{font-size:1rem;font-weight:600}
+    .modal-close{background:none;border:none;color:var(--muted);font-size:1.3rem;cursor:pointer;padding:2px;line-height:1}
+    .modal-close:hover{color:var(--text)}
+    .modal-footer{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+
+    /* ===== PROGRESS ===== */
+    .progress{height:6px;background:var(--surface2);border-radius:9999px;overflow:hidden}
+    .progress-fill{height:100%;border-radius:9999px;transition:width 0.3s}
+
+    /* ===== INFO BOX ===== */
+    .info-box{background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.25);border-radius:8px;padding:10px 13px;font-size:0.8rem;color:var(--muted);line-height:1.5}
+    .info-warning{background:rgba(245,158,11,0.1);border-color:rgba(245,158,11,0.3)}
+    .info-danger{background:rgba(239,68,68,0.1);border-color:rgba(239,68,68,0.3)}
+    .info-success{background:rgba(34,197,94,0.1);border-color:rgba(34,197,94,0.3)}
+
+    /* ===== SPINNER ===== */
+    .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 0.6s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* ===== TOAST ===== */
+    #toasts{position:fixed;bottom:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px}
+    .toast{padding:11px 15px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:0.82rem;animation:slideIn 0.2s ease;max-width:300px;box-shadow:0 4px 12px rgba(0,0,0,0.3)}
+    .toast.success{border-left:3px solid var(--success)}
+    .toast.error{border-left:3px solid var(--danger)}
+    @keyframes slideIn{from{transform:translateX(110%);opacity:0}to{transform:translateX(0);opacity:1}}
+
+    /* ===== NEWS ===== */
+    .news-card{background:var(--surface2);border:1px solid var(--border);border-radius:9px;padding:14px;margin-bottom:10px;transition:border-color 0.12s}
+    .news-card:hover{border-color:var(--accent)}
+    .news-card a{text-decoration:none;color:inherit}
+    .news-title{font-weight:600;line-height:1.4;margin-bottom:5px}
+    .news-meta{font-size:0.72rem;color:var(--muted);display:flex;gap:12px;margin-top:6px}
+
+    /* ===== AI ===== */
+    .ai-msg{padding:14px;border-radius:10px;margin-bottom:10px;line-height:1.6}
+    .ai-msg.user{background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.2);margin-left:48px}
+    .ai-msg.assistant{background:var(--surface);border:1px solid var(--border);margin-right:20px}
+    .ai-msg-role{font-size:0.72rem;color:var(--muted);margin-bottom:8px}
+    .ai-msg h1,.ai-msg h2,.ai-msg h3{margin:10px 0 5px;font-size:0.9rem}
+    .ai-msg ul{margin:6px 0 6px 18px}
+    .ai-msg li{margin-bottom:3px}
+
+    /* ===== EMPTY STATE ===== */
+    .empty{text-align:center;padding:40px 20px;color:var(--muted)}
+    .empty .ico{font-size:2.5rem;margin-bottom:10px}
+    .empty p{margin-bottom:14px;font-size:0.875rem}
+
+    /* ===== MISC ===== */
+    mb16{margin-bottom:16px}
+    .flex{display:flex}.gap8{gap:8px}.gap12{gap:12px}.wrap{flex-wrap:wrap}
+    .items-center{align-items:center}.justify-between{justify-content:space-between}
+    .mb16{margin-bottom:16px}.mb8{margin-bottom:8px}
+    .w-full{width:100%}
+
+    /* ===== SCAN ZONE ===== */
+    .scan-zone{border:2px dashed var(--border);border-radius:10px;padding:14px 12px;text-align:center;cursor:pointer;margin-bottom:14px;transition:all 0.15s;user-select:none}
+    .scan-zone:hover,.scan-zone.drag-over{border-color:var(--accent);background:rgba(59,130,246,0.06)}
+    .scan-preview{margin-bottom:14px}
+    .scan-preview img{width:100%;max-height:200px;object-fit:contain;border-radius:8px;border:1px solid var(--border);display:block}
+    .scan-sep{display:flex;align-items:center;gap:10px;margin-bottom:14px;color:var(--muted);font-size:0.72rem}
+    .scan-sep::before,.scan-sep::after{content:'';flex:1;height:1px;background:var(--border)}
+
+    /* ===== SCROLLBAR ===== */
+    ::-webkit-scrollbar{width:5px;height:5px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+    /* ===== RESPONSIVE ===== */
+    @media(max-width:900px){
+      :root{--sidebar:0px}
+      #sidebar{display:none}
+      #main{margin-left:0;padding:14px}
+      .grid-4{grid-template-columns:repeat(2,1fr)}
+      .grid-3{grid-template-columns:repeat(2,1fr)}
+    }
+    @media(max-width:600px){
+      .grid-4,.grid-2,.grid-3{grid-template-columns:1fr}
+      .form-row{grid-template-columns:1fr}
+    }
+  </style>
+</head>
+<body>
+
+<!-- ===== SIDEBAR ===== -->
+<nav id="sidebar">
+  <div class="logo">
+    <h1>📈 PEA Manager</h1>
+    <p id="sidebar-broker">Mon Plan d'Épargne Actions</p>
+  </div>
+  <div class="nav-section">Principal</div>
+  <div class="nav-item active" data-page="dashboard"><span class="icon">📊</span>Tableau de bord</div>
+  <div class="nav-item" data-page="portfolio"><span class="icon">💼</span>Portefeuille</div>
+  <div class="nav-item" data-page="transactions"><span class="icon">🔄</span>Transactions</div>
+  <div class="nav-item" data-page="treasury"><span class="icon">💰</span>Trésorerie</div>
+  <div class="nav-section">Outils</div>
+  <div class="nav-item" data-page="planning"><span class="icon">📅</span>Planning Mensuel</div>
+  <div class="nav-item" data-page="news"><span class="icon">📰</span>Actualités</div>
+  <div class="nav-item" data-page="ai"><span class="icon">🤖</span>Analyse IA</div>
+  <div class="nav-section">Compte</div>
+  <div class="nav-item" data-page="settings"><span class="icon">⚙️</span>Paramètres</div>
+  <div class="sidebar-footer">
+    <div class="ceiling-label">Plafond PEA</div>
+    <div class="progress" style="margin:5px 0">
+      <div class="progress-fill" id="sb-ceiling-bar" style="width:0%;background:var(--success)"></div>
+    </div>
+    <div class="ceiling-amount" id="sb-ceiling-amt">0 / 150 000 €</div>
+  </div>
+</nav>
+
+<!-- ===== MAIN ===== -->
+<main id="main">
+  <div id="page-dashboard" class="page active"></div>
+  <div id="page-portfolio" class="page"></div>
+  <div id="page-transactions" class="page"></div>
+  <div id="page-treasury" class="page"></div>
+  <div id="page-planning" class="page"></div>
+  <div id="page-news" class="page"></div>
+  <div id="page-ai" class="page"></div>
+  <div id="page-settings" class="page"></div>
+</main>
+
+<!-- ===== MODAL: TRANSACTION ===== -->
+<div id="modal-tx" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-tx-title">Ajouter une transaction</span>
+      <button class="modal-close" onclick="closeModal('modal-tx')">×</button>
+    </div>
+    <!-- SCAN PHOTO -->
+    <div id="scan-zone" class="scan-zone"
+      onclick="document.getElementById('scan-input').click()"
+      ondragover="event.preventDefault();this.classList.add('drag-over')"
+      ondragleave="this.classList.remove('drag-over')"
+      ondrop="handleScanDrop(event)">
+      <input type="file" id="scan-input" accept="image/*" style="display:none" onchange="scanFromPhoto(this)">
+      <div style="font-size:1.6rem;margin-bottom:5px">📸</div>
+      <div style="font-size:0.82rem;font-weight:600;margin-bottom:2px">Scanner une photo de confirmation</div>
+      <div style="font-size:0.73rem;color:var(--muted)">Cliquez ou glissez votre capture d'écran — Remplissage auto par IA</div>
+    </div>
+    <div id="scan-preview" class="scan-preview" style="display:none">
+      <img id="scan-img" alt="Aperçu">
+      <div id="scan-status" style="margin-top:8px;font-size:0.8rem;text-align:center;min-height:20px"></div>
+      <div id="scan-multi" style="display:none"></div>
+    </div>
+    <div class="scan-sep" id="scan-sep">ou remplissez manuellement</div>
+
+    <form id="form-tx">
+      <div class="form-group">
+        <label>Type</label>
+        <select name="type" id="tx-type" onchange="updateTxForm()">
+          <option value="buy">Achat</option>
+          <option value="sell">Vente</option>
+          <option value="dividend">Dividende</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Date</label>
+          <input type="date" name="date" required>
+        </div>
+        <div class="form-group">
+          <label>Ticker <span style="color:var(--muted)">(ex: CW8.PA)</span></label>
+          <input type="text" name="ticker" placeholder="CW8.PA" required style="text-transform:uppercase">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Nom du titre</label>
+        <input type="text" name="name" placeholder="Amundi MSCI World" required>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Quantité (parts)</label>
+          <input type="number" name="quantity" step="0.0001" min="0.0001" placeholder="5" required>
+        </div>
+        <div class="form-group">
+          <label id="lbl-price">Prix unitaire (€)</label>
+          <input type="number" name="price" step="0.0001" min="0" placeholder="420.50" required>
+        </div>
+      </div>
+      <div class="form-group" id="grp-fees">
+        <label>Frais de courtage (€)</label>
+        <input type="number" name="fees" step="0.01" min="0" value="0" placeholder="1.99">
+      </div>
+      <div class="form-group">
+        <label>Notes <span style="color:var(--muted)">(optionnel)</span></label>
+        <textarea name="notes" rows="2" placeholder="Notes..."></textarea>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-tx')">Annuler</button>
+        <button type="submit" class="btn btn-primary">Ajouter</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ===== MODAL: DEPOSIT ===== -->
+<div id="modal-dep" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Mouvement de trésorerie</span>
+      <button class="modal-close" onclick="closeModal('modal-dep')">×</button>
+    </div>
+    <form id="form-dep">
+      <div class="form-group">
+        <label>Type</label>
+        <select name="type">
+          <option value="deposit">Versement</option>
+          <option value="withdrawal">Retrait</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Date</label>
+          <input type="date" name="date" required>
+        </div>
+        <div class="form-group">
+          <label>Montant (€)</label>
+          <input type="number" name="amount" step="0.01" min="0.01" placeholder="500" required>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Notes <span style="color:var(--muted)">(optionnel)</span></label>
+        <input type="text" name="notes" placeholder="Versement mensuel...">
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-dep')">Annuler</button>
+        <button type="submit" class="btn btn-primary">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ===== MODAL: PLAN ITEM ===== -->
+<div id="modal-plan" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Ajouter au planning</span>
+      <button class="modal-close" onclick="closeModal('modal-plan')">×</button>
+    </div>
+    <form id="form-plan">
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Importer depuis le portefeuille</label>
+          <select id="plan-portfolio-sel" onchange="fillPlanFromPortfolio(this.value)">
+            <option value="">-- Choisir une position existante --</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Ticker <span style="color:var(--muted)">(ex: WPEA.PA)</span></label>
+            <input type="text" name="ticker" placeholder="WPEA.PA" required style="text-transform:uppercase">
+          </div>
+          <div class="form-group">
+            <label>Type</label>
+            <div style="display:flex;gap:14px;margin-top:8px">
+              <label style="display:flex;align-items:center;gap:5px;font-weight:normal;cursor:pointer">
+                <input type="radio" name="isEtf" value="true" checked onchange="togglePlanType()"> ETF
+              </label>
+              <label style="display:flex;align-items:center;gap:5px;font-weight:normal;cursor:pointer">
+                <input type="radio" name="isEtf" value="false" onchange="togglePlanType()"> Titre direct
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Nom du titre</label>
+          <input type="text" name="name" placeholder="Amundi MSCI World" required>
+        </div>
+        <div id="plan-etf-fields">
+          <div class="form-group">
+            <label>% cible dans le bucket ETF <span style="color:var(--muted)">(ex: 65 pour 65%)</span></label>
+            <input type="number" name="allocationPct" min="0.1" max="100" step="0.1" placeholder="65">
+          </div>
+        </div>
+        <div id="plan-stock-fields" style="display:none">
+          <div class="form-group">
+            <label>Nombre de parts à acheter / mois</label>
+            <input type="number" name="monthlyShares" min="0" step="1" placeholder="5">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Achat minimum (€) <span style="color:var(--muted)">BoursoBank</span></label>
+            <input type="number" name="minAmount" min="0" step="10" value="200">
+          </div>
+          <div class="form-group">
+            <label>Frais de courtage (%) <span style="color:var(--muted)" id="fee-hint">ex: 0.5</span></label>
+            <input type="number" id="plan-fee-input" name="feePct" min="0" max="5" step="0.01" value="0.5" placeholder="0.5">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Notes <span style="color:var(--muted)">(optionnel)</span></label>
+          <input type="text" name="notes" placeholder="">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-plan')">Annuler</button>
+        <button type="submit" class="btn btn-primary">Ajouter</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ===== MODAL: PRU MANUEL ===== -->
+<div id="modal-pru" class="modal-overlay">
+  <div class="modal" style="max-width:360px">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-pru-title">PRU manuel</span>
+      <button class="modal-close" onclick="closeModal('modal-pru')">×</button>
+    </div>
+    <form id="form-pru" onsubmit="savePruOverride(event)">
+      <div class="modal-body">
+        <div class="form-row">
+          <label>PRU calculé (avec frais)</label>
+          <input type="text" id="pru-computed" disabled style="color:var(--muted)">
+        </div>
+        <div class="form-row">
+          <label>PRU manuel (selon votre courtier)</label>
+          <input type="number" id="pru-manual" name="pru" step="0.0001" min="0" placeholder="Ex: 24.5678" required>
+        </div>
+        <div style="font-size:0.75rem;color:var(--muted);margin-top:4px">Le P&amp;L sera recalculé avec cette valeur.</div>
+      </div>
+      <div class="modal-footer" style="gap:8px">
+        <button type="button" class="btn btn-secondary" onclick="resetPruOverride()">Réinitialiser</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-pru')">Annuler</button>
+        <button type="submit" class="btn btn-primary">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ===== MODAL: COURS MANUEL ===== -->
+<div id="modal-price" class="modal-overlay">
+  <div class="modal" style="max-width:360px">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-price-title">Cours manuel</span>
+      <button class="modal-close" onclick="closeModal('modal-price')">×</button>
+    </div>
+    <form id="form-price" onsubmit="savePriceManual(event)">
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Cours actuel (€)</label>
+          <input type="number" id="price-input" name="price" step="0.0001" min="0.0001" placeholder="Ex: 10.4200" required>
+        </div>
+        <div style="font-size:0.75rem;color:var(--muted);margin-top:4px">Le cours manuel ne sera jamais écrasé par la recherche automatique. Cliquez sur "⟳ Auto" pour revenir à la mise à jour automatique.</div>
+      </div>
+      <div class="modal-footer" style="gap:8px">
+        <button type="button" class="btn btn-secondary" onclick="clearPriceManual()">⟳ Auto</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-price')">Annuler</button>
+        <button type="submit" class="btn btn-primary">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ===== TOASTS ===== -->
+<div id="toasts"></div>
+
+<script>
+'use strict';
+
+// ======================================================
+// CONFIG & CONSTANTS
+// ======================================================
+const STORAGE_KEY = 'pea_2026';
+const PROXY = 'https://api.allorigins.win/get?url=';
+const YF_CHART = 'https://query2.finance.yahoo.com/v8/finance/chart/';
+const YF_RSS   = 'https://feeds.finance.yahoo.com/rss/2.0/headline?s=';
+const CLAUDE_URL = 'https://api.anthropic.com/v1/messages';
+const CLAUDE_MODEL = 'claude-opus-4-6';
+const PRICE_TTL = 15 * 60 * 1000;
+const PEA_MAX = 150000;
+const COLORS = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6','#a855f7','#0ea5e9'];
+
+// ======================================================
+// STATE
+// ======================================================
+let S = {
+  page: 'dashboard',
+  data: null,
+  charts: {},
+  ai: [],
+  newsCache: {},
+  txFilter: 'all',
+  txSearch: ''
+};
+
+// ======================================================
+// DEFAULT DATA
+// ======================================================
+function defData() {
+  return {
+    settings: { claudeApiKey:'', monthlyBudget:500, brokerName:'Mon PEA' },
+    transactions: [],
+    deposits: [],
+    planItems: [],
+    snapshots: [],
+    priceCache: {},
+    pruOverrides: {}
+  };
+}
+
+// ======================================================
+// STORAGE
+// ======================================================
+// Frais de courtage BoursoBank par ticker (0% = pas de courtage, frais dans la VL)
+const NO_COURTAGE = new Set(['WPEA.PA','IWEA.PA','WPAE.PA']);
+
+function migrateFees(d) {
+  if (d._feesMigrated) return;
+  (d.planItems || []).forEach(item => {
+    if (item.feePct == null || item.feePct === 0) {
+      const t = (item.ticker || '').toUpperCase();
+      if (NO_COURTAGE.has(t))      item.feePct = 0;
+      else if (item.isEtf === false) item.feePct = 0.9;
+      else                           item.feePct = 0.5;
+    }
+  });
+  d._feesMigrated = true;
+}
+
+function loadData() {
+  try {
+    const r = localStorage.getItem(STORAGE_KEY);
+    if (r) {
+      const p = JSON.parse(r);
+      const d = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings }, snapshots: p.snapshots || [], priceCache: p.priceCache || {}, pruOverrides: p.pruOverrides || {} };
+      migrateFees(d);
+      return d;
+    }
+  } catch(e) {}
+  return defData();
+}
+function saveData() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(S.data)); }
+  catch(e) { toast('Erreur de sauvegarde locale', 'error'); }
+}
+
+function takeSnapshot() {
+  const { portValue, cash, deposited } = computeSummary();
+  const date = today();
+  const snaps = S.data.snapshots || [];
+  const idx = snaps.findIndex(s => s.date === date);
+  const entry = { date, portValue, cash: Math.max(0, cash), deposited };
+  if (idx >= 0) snaps[idx] = entry; else snaps.push(entry);
+  snaps.sort((a,b) => a.date.localeCompare(b.date));
+  S.data.snapshots = snaps.slice(-730);
+  saveData();
+}
+
+// ======================================================
+// UTILS
+// ======================================================
+let _id = Date.now();
+function uid() { return 'x' + (++_id); }
+
+function fc(n, d=2) {
+  if (n == null || isNaN(n)) return '—';
+  return new Intl.NumberFormat('fr-FR', { style:'currency', currency:'EUR', minimumFractionDigits:d, maximumFractionDigits:d }).format(n);
+}
+function fp(n) {
+  if (n == null || isNaN(n)) return '—';
+  return (n >= 0 ? '+' : '') + n.toFixed(2) + ' %';
+}
+function fd(d) { return d ? new Date(d).toLocaleDateString('fr-FR') : '—'; }
+function fn(n, d=4) { return (n != null && !isNaN(n)) ? parseFloat(n.toFixed(d)).toString() : '—'; }
+function today() { return new Date().toISOString().split('T')[0]; }
+function sign(n) { return n > 0.0001 ? 'positive' : n < -0.0001 ? 'negative' : 'neutral'; }
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function mdToHtml(t) {
+  if (!t) return '';
+  return esc(t)
+    .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g,'<em>$1</em>')
+    .replace(/^### (.+)$/gm,'<h3 style="font-size:.875rem;margin:12px 0 4px">$1</h3>')
+    .replace(/^## (.+)$/gm,'<h2 style="font-size:.95rem;margin:14px 0 5px">$1</h2>')
+    .replace(/^# (.+)$/gm,'<h1 style="font-size:1rem;margin:16px 0 6px">$1</h1>')
+    .replace(/^[•\-] (.+)$/gm,'<li>$1</li>')
+    .replace(/(<li>[\s\S]*?<\/li>)/g,'<ul style="margin:5px 0 5px 18px">$1</ul>')
+    .replace(/\n\n/g,'</p><p style="margin:7px 0">')
+    .replace(/\n/g,'<br>');
+}
+
+// ======================================================
+// TOAST
+// ======================================================
+function toast(msg, type='success', ms=3200) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.style.animation='slideIn .2s ease reverse', ms - 200);
+  setTimeout(() => el.remove(), ms);
+}
+
+// ======================================================
+// MODAL
+// ======================================================
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.addEventListener('click', e => {
+  if (e.target.classList.contains('modal-overlay')) e.target.classList.remove('open');
+});
+
+function openTxModal(prefill={}) {
+  // Reset scan zone
+  document.getElementById('scan-zone').style.display    = 'block';
+  document.getElementById('scan-preview').style.display = 'none';
+  document.getElementById('scan-status').textContent    = '';
+  document.getElementById('scan-input').value           = '';
+  document.getElementById('scan-multi').style.display   = 'none';
+  document.getElementById('scan-multi').innerHTML       = '';
+  document.getElementById('scan-sep').style.display     = '';
+  document.getElementById('form-tx').style.display      = '';
+  window._scanTxs  = null;
+  window._editTxId = null;
+  document.getElementById('modal-tx-title').textContent = 'Ajouter une transaction';
+
+  const f = document.getElementById('form-tx');
+  f.reset();
+  f.querySelector('[name=date]').value = prefill.date || today();
+  f.querySelector('[name=fees]').value = '0';
+  if (prefill.ticker)   f.querySelector('[name=ticker]').value   = prefill.ticker;
+  if (prefill.name)     f.querySelector('[name=name]').value     = prefill.name;
+  if (prefill.price)    f.querySelector('[name=price]').value    = prefill.price;
+  if (prefill.quantity) f.querySelector('[name=quantity]').value = prefill.quantity;
+  if (prefill.type)     { f.querySelector('[name=type]').value   = prefill.type; }
+  updateTxForm();
+  openModal('modal-tx');
+}
+
+function editTx(id) {
+  const tx = S.data.transactions.find(t => t.id === id);
+  if (!tx) return;
+  openTxModal();
+  window._editTxId = id;
+  document.getElementById('modal-tx-title').textContent = 'Modifier la transaction';
+  // Masquer la zone scan en mode édition
+  document.getElementById('scan-zone').style.display = 'none';
+  document.getElementById('scan-sep').style.display  = 'none';
+  const f = document.getElementById('form-tx');
+  f.querySelector('[name=type]').value     = tx.type;
+  f.querySelector('[name=date]').value     = tx.date;
+  f.querySelector('[name=ticker]').value   = tx.ticker;
+  f.querySelector('[name=name]').value     = tx.name;
+  f.querySelector('[name=quantity]').value = tx.quantity;
+  f.querySelector('[name=price]').value    = tx.price;
+  f.querySelector('[name=fees]').value     = tx.fees || 0;
+  f.querySelector('[name=notes]').value    = tx.notes || '';
+  updateTxForm();
+}
+function openDepModal() {
+  const f = document.getElementById('form-dep');
+  f.reset();
+  f.querySelector('[name=date]').value = today();
+  openModal('modal-dep');
+}
+function openPlanModal() {
+  const f = document.getElementById('form-plan');
+  f.reset();
+  const positions = computePositions();
+  const sel = document.getElementById('plan-portfolio-sel');
+  sel.innerHTML = '<option value="">-- Importer depuis le portefeuille --</option>' +
+    positions.map(p => `<option value="${esc(p.ticker)}|${esc(p.name)}">${p.ticker} — ${esc(p.name)}</option>`).join('');
+  document.getElementById('plan-etf-fields').style.display = '';
+  document.getElementById('plan-stock-fields').style.display = 'none';
+  f.querySelector('[name=minAmount]').value = 200;
+  openModal('modal-plan');
+}
+
+function fillPlanFromPortfolio(value) {
+  if (!value) return;
+  const [ticker, name] = value.split('|');
+  document.querySelector('#form-plan [name=ticker]').value = ticker;
+  document.querySelector('#form-plan [name=name]').value = name;
+}
+
+function togglePlanType() {
+  const isEtf = document.querySelector('#form-plan [name=isEtf]:checked')?.value !== 'false';
+  document.getElementById('plan-etf-fields').style.display   = isEtf ? '' : 'none';
+  document.getElementById('plan-stock-fields').style.display = isEtf ? 'none' : '';
+  // Défauts frais : ETF 0.5% (courtage), Actions 0.9% (courtage + TTF)
+  const feeInp = document.getElementById('plan-fee-input');
+  const hint   = document.getElementById('fee-hint');
+  if (feeInp && !feeInp.dataset.touched) {
+    feeInp.value = isEtf ? '0.5' : '0.9';
+    if (hint) hint.textContent = isEtf ? 'ex: 0 (WPEA), 0.5 (PANX/PAEEM)' : '0.9% = 0.5% courtage + 0.4% TTF';
+  }
+}
+
+function updPlanFee(id, val) {
+  const item = S.data.planItems.find(p => p.id === id);
+  if (item) { item.feePct = parseFloat(val) || 0; saveData(); renderPlanning(); }
+}
+
+function updPlanMin(id, val) {
+  const item = S.data.planItems.find(p => p.id === id);
+  if (item) { item.minAmount = parseFloat(val) || 0; saveData(); renderPlanning(); }
+}
+
+function updPlanShares(id, val) {
+  const item = S.data.planItems.find(p => p.id === id);
+  if (item) { item.monthlyShares = parseFloat(val) || 0; saveData(); renderPlanning(); }
+}
+
+async function doRefreshPlan() {
+  const tickers = [...new Set(S.data.planItems.filter(p=>p.active).map(p=>p.ticker))];
+  if (!tickers.length) return;
+  const btn = document.getElementById('btn-refresh-plan');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Actualisation...'; }
+  const { ok, fail } = await refreshPrices(tickers);
+  if (btn) { btn.disabled = false; btn.innerHTML = '⟳ Actualiser les cours'; }
+  toast(`${ok} cours mis à jour${fail?`, ${fail} échec(s)`:''}`, fail?'error':'success');
+  renderPlanning();
+}
+
+function updateTxForm() {
+  const type = document.getElementById('tx-type')?.value;
+  document.getElementById('grp-fees').style.display = type === 'dividend' ? 'none' : 'block';
+  document.getElementById('lbl-price').textContent = type === 'dividend' ? 'Dividende par part (€)' : 'Prix unitaire (€)';
+}
+
+// ======================================================
+// DATA COMPUTATIONS
+// ======================================================
+function computePositions() {
+  const pos = {};
+  const sorted = [...S.data.transactions].sort((a,b) => a.date.localeCompare(b.date));
+  for (const tx of sorted) {
+    const t = tx.ticker;
+    if (tx.type === 'buy') {
+      if (!pos[t]) pos[t] = { ticker:t, name:tx.name, quantity:0, totalCost:0 };
+      pos[t].quantity  += tx.quantity;
+      pos[t].totalCost += tx.quantity * tx.price + (tx.fees || 0);
+    } else if (tx.type === 'sell') {
+      if (pos[t] && pos[t].quantity > 0) {
+        const avgCost = pos[t].totalCost / pos[t].quantity;
+        const q = Math.min(tx.quantity, pos[t].quantity);
+        pos[t].quantity  -= q;
+        pos[t].totalCost -= q * avgCost;
+        if (pos[t].quantity < 0.0001) { pos[t].quantity = 0; pos[t].totalCost = 0; }
+      }
+    }
+  }
+  return Object.values(pos).filter(p => p.quantity > 0.0001).map(p => {
+    const computedAvg = p.quantity > 0 ? p.totalCost / p.quantity : 0;
+    const override = S.data.pruOverrides[p.ticker];
+    const avg = override != null ? override : computedAvg;
+    const costBasis = avg * p.quantity;
+    const cache = S.data.priceCache[p.ticker];
+    const cur   = cache?.price ?? null;
+    const mv    = cur !== null ? p.quantity * cur : costBasis;
+    const pnl   = cur !== null ? mv - costBasis : null;
+    const pnlP  = costBasis > 0 && pnl !== null ? (pnl / costBasis) * 100 : null;
+    return { ...p, avgPrice:avg, computedAvgPrice:computedAvg, pruManual: override != null, currentPrice:cur, marketValue:mv, pnl, pnlPct:pnlP, changePercent:cache?.changePercent ?? null };
+  });
+}
+
+function computeCash() {
+  let c = 0;
+  for (const d of S.data.deposits) c += d.type === 'deposit' ? d.amount : -d.amount;
+  for (const tx of S.data.transactions) {
+    if      (tx.type === 'buy')      c -= tx.quantity * tx.price + (tx.fees||0);
+    else if (tx.type === 'sell')     c += tx.quantity * tx.price - (tx.fees||0);
+    else if (tx.type === 'dividend') c += tx.quantity * tx.price;
+  }
+  return c;
+}
+
+function computeDeposited() {
+  return S.data.deposits.reduce((s,d) => s + (d.type==='deposit' ? d.amount : -d.amount), 0);
+}
+
+function computeSummary() {
+  const positions = computePositions();
+  const cash = computeCash();
+  const deposited = computeDeposited();
+  const portValue = positions.reduce((s,p) => s+p.marketValue, 0);
+  const totalCost = positions.reduce((s,p) => s+p.totalCost, 0);
+  const pnl  = positions.reduce((s,p) => s+(p.pnl??0), 0);
+  const pnlP = totalCost > 0 ? (pnl/totalCost)*100 : 0;
+  return { positions, cash, deposited, portValue, totalCost, pnl, pnlP };
+}
+
+// ======================================================
+// CHART HELPERS
+// ======================================================
+function destroyChart(k) { if (S.charts[k]) { S.charts[k].destroy(); delete S.charts[k]; } }
+const CHART_DEFAULTS = {
+  color: '#94a3b8',
+  font: { family: 'system-ui, sans-serif', size: 11 }
+};
+
+function makeAllocationChart(positions) {
+  destroyChart('alloc');
+  const ctx = document.getElementById('chart-alloc');
+  if (!ctx || !positions.length) return;
+  S.charts['alloc'] = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: positions.map(p => p.ticker),
+      datasets: [{ data: positions.map(p => p.marketValue), backgroundColor: COLORS.slice(0, positions.length), borderWidth: 0, hoverOffset: 6 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: '62%',
+      plugins: {
+        legend: { position:'right', labels:{ color:'#94a3b8', font:{ size:11 }, padding:10, boxWidth:11 } },
+        tooltip: { callbacks: { label: c => ` ${c.label}: ${fc(c.raw)} (${(c.parsed/_sum(positions)*100).toFixed(1)}%)` } }
+      }
+    }
+  });
+}
+function _sum(positions) { return positions.reduce((s,p)=>s+p.marketValue,0); }
+
+function makeEvolutionChart(filter) {
+  destroyChart('evolution');
+  const ctx = document.getElementById('chart-evolution');
+  if (!ctx) return;
+  const snaps = S.data.snapshots || [];
+  if (!snaps.length) return;
+
+  const now = new Date();
+  const cutoff = new Date(now);
+  if      (filter === '1S') cutoff.setDate(now.getDate() - 7);
+  else if (filter === '1M') cutoff.setDate(now.getDate() - 30);
+  else if (filter === '3M') cutoff.setDate(now.getDate() - 90);
+  else if (filter === '1A') cutoff.setFullYear(now.getFullYear() - 1);
+  else                      cutoff.setFullYear(2000); // MAX
+
+  const cutStr = cutoff.toISOString().slice(0,10);
+  const filtered = snaps.filter(s => s.date >= cutStr);
+  if (!filtered.length) return;
+
+  const labels   = filtered.map(s => s.date);
+  const total    = filtered.map(s => parseFloat((s.portValue + s.cash).toFixed(2)));
+  const invested = filtered.map(s => parseFloat(s.deposited.toFixed(2)));
+
+  S.charts['evolution'] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Valeur totale', data: total, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.08)',
+          borderWidth: 2, pointRadius: filtered.length > 60 ? 0 : 3, tension: 0.3, fill: true },
+        { label: 'Capital investi', data: invested, borderColor: '#94a3b8', backgroundColor: 'transparent',
+          borderWidth: 1.5, borderDash: [5,4], pointRadius: 0, tension: 0.3, fill: false }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 14, padding: 12 } },
+        tooltip: { callbacks: {
+          title: t => { const d = new Date(t[0].label); return d.toLocaleDateString('fr-FR', { day:'2-digit', month:'short', year:'numeric' }); },
+          label: c => ` ${c.dataset.label} : ${fc(c.raw)}`
+        }}
+      },
+      scales: {
+        x: { ticks: { color: '#94a3b8', maxTicksLimit: 8, maxRotation: 0,
+               callback: (_, i) => { const d = new Date(labels[i]); return d.toLocaleDateString('fr-FR', { day:'2-digit', month:'short' }); } },
+             grid: { color: '#1e293b' } },
+        y: { ticks: { color: '#94a3b8', callback: v => fc(v, 0) }, grid: { color: '#334155' } }
+      }
+    }
+  });
+}
+
+function setEvolFilter(f) {
+  S.evolFilter = f;
+  makeEvolutionChart(f);
+  // Mise à jour visuelle des boutons
+  document.querySelectorAll('.evol-filter-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.filter === f);
+  });
+}
+
+function makePnlChart(positions) {
+  destroyChart('pnl');
+  const ctx = document.getElementById('chart-pnl');
+  if (!ctx) return;
+  const data = positions.filter(p => p.pnl !== null);
+  if (!data.length) return;
+  S.charts['pnl'] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: data.map(p => p.ticker),
+      datasets: [{ data: data.map(p => parseFloat(p.pnl.toFixed(2))),
+        backgroundColor: data.map(p => p.pnl >= 0 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)'), borderRadius: 5 }]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ display:false }, tooltip:{ callbacks:{ label:c=>` ${fc(c.raw)}` } } },
+      scales:{
+        x:{ ticks:{ color:'#94a3b8' }, grid:{ color:'#334155' } },
+        y:{ ticks:{ color:'#94a3b8', callback:v=>fc(v,0) }, grid:{ color:'#334155' } }
+      }
+    }
+  });
+}
+
+function makePlanChart(etfItems) {
+  destroyChart('plan');
+  const ctx = document.getElementById('chart-plan');
+  if (!ctx) return;
+  const active = etfItems.filter(p => p.active && p.isEtf !== false && (p.allocationPct||0) > 0);
+  if (!active.length) return;
+  S.charts['plan'] = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: active.map(p => p.ticker),
+      datasets: [{ data: active.map(p => p.allocationPct), backgroundColor: COLORS.slice(0, active.length), borderWidth: 0 }]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false, cutout:'55%',
+      plugins:{
+        legend:{ position:'right', labels:{ color:'#94a3b8', font:{ size:11 }, padding:9, boxWidth:11 } },
+        tooltip:{ callbacks:{ label:c=>` ${c.label}: ${c.raw}%` } }
+      }
+    }
+  });
+}
+
+// ======================================================
+// API — PRICES
+// ======================================================
+async function fetchPrice(ticker, attempt = 1) {
+  const cache = S.data.priceCache[ticker];
+  if (cache?.manual) return cache; // cours manuel : jamais remplacé par l'auto
+  if (cache && (Date.now() - (cache.timestamp||0) < PRICE_TTL)) return cache;
+  try {
+    const url = `${YF_CHART}${encodeURIComponent(ticker)}?interval=1d&range=1d`;
+    const r = await fetch(`${PROXY}${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(20000) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    const j = JSON.parse(d.contents);
+    const m = j?.chart?.result?.[0]?.meta;
+    if (!m) throw new Error('No data');
+    const result = { price: m.regularMarketPrice ?? m.previousClose, changePercent: m.regularMarketChangePercent ?? 0, name: m.longName || m.shortName || ticker, currency: m.currency || 'EUR', timestamp: Date.now() };
+    S.data.priceCache[ticker] = result;
+    saveData();
+    return result;
+  } catch(e) {
+    if (e.name === 'TimeoutError' && attempt < 3) {
+      console.warn('fetchPrice', ticker, `timeout, tentative ${attempt + 1}...`);
+      await new Promise(r => setTimeout(r, 1500));
+      return fetchPrice(ticker, attempt + 1);
+    }
+    console.warn('fetchPrice', ticker, e.message);
+    return null;
+  }
+}
+
+async function refreshPrices(tickers) {
+  const autoTickers = tickers.filter(t => !S.data.priceCache[t]?.manual);
+  autoTickers.forEach(t => { if (S.data.priceCache[t]) S.data.priceCache[t].timestamp = 0; });
+  let ok = 0, fail = 0;
+  for (const t of autoTickers) {
+    const r = await fetchPrice(t);
+    r ? ok++ : fail++;
+  }
+  return { ok, fail, manual: tickers.length - autoTickers.length };
+}
+
+// ======================================================
+// API — NEWS
+// ======================================================
+async function fetchNews(ticker) {
+  try {
+    const url = `${YF_RSS}${encodeURIComponent(ticker)}&region=FR&lang=fr-FR`;
+    const r = await fetch(`${PROXY}${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(12000) });
+    const d = await r.json();
+    const xml = new DOMParser().parseFromString(d.contents, 'text/xml');
+    return [...xml.querySelectorAll('item')].slice(0, 8).map(it => ({
+      title: it.querySelector('title')?.textContent || '',
+      link:  it.querySelector('link')?.textContent || '',
+      date:  it.querySelector('pubDate')?.textContent || '',
+      desc:  (it.querySelector('description')?.textContent || '').replace(/<[^>]+>/g,'').substring(0, 160)
+    }));
+  } catch(e) { console.warn('fetchNews', ticker, e.message); return []; }
+}
+
+// ======================================================
+// API — CLAUDE
+// ======================================================
+async function callClaude(prompt) {
+  const key = S.data.settings.claudeApiKey;
+  if (!key) throw new Error('Clé API Anthropic non configurée. Allez dans ⚙️ Paramètres.');
+  const resp = await fetch(CLAUDE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 2048,
+      system: `Tu es un conseiller financier expert en bourse, ETF et gestion de patrimoine, spécialisé dans le PEA français. Tu analyses les portefeuilles avec rigueur, identifies les risques clairement, et donnes des recommandations pratiques et personnalisées. Réponds toujours en français avec du Markdown bien structuré. Rappelle toujours que tu ne fournis pas de conseil financier officiel et que l'investisseur doit faire ses propres recherches.`,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  });
+  if (!resp.ok) {
+    const e = await resp.json().catch(()=>({}));
+    throw new Error(e.error?.message || 'Erreur API ' + resp.status);
+  }
+  const j = await resp.json();
+  return j.content[0].text;
+}
+
+// ======================================================
+// PAGE — DASHBOARD
+// ======================================================
+function renderDashboard() {
+  const { positions, cash, deposited, portValue, totalCost, pnl, pnlP } = computeSummary();
+  const recent = [...S.data.transactions].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);
+  const total = portValue + Math.max(0, cash);
+
+  document.getElementById('page-dashboard').innerHTML = `
+    <div class="page-header">
+      <div><h2>Tableau de bord</h2><div class="page-sub">Vue d'ensemble de votre portefeuille</div></div>
+      <div class="page-actions">
+        <button class="btn btn-secondary btn-sm" onclick="doRefreshAll()">⟳ Actualiser les cours</button>
+        <button class="btn btn-primary btn-sm" onclick="openTxModal()">+ Transaction</button>
+      </div>
+    </div>
+    <div class="grid-4">
+      <div class="card">
+        <div class="section-title">Valeur Portefeuille</div>
+        <div class="stat-val">${fc(portValue)}</div>
+        <div class="stat-sub neutral">Total avec liquidités: <strong>${fc(total)}</strong></div>
+      </div>
+      <div class="card">
+        <div class="section-title">Capital Investi</div>
+        <div class="stat-val">${fc(totalCost)}</div>
+        <div class="stat-sub neutral">Versé: ${fc(deposited)}</div>
+      </div>
+      <div class="card">
+        <div class="section-title">Plus-value latente</div>
+        <div class="stat-val ${sign(pnl)}">${fc(pnl)}</div>
+        <div class="stat-sub ${sign(pnlP)}">${fp(pnlP)}</div>
+      </div>
+      <div class="card">
+        <div class="section-title">Liquidités</div>
+        <div class="stat-val ${sign(cash)}">${fc(cash)}</div>
+        <div class="stat-sub ${cash<0?'negative':'neutral'}">${cash<0?'⚠ Solde négatif':'Disponible'}</div>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="section-title">Allocation du portefeuille</div>
+        ${positions.length ? `<div style="height:210px;position:relative"><canvas id="chart-alloc"></canvas></div>` : `<div class="empty"><div class="ico">📊</div><p>Aucune position</p></div>`}
+      </div>
+      <div class="card">
+        <div class="section-title">Plus/moins-values par titre</div>
+        ${positions.length ? `<div style="height:210px;position:relative"><canvas id="chart-pnl"></canvas></div>` : `<div class="empty"><div class="ico">📈</div><p>Aucune position</p></div>`}
+      </div>
+    </div>
+    <div class="card mb16">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div class="section-title" style="margin:0">Évolution du PEA</div>
+        <div style="display:flex;gap:4px">
+          ${['1S','1M','3M','1A','MAX'].map(f => `
+            <button class="btn btn-sm evol-filter-btn ${S.evolFilter===f?'btn-primary':'btn-secondary'}"
+              data-filter="${f}" onclick="setEvolFilter('${f}')">${f}</button>
+          `).join('')}
+        </div>
+      </div>
+      ${(S.data.snapshots||[]).length >= 2
+        ? `<div style="height:220px;position:relative"><canvas id="chart-evolution"></canvas></div>`
+        : `<div class="empty" style="padding:24px"><div class="ico">📈</div><p style="color:var(--muted);font-size:0.82rem">L'historique se constituera au fil du temps.<br>Revenez demain pour voir les premières données.</p></div>`}
+    </div>
+
+    <div class="card">
+      <div class="flex justify-between items-center mb16">
+        <div class="section-title" style="margin:0">Transactions récentes</div>
+        <button class="btn btn-secondary btn-sm" onclick="navigate('transactions')">Voir tout →</button>
+      </div>
+      ${recent.length ? `
+        <div class="table-wrap"><table>
+          <thead><tr><th>Date</th><th>Type</th><th>Titre</th><th>Quantité</th><th>Prix</th><th>Total</th></tr></thead>
+          <tbody>${recent.map(tx => {
+            const tot = tx.type==='buy' ? tx.quantity*tx.price+(tx.fees||0) : tx.quantity*tx.price-(tx.fees||0);
+            return `<tr>
+              <td>${fd(tx.date)}</td>
+              <td><span class="badge badge-${tx.type}">${txLbl(tx.type)}</span></td>
+              <td><span class="chip">${esc(tx.ticker)}</span> <span style="color:var(--muted)">${esc(tx.name)}</span></td>
+              <td>${fn(tx.quantity)}</td>
+              <td>${fc(tx.price)}</td>
+              <td>${fc(tot)}</td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table></div>
+      ` : `<div class="empty"><div class="ico">🔄</div><p>Aucune transaction</p><button class="btn btn-primary" onclick="openTxModal()">+ Ajouter</button></div>`}
+    </div>
+  `;
+  requestAnimationFrame(() => { makeAllocationChart(positions); makePnlChart(positions); makeEvolutionChart(S.evolFilter); });
+  updateSbCeiling(deposited);
+}
+
+// ======================================================
+// PAGE — PORTFOLIO
+// ======================================================
+function renderPortfolio() {
+  const positions = computePositions();
+  const total = positions.reduce((s,p)=>s+p.marketValue,0);
+  const lastUpd = getLastUpdate(positions);
+
+  document.getElementById('page-portfolio').innerHTML = `
+    <div class="page-header">
+      <div>
+        <h2>Portefeuille</h2>
+        <div class="page-sub">${positions.length} ligne${positions.length!==1?'s':''} · ${fc(total)} valeur totale${lastUpd?` · Cours: ${lastUpd}`:''}</div>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-secondary" onclick="doRefreshAll()" id="btn-refresh">⟳ Actualiser les cours</button>
+        <button class="btn btn-primary" onclick="openTxModal()">+ Transaction</button>
+      </div>
+    </div>
+    ${positions.length ? `
+      <div class="card">
+        <div class="table-wrap"><table>
+          <thead><tr>
+            <th>Ticker</th><th>Nom</th><th>Quantité</th><th>Prix moy.</th>
+            <th>Cours actuel</th><th>Variation</th><th>Valeur</th><th>P&amp;L €</th><th>P&amp;L %</th><th>Poids</th><th style="width:72px"></th>
+          </tr></thead>
+          <tbody>${positions.map(p => {
+            const w = total > 0 ? (p.marketValue/total*100) : 0;
+            return `<tr>
+              <td><span class="chip">${esc(p.ticker)}</span></td>
+              <td>${esc(p.name)}</td>
+              <td>${fn(p.quantity)}</td>
+              <td>
+                <span onclick="openPruModal('${esc(p.ticker)}',${p.computedAvgPrice},${p.avgPrice})" title="Cliquer pour ajuster le PRU" style="cursor:pointer;border-bottom:1px dashed var(--muted)">
+                  ${fc(p.avgPrice)}${p.pruManual ? ' <span style="font-size:0.68rem;color:var(--accent);font-weight:700" title="PRU manuel actif">M</span>' : ''}
+                </span>
+              </td>
+              <td>
+                <span onclick="openPriceModal('${esc(p.ticker)}')" title="Cliquer pour saisir un cours manuel" style="cursor:pointer;border-bottom:1px dashed var(--muted)">
+                  ${p.currentPrice!==null ? `<strong>${fc(p.currentPrice)}</strong>` : '<span class="neutral" style="font-size:0.75rem">Saisir</span>'}
+                  ${S.data.priceCache[p.ticker]?.manual ? ' <span style="font-size:0.68rem;color:var(--warning);font-weight:700" title="Cours manuel actif">M</span>' : ''}
+                </span>
+              </td>
+              <td class="${p.changePercent!==null && !S.data.priceCache[p.ticker]?.manual ?sign(p.changePercent):'neutral'}">${p.changePercent!==null && !S.data.priceCache[p.ticker]?.manual ?fp(p.changePercent):'—'}</td>
+              <td><strong>${fc(p.marketValue)}</strong></td>
+              <td class="${p.pnl!==null?sign(p.pnl):'neutral'}">${p.pnl!==null?fc(p.pnl):'—'}</td>
+              <td class="${p.pnlPct!==null?sign(p.pnlPct):'neutral'}">${p.pnlPct!==null?fp(p.pnlPct):'—'}</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <span>${w.toFixed(1)}%</span>
+                  <div class="progress" style="width:44px"><div class="progress-fill" style="width:${w}%;background:var(--accent)"></div></div>
+                </div>
+              </td>
+              <td style="white-space:nowrap">
+                <button class="btn-icon" id="refresh-${esc(p.ticker)}" onclick="doRefreshOne('${esc(p.ticker)}')" title="Actualiser le cours">⟳</button>
+                <button class="btn-icon" onclick="editPosition('${esc(p.ticker)}')" title="Voir/modifier les transactions">✏️</button>
+                <button class="btn-icon" onclick="delPosition('${esc(p.ticker)}')" title="Supprimer la position">🗑</button>
+              </td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table></div>
+        <div style="margin-top:10px;font-size:0.72rem;color:var(--muted)">⏱ Cache des cours valide 15 min. Cliquez sur "Actualiser les cours" pour forcer la mise à jour.</div>
+      </div>
+    ` : `
+      <div class="card"><div class="empty">
+        <div class="ico">💼</div>
+        <p>Aucune position. Ajoutez votre première transaction.</p>
+        <button class="btn btn-primary" onclick="openTxModal()">+ Transaction</button>
+      </div></div>
+    `}
+  `;
+}
+
+function getLastUpdate(positions) {
+  const ts = positions.map(p => S.data.priceCache[p.ticker]?.timestamp).filter(Boolean);
+  if (!ts.length) return null;
+  return new Date(Math.max(...ts)).toLocaleTimeString('fr-FR');
+}
+
+async function doRefreshAll() {
+  const positions = computePositions();
+  if (!positions.length) { toast('Aucune position à actualiser', 'error'); return; }
+  const btn = document.getElementById('btn-refresh');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Actualisation...'; }
+  toast('Actualisation des cours en cours…', 'success', 8000);
+  const { ok, fail, manual } = await refreshPrices(positions.map(p=>p.ticker));
+  if (btn) { btn.disabled = false; btn.innerHTML = '⟳ Actualiser les cours'; }
+  toast(`${ok} cours mis à jour${fail?`, ${fail} échec(s)`:''}${manual?`, ${manual} manuel(s) ignoré(s)`:''}`, fail ? 'error' : 'success');
+  takeSnapshot();
+  renderPage(S.page);
+}
+
+function openPruModal(ticker, computedPru, currentPru) {
+  window._pruTicker = ticker;
+  document.getElementById('modal-pru-title').textContent = `PRU manuel — ${ticker}`;
+  document.getElementById('pru-computed').value = computedPru.toFixed(4) + ' €';
+  document.getElementById('pru-manual').value = currentPru.toFixed(4);
+  openModal('modal-pru');
+}
+
+function savePruOverride(e) {
+  e.preventDefault();
+  const val = parseFloat(document.getElementById('pru-manual').value);
+  if (isNaN(val) || val <= 0) { toast('Valeur invalide', 'error'); return; }
+  S.data.pruOverrides[window._pruTicker] = val;
+  saveData();
+  closeModal('modal-pru');
+  toast(`PRU de ${window._pruTicker} défini à ${fc(val)} ✓`);
+  renderPage(S.page);
+}
+
+function resetPruOverride() {
+  delete S.data.pruOverrides[window._pruTicker];
+  saveData();
+  closeModal('modal-pru');
+  toast(`PRU de ${window._pruTicker} réinitialisé (calcul auto) ✓`);
+  renderPage(S.page);
+}
+
+async function doRefreshOne(ticker) {
+  if (S.data.priceCache[ticker]?.manual) {
+    toast(`${ticker} : cours manuel actif — cliquez sur le cours pour le modifier`, 'error', 4000);
+    return;
+  }
+  const btn = document.getElementById('refresh-' + ticker);
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'; }
+  if (S.data.priceCache[ticker]) S.data.priceCache[ticker].timestamp = 0;
+  const r = await fetchPrice(ticker);
+  if (btn) { btn.disabled = false; btn.innerHTML = '⟳'; }
+  toast(r ? `${ticker} mis à jour : ${fc(r.price)}` : `Échec pour ${ticker}`, r ? 'success' : 'error');
+  renderPage(S.page);
+}
+
+function openPriceModal(ticker) {
+  window._priceTicker = ticker;
+  document.getElementById('modal-price-title').textContent = `Cours manuel — ${ticker}`;
+  const current = S.data.priceCache[ticker]?.price;
+  document.getElementById('price-input').value = current ? current : '';
+  openModal('modal-price');
+}
+
+function savePriceManual(e) {
+  e.preventDefault();
+  const val = parseFloat(document.getElementById('price-input').value);
+  if (isNaN(val) || val <= 0) { toast('Cours invalide', 'error'); return; }
+  const ticker = window._priceTicker;
+  const existing = S.data.priceCache[ticker] || {};
+  S.data.priceCache[ticker] = { ...existing, price: val, changePercent: 0, timestamp: Number.MAX_SAFE_INTEGER, manual: true };
+  saveData();
+  closeModal('modal-price');
+  toast(`Cours de ${ticker} défini à ${fc(val)} ✓`);
+  renderPage(S.page);
+}
+
+function clearPriceManual() {
+  const ticker = window._priceTicker;
+  if (S.data.priceCache[ticker]) { S.data.priceCache[ticker].manual = false; S.data.priceCache[ticker].timestamp = 0; }
+  saveData();
+  closeModal('modal-price');
+  toast(`${ticker} : cours repassé en automatique`);
+  renderPage(S.page);
+}
+
+// ======================================================
+// PAGE — TRANSACTIONS
+// ======================================================
+function renderTransactions() {
+  let txs = [...S.data.transactions].sort((a,b) => b.date.localeCompare(a.date));
+  if (S.txFilter !== 'all') txs = txs.filter(t => t.type === S.txFilter);
+  if (S.txSearch) txs = txs.filter(t => t.ticker.toLowerCase().includes(S.txSearch.toLowerCase()) || t.name.toLowerCase().includes(S.txSearch.toLowerCase()));
+
+  document.getElementById('page-transactions').innerHTML = `
+    <div class="page-header">
+      <div><h2>Transactions</h2><div class="page-sub">${S.data.transactions.length} transaction${S.data.transactions.length!==1?'s':''} · ${txs.length} affichée${txs.length!==1?'s':''}</div></div>
+      <div class="page-actions">
+        <button class="btn btn-secondary" onclick="exportCSV()">⬇ CSV</button>
+        <button class="btn btn-primary" onclick="openTxModal()">+ Transaction</button>
+      </div>
+    </div>
+    <div class="card mb16" style="padding:12px 16px">
+      <div class="flex gap8 wrap items-center">
+        <div class="flex gap8">
+          ${['all','buy','sell','dividend'].map(t=>`<button class="btn btn-sm ${S.txFilter===t?'btn-primary':'btn-secondary'}" onclick="setTxFilter('${t}')">${t==='all'?'Tous':txLbl(t)}</button>`).join('')}
+        </div>
+        <input type="search" placeholder="Rechercher ticker / nom…" value="${esc(S.txSearch)}" oninput="setTxSearch(this.value)" style="width:200px;padding:5px 10px;font-size:0.78rem">
+      </div>
+    </div>
+    <div class="card">
+      ${txs.length ? `
+        <div class="table-wrap"><table>
+          <thead><tr><th>Date</th><th>Type</th><th>Ticker</th><th>Nom</th><th>Quantité</th><th>Prix unit.</th><th>Frais</th><th>Total</th><th>Notes</th><th></th></tr></thead>
+          <tbody>${txs.map(tx => {
+            const tot = tx.type==='buy' ? tx.quantity*tx.price+(tx.fees||0) : tx.quantity*tx.price-(tx.fees||0);
+            return `<tr>
+              <td>${fd(tx.date)}</td>
+              <td><span class="badge badge-${tx.type}">${txLbl(tx.type)}</span></td>
+              <td><span class="chip">${esc(tx.ticker)}</span></td>
+              <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(tx.name)}</td>
+              <td>${fn(tx.quantity)}</td>
+              <td>${fc(tx.price)}</td>
+              <td>${tx.fees ? fc(tx.fees) : '—'}</td>
+              <td class="${tx.type==='buy'?'negative':tx.type==='sell'?'positive':'positive'}">${fc(Math.abs(tot))}</td>
+              <td style="color:var(--muted);font-size:0.75rem;max-width:120px;overflow:hidden;text-overflow:ellipsis">${esc(tx.notes||'—')}</td>
+              <td style="white-space:nowrap">
+                <button class="btn-icon" onclick="editTx('${tx.id}')" title="Modifier">✏️</button>
+                <button class="btn-icon" onclick="delTx('${tx.id}')" title="Supprimer">🗑</button>
+              </td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table></div>
+      ` : `<div class="empty"><div class="ico">🔄</div><p>Aucune transaction${S.txFilter!=='all'||S.txSearch?' correspondant aux filtres':''}</p></div>`}
+    </div>
+  `;
+}
+
+function txLbl(t) { return { buy:'Achat', sell:'Vente', dividend:'Dividende' }[t] || t; }
+function setTxFilter(v) { S.txFilter = v; renderTransactions(); }
+function setTxSearch(v) { S.txSearch = v; renderTransactions(); }
+
+// ======================================================
+// PAGE — TREASURY
+// ======================================================
+function renderTreasury() {
+  const cash = computeCash();
+  const dep = computeDeposited();
+  const pct = Math.min(100, (dep/PEA_MAX)*100);
+  const rem = PEA_MAX - dep;
+  const deps = [...S.data.deposits].sort((a,b)=>b.date.localeCompare(a.date));
+  const barColor = pct>90?'var(--danger)':pct>70?'var(--warning)':'var(--success)';
+
+  document.getElementById('page-treasury').innerHTML = `
+    <div class="page-header">
+      <div><h2>Trésorerie</h2><div class="page-sub">Suivi des liquidités et du plafond PEA</div></div>
+      <div class="page-actions"><button class="btn btn-primary" onclick="openDepModal()">+ Mouvement</button></div>
+    </div>
+    <div class="grid-3">
+      <div class="card">
+        <div class="section-title">Liquidités disponibles</div>
+        <div class="stat-val ${sign(cash)}">${fc(cash)}</div>
+        <div class="stat-sub ${cash<0?'negative':'neutral'}">${cash<0?'⚠ Solde négatif — vérifiez vos transactions':'Prêt à investir'}</div>
+      </div>
+      <div class="card">
+        <div class="section-title">Total versé</div>
+        <div class="stat-val">${fc(dep)}</div>
+        <div class="stat-sub neutral">${S.data.deposits.filter(d=>d.type==='deposit').length} versement${S.data.deposits.filter(d=>d.type==='deposit').length!==1?'s':''}</div>
+      </div>
+      <div class="card">
+        <div class="section-title">Plafond restant</div>
+        <div class="stat-val ${rem<10000?'negative':rem<30000?'warning':'positive'}">${fc(rem)}</div>
+        <div class="stat-sub neutral">sur 150 000 € max légal</div>
+      </div>
+    </div>
+    <div class="card mb16">
+      <div class="section-title">Plafond versements PEA (150 000 €)</div>
+      <div style="display:flex;justify-content:space-between;font-size:0.8rem;margin-bottom:7px">
+        <span>${fc(dep,0)} versés</span><span class="neutral">${pct.toFixed(1)}% utilisé</span>
+      </div>
+      <div class="progress" style="height:10px">
+        <div class="progress-fill" style="width:${pct}%;background:${barColor}"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--muted);margin-top:5px"><span>0 €</span><span>150 000 €</span></div>
+      ${pct>90?`<div class="info-box info-danger" style="margin-top:10px">⚠ Vous approchez du plafond légal de 150 000 €. Aucun nouveau versement possible au-delà.</div>`:''}
+    </div>
+    <div class="card">
+      <div class="section-title mb16">Historique des mouvements</div>
+      ${deps.length ? `
+        <div class="table-wrap"><table>
+          <thead><tr><th>Date</th><th>Type</th><th>Montant</th><th>Notes</th><th></th></tr></thead>
+          <tbody>${deps.map(d=>`<tr>
+            <td>${fd(d.date)}</td>
+            <td><span class="badge badge-${d.type==='deposit'?'deposit':'withdrawal'}">${d.type==='deposit'?'Versement':'Retrait'}</span></td>
+            <td class="${d.type==='deposit'?'positive':'negative'}">${d.type==='deposit'?'+':'-'}${fc(d.amount)}</td>
+            <td style="color:var(--muted)">${esc(d.notes||'—')}</td>
+            <td><button class="btn-icon" onclick="delDep('${d.id}')" title="Supprimer">🗑</button></td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      ` : `<div class="empty"><div class="ico">💰</div><p>Aucun mouvement</p></div>`}
+    </div>
+  `;
+  updateSbCeiling(dep);
+}
+
+// ======================================================
+// PAGE — PLANNING
+// ======================================================
+function renderPlanning() {
+  const budget = S.data.settings.monthlyBudget;
+  const positions = computePositions();
+  const posMap = {};
+  positions.forEach(p => posMap[p.ticker] = p);
+
+  const etfItems  = S.data.planItems.filter(p => p.active && p.isEtf !== false).sort((a,b)=>(a.priority||99)-(b.priority||99));
+  const stockItems = S.data.planItems.filter(p => p.active && p.isEtf === false).sort((a,b)=>(a.priority||99)-(b.priority||99));
+
+  const totalEtfPct  = etfItems.reduce((s,p) => s + (p.allocationPct||0), 0);
+  // stockBudget = cash total (net + frais de courtage)
+  const stockBudget  = stockItems.reduce((s,p) => {
+    const price = S.data.priceCache[p.ticker]?.price ?? 0;
+    const shares = p.monthlyShares ?? 0;
+    const netAmt = shares > 0 ? shares * price : (p.monthlyAmount || 0);
+    const feeMul = 1 + (p.feePct ?? 0) / 100;
+    return s + netAmt * feeMul;
+  }, 0);
+  const etfBudget    = Math.max(0, budget - stockBudget);
+  const etfBalanced  = Math.abs(totalEtfPct - 100) < 0.5;
+
+  // Simulation ETF
+  let currentEtfTotal = 0;
+  etfItems.forEach(item => { currentEtfTotal += posMap[item.ticker]?.marketValue ?? 0; });
+  const projectedEtfTotal = currentEtfTotal + etfBudget;
+  const normFactor = totalEtfPct > 0 ? 100 / totalEtfPct : 1;
+
+  // Phase 1 : calcul des achats idéaux
+  // amount = cash total (net + frais) ; netInvestment = ce qui va vraiment dans l'actif
+  let etfResults = etfItems.map(item => {
+    const currentVal = posMap[item.ticker]?.marketValue ?? 0;
+    const currentPct = currentEtfTotal > 0 ? (currentVal / currentEtfTotal * 100) : 0;
+    const targetPct  = (item.allocationPct||0) * normFactor;
+    const targetVal  = projectedEtfTotal * (targetPct / 100);
+    const idealBuy   = Math.max(0, targetVal - currentVal);      // investissement net idéal
+    const feePct     = item.feePct ?? 0;
+    const feeMul     = 1 + feePct / 100;
+    const idealBuyCash = idealBuy * feeMul;                      // cash total à débourser
+    const minAmt     = item.minAmount ?? 200;                    // minimum en cash (BoursoBank)
+    const price      = S.data.priceCache[item.ticker]?.price ?? null;
+    let status, amount;
+    if (idealBuy <= 0.01)             { status = 'overweight'; amount = 0; }
+    else if (idealBuyCash >= minAmt)  { status = 'ok';         amount = idealBuyCash; }
+    else                              { status = 'min-forced'; amount = minAmt; }
+    // netInvestment = ce qui est réellement acheté (valeur de marché gagnée)
+    const netInvestment = amount > 0 ? amount / feeMul : 0;
+    const feeAmt        = amount - netInvestment;
+    return { ...item, currentVal, currentPct, targetPct, idealBuy, idealBuyCash,
+             amount, netInvestment, feeAmt, feePct, feeMul, status, price };
+  });
+
+  // Phase 2 : ajustement si le total dépasse le budget ETF
+  let totalEtfUsed = etfResults.reduce((s,r) => s + r.amount, 0);
+  if (totalEtfUsed > etfBudget + 0.01 && etfBudget > 0) {
+    // Réduire d'abord les items 'ok' (idéaux), en préservant les 'min-forced'
+    const forcedTotal = etfResults.filter(r => r.status === 'min-forced').reduce((s,r) => s + r.amount, 0);
+    const availableForOk = etfBudget - forcedTotal;
+    const okTotal = etfResults.filter(r => r.status === 'ok').reduce((s,r) => s + r.amount, 0);
+
+    if (availableForOk >= 0 && okTotal > 0) {
+      // Il reste du budget pour les items ok : les scaler proportionnellement
+      const scale = availableForOk / okTotal;
+      etfResults = etfResults.map(r => {
+        if (r.status !== 'ok') return r;
+        const sc = r.amount * scale;
+        const na = sc < (r.minAmount ?? 200) ? 0 : sc;
+        return { ...r, amount: na, status: na > 0 ? 'ok' : 'below-min' };
+      });
+    } else {
+      // Même les minimums forcés dépassent le budget : scaler tout par importance (idealBuy desc)
+      const scale = etfBudget / totalEtfUsed;
+      etfResults = etfResults.map(r => {
+        if (r.amount === 0) return r;
+        const sc = r.amount * scale;
+        const na = sc < (r.minAmount ?? 200) ? 0 : sc;
+        return { ...r, amount: na, status: na > 0 ? r.status : 'below-min' };
+      });
+    }
+    totalEtfUsed = etfResults.reduce((s,r) => s + r.amount, 0);
+  }
+
+  // Phase 3 : calcul du nombre de parts (sur l'investissement net, hors frais)
+  etfResults = etfResults.map(r => ({
+    ...r,
+    netInvestment: r.amount > 0 ? r.amount / r.feeMul : 0,
+    feeAmt: r.amount > 0 ? r.amount - r.amount / r.feeMul : 0,
+    parts: r.price && r.amount > 0 ? (r.amount / r.feeMul) / r.price : null
+  }));
+
+  // Phase 4 : Règle ±3% — si un ETF s'écarte trop de sa cible après achat,
+  // on redirige du budget depuis les ETFs déjà dans la cible vers les sous-pondérés
+  const REBAL_TOL = 3.0;
+  const recomputeProj = (res) => {
+    const bkt = currentEtfTotal + res.reduce((s,r) => s + r.netInvestment, 0);
+    return res.map(r => {
+      const pv = r.currentVal + r.netInvestment;
+      const pp = bkt > 0 ? pv / bkt * 100 : 0;
+      return { ...r, projPct: pp, devAfter: pp - r.targetPct };
+    });
+  };
+  etfResults = recomputeProj(etfResults);
+
+  // ETFs encore sous-pondérés de plus de REBAL_TOL% → essayer de prendre du budget ailleurs
+  const boostNeeds = etfResults.filter(r => r.devAfter < -REBAL_TOL).sort((a,b) => a.devAfter - b.devAfter);
+  for (const uwRef of boostNeeds) {
+    etfResults = recomputeProj(etfResults);
+    const bkt = currentEtfTotal + etfResults.reduce((s,r) => s + r.netInvestment, 0);
+    const uw = etfResults.find(r => r.id === uwRef.id);
+    if (!uw || uw.devAfter >= -REBAL_TOL) continue;
+    const minProjVal = ((uw.targetPct - REBAL_TOL) / 100) * bkt;
+    let extraNet = Math.max(0, minProjVal - uw.currentVal - uw.netInvestment);
+    if (extraNet < 0.01) continue;
+    // Donors : ETFs qui ont de la marge (les plus sur-pondérés après achat en premier)
+    const donors = etfResults.filter(r => r.id !== uw.id && r.netInvestment > 0)
+                             .sort((a,b) => b.devAfter - a.devAfter);
+    for (const df of donors) {
+      if (extraNet <= 0.01) break;
+      const dfIdx = etfResults.findIndex(r => r.id === df.id);
+      const dfCur = etfResults[dfIdx];
+      // Max qu'on peut prendre sans faire passer df sous (targetPct - REBAL_TOL)
+      const dfMinNet = Math.max(0, ((dfCur.targetPct - REBAL_TOL) / 100) * bkt - dfCur.currentVal);
+      const dfFreeNet = dfCur.netInvestment - dfMinNet;
+      if (dfFreeNet <= 0.01) continue;
+      const takeNet = Math.min(dfFreeNet, extraNet);
+      const newDfNet = dfCur.netInvestment - takeNet;
+      const newDfCash = newDfNet * dfCur.feeMul;
+      // Si montant résiduel < minimum → annuler entièrement l'achat df
+      let finalDfNet = newDfNet, finalDfCash = newDfCash, actualTakeNet = takeNet;
+      if (newDfCash > 0 && newDfCash < (dfCur.minAmount ?? 200)) {
+        actualTakeNet = dfCur.netInvestment; finalDfNet = 0; finalDfCash = 0;
+      }
+      etfResults[dfIdx] = { ...dfCur, amount: finalDfCash, netInvestment: finalDfNet,
+        feeAmt: finalDfCash - finalDfNet,
+        parts: dfCur.price && finalDfNet > 0 ? finalDfNet / dfCur.price : null,
+        status: finalDfCash > 0 ? 'reduced' : 'deferred' };
+      const uwIdx = etfResults.findIndex(r => r.id === uw.id);
+      const uwCur = etfResults[uwIdx];
+      const newUwNet = uwCur.netInvestment + actualTakeNet;
+      const newUwCash = newUwNet * uwCur.feeMul;
+      etfResults[uwIdx] = { ...uwCur, amount: newUwCash, netInvestment: newUwNet,
+        feeAmt: newUwCash - newUwNet,
+        parts: uwCur.price ? newUwNet / uwCur.price : null, status: 'boosted' };
+      extraNet -= actualTakeNet;
+    }
+  }
+  etfResults = recomputeProj(etfResults);
+  totalEtfUsed = etfResults.reduce((s,r) => s + r.amount, 0);
+
+  // Arrondi à l'entier inférieur : Boursobank ne supporte pas les fractions de parts
+  etfResults = etfResults.map(r => {
+    if (!r.price || !r.parts) return r;
+    const wholeParts = Math.floor(r.parts);
+    if (wholeParts === 0) return { ...r, parts: 0, netInvestment: 0, feeAmt: 0, amount: 0 };
+    const netInvestment = wholeParts * r.price;
+    const amount = netInvestment * r.feeMul;
+    return { ...r, parts: wholeParts, netInvestment, feeAmt: amount - netInvestment, amount };
+  });
+  etfResults = recomputeProj(etfResults);
+  totalEtfUsed = etfResults.reduce((s,r) => s + r.amount, 0);
+
+  const outOf3 = etfResults.filter(r => Math.abs(r.devAfter) > REBAL_TOL);
+
+  const lastUpd = getLastUpdate(positions);
+
+  // Projection après achat
+  const totalCurrentPF = positions.reduce((s,p) => s + p.marketValue, 0);
+  // Valeurs nettes investies (ce qui augmente la valeur de marché, hors frais)
+  const totalNetEtf   = etfResults.reduce((s,r) => s + r.netInvestment, 0);
+  const totalNetStock = stockItems.reduce((s,si) => {
+    const price = S.data.priceCache[si.ticker]?.price ?? 0;
+    const shares = si.monthlyShares ?? 0;
+    return s + (shares > 0 ? shares * price : (si.monthlyAmount || 0));
+  }, 0);
+  const totalNetInvested = totalNetEtf + totalNetStock;
+  const totalCashSpent   = totalEtfUsed + stockBudget;         // cash total débité du compte
+  const totalProjectedPF = totalCurrentPF + totalNetInvested;  // valeur de marché projetée
+  // Bucket ETF uniquement (hors titres directs) — en net pour valeur de marché
+  const etfTickers = new Set(etfItems.map(e => e.ticker));
+  const etfProjectedTotal = currentEtfTotal + totalNetEtf; // bucket ETF après achat (en valeur marché)
+  const stockPurchases = {};
+  stockItems.forEach(si => {
+    const price  = S.data.priceCache[si.ticker]?.price ?? 0;
+    const shares = si.monthlyShares ?? 0;
+    const netAmt = shares > 0 ? shares * price : (si.monthlyAmount || 0);
+    const feeMul = 1 + (si.feePct ?? 0) / 100;
+    const cashAmt = netAmt * feeMul;
+    if (netAmt > 0) stockPurchases[si.ticker] = { cashAmt, netAmt, shares: shares > 0 ? shares : null, name: si.name, feePct: si.feePct ?? 0 };
+  });
+  const etfPurchases = {};
+  // netInvestment = valeur de marché gagnée (hors frais) ; amount = cash total débité
+  etfResults.forEach(r => { if (r.amount > 0) etfPurchases[r.ticker] = { cashAmt: r.amount, netAmt: r.netInvestment, name: r.name, feePct: r.feePct }; });
+  const allProjTickers = [...new Set([...positions.map(p=>p.ticker), ...Object.keys(stockPurchases), ...Object.keys(etfPurchases)])];
+  const projRows = allProjTickers.map(ticker => {
+    const pos = posMap[ticker];
+    const currentVal = pos?.marketValue ?? 0;
+    // addVal = investissement NET (valeur de marché gagnée, hors frais) pour la projection
+    const addVal = (stockPurchases[ticker]?.netAmt ?? 0) + (etfPurchases[ticker]?.netAmt ?? 0);
+    const addFees = (stockPurchases[ticker]?.cashAmt ?? 0) - (stockPurchases[ticker]?.netAmt ?? 0)
+                  + (etfPurchases[ticker]?.cashAmt ?? 0) - (etfPurchases[ticker]?.netAmt ?? 0);
+    const projectedVal = currentVal + addVal;
+    const name = pos?.name || stockPurchases[ticker]?.name || etfPurchases[ticker]?.name || ticker;
+    const currentPct   = totalCurrentPF   > 0 ? currentVal   / totalCurrentPF   * 100 : 0;
+    const projectedPct = totalProjectedPF > 0 ? projectedVal / totalProjectedPF * 100 : 0;
+    // % dans le bucket ETF uniquement (seulement pour les tickers du plan ETF)
+    const isEtf = etfTickers.has(ticker);
+    const etfCurrentPct   = (isEtf && currentEtfTotal  > 0) ? currentVal   / currentEtfTotal  * 100 : null;
+    const etfProjectedPct = (isEtf && etfProjectedTotal > 0) ? projectedVal / etfProjectedTotal * 100 : null;
+    return { ticker, name, currentVal, addVal, addFees, projectedVal, currentPct, projectedPct, isEtf, etfCurrentPct, etfProjectedPct };
+  }).sort((a,b) => b.projectedVal - a.projectedVal);
+
+  document.getElementById('page-planning').innerHTML = `
+    <div class="page-header">
+      <div>
+        <h2>Planning Mensuel</h2>
+        <div class="page-sub">Simulation d'achat mensuel${lastUpd ? ` · Cours: ${lastUpd}` : ''}</div>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-secondary" onclick="doRefreshPlan()" id="btn-refresh-plan">⟳ Actualiser les cours</button>
+        <button class="btn btn-primary" onclick="openPlanModal()">+ Ajouter un titre</button>
+      </div>
+    </div>
+
+    <div class="grid-2 mb16">
+      <div class="card">
+        <div class="section-title">Budget mensuel</div>
+        <div style="display:flex;align-items:center;gap:10px;margin:8px 0 12px">
+          <input type="number" value="${budget}" min="0" step="50" style="width:120px" onchange="updBudget(this.value)">
+          <span class="neutral">€ / mois</span>
+        </div>
+        <div style="font-size:0.81rem;display:flex;flex-direction:column;gap:5px;margin-bottom:10px">
+          <div>ETFs: <strong class="positive">${fc(etfBudget)}</strong></div>
+          <div>Titres directs: <strong style="color:var(--accent)">${fc(stockBudget)}</strong></div>
+        </div>
+        <div class="info-box ${etfBalanced?'info-success':totalEtfPct>100?'info-danger':'info-warning'}">
+          ${!etfItems.length ? 'Aucun ETF planifié' :
+            etfBalanced ? `✓ Répartition ETF équilibrée (100%)` :
+            totalEtfPct > 100 ? `⚠ Total ETF: ${totalEtfPct.toFixed(0)}% (excès de ${(totalEtfPct-100).toFixed(0)}%)` :
+            `⚠ Total ETF: ${totalEtfPct.toFixed(0)}% (${(100-totalEtfPct).toFixed(0)}% non alloués)`}
+        </div>
+      </div>
+      <div class="card">
+        <div class="section-title">Répartition cible ETF</div>
+        ${etfItems.length ? `<div style="height:170px;position:relative"><canvas id="chart-plan"></canvas></div>`
+          : `<div class="empty" style="padding:20px"><p>Ajoutez des ETFs au planning</p></div>`}
+      </div>
+    </div>
+
+    <!-- ETF SECTION -->
+    <div class="card mb16">
+      <div class="section-title mb16">ETFs — Répartition cible &amp; Simulation d'achat</div>
+      ${etfItems.length ? `
+        ${outOf3.length > 0
+          ? `<div class="info-box info-warning" style="margin-bottom:10px">⚠ ${outOf3.length} ETF${outOf3.length>1?'s':''} hors règle ±${REBAL_TOL}% après achat : ${outOf3.map(r=>`<strong>${r.ticker}</strong> (${r.devAfter>0?'+':''}${r.devAfter.toFixed(1)}%)`).join(', ')} — budget insuffisant pour rééquilibrer complètement</div>`
+          : `<div class="info-box info-success" style="margin-bottom:10px">✓ Tous les ETF seront dans la règle ±${REBAL_TOL}% après les achats suggérés</div>`}
+        <div class="table-wrap"><table>
+          <thead><tr>
+            <th>Ticker</th><th>Nom</th>
+            <th title="% souhaité dans le bucket ETF uniquement (hors titres directs)">% cible</th>
+            <th title="% actuel et % projeté après achat dans le bucket ETF">% ETF actuel → projeté</th>
+            <th>Valeur actuelle</th>
+            <th title="Cash total débité (net investi + frais de courtage)">Montant suggéré</th>
+            <th>Parts</th>
+            <th title="Montant minimum d'achat (BoursoBank)">Achat min.</th>
+            <th title="Frais de courtage en % du montant brut">Frais %</th>
+            <th>Statut</th>
+            <th></th>
+          </tr></thead>
+          <tbody>${etfResults.map(r => {
+            const gap = r.targetPct - r.currentPct;
+            const gapColor = Math.abs(gap) < 2 ? 'neutral' : gap > 0 ? 'positive' : 'negative';
+            const devColor = Math.abs(r.devAfter) <= REBAL_TOL ? 'positive' : Math.abs(r.devAfter) <= 6 ? 'warning' : 'negative';
+            const statusHtml = r.status==='ok'
+              ? `<span class="positive" style="font-size:0.74rem;font-weight:600">✓ OK</span>`
+              : r.status==='overweight'
+              ? `<span class="neutral" style="font-size:0.74rem">≈ équilibré</span>`
+              : r.status==='min-forced'
+              ? `<span class="warning" style="font-size:0.74rem" title="Idéal ${fc(r.idealBuy)} — achat au minimum pour rester proche de la cible">⚡ Min. forcé (idéal ${fc(r.idealBuy)})</span>`
+              : r.status==='deferred'
+              ? `<span class="neutral" style="font-size:0.74rem" title="Achat différé ce mois — budget redirigé vers un ETF sous-pondéré">⏭ Différé</span>`
+              : r.status==='reduced'
+              ? `<span class="warning" style="font-size:0.74rem" title="Achat réduit — budget redirigé vers un ETF sous-pondéré">↓ Réduit</span>`
+              : r.status==='boosted'
+              ? `<span class="positive" style="font-size:0.74rem;font-weight:600" title="Achat augmenté pour respecter la règle ±${REBAL_TOL}%">↑ Renforcé</span>`
+              : `<span class="negative" style="font-size:0.74rem">< min. (${fc(r.idealBuy)})</span>`;
+            return `<tr>
+              <td><span class="chip">${esc(r.ticker)}</span></td>
+              <td>${esc(r.name)}</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:4px">
+                  <input type="number" value="${r.allocationPct}" min="0" max="100" step="0.1"
+                    style="width:52px;padding:3px 6px;font-size:0.78rem" onchange="updPlanPct('${r.id}',this.value)">
+                  <span class="neutral">%</span>
+                </div>
+              </td>
+              <td>
+                <div class="${gapColor}">${r.currentPct.toFixed(1)}% → <span class="${devColor}">${r.projPct.toFixed(1)}%</span></div>
+                <div style="font-size:0.71rem;color:var(--muted)">cible ${r.targetPct.toFixed(1)}% · écart proj. <span class="${devColor}">${r.devAfter>=0?'+':''}${r.devAfter.toFixed(1)}%</span></div>
+              </td>
+              <td>${fc(r.currentVal)}</td>
+              <td class="${r.amount>0?'positive':'neutral'}">
+                ${r.amount>0 ? `<strong>${fc(r.amount)}</strong>
+                  ${r.feePct>0 ? `<div style="font-size:0.7rem;color:var(--muted)">net ${fc(r.netInvestment)} + frais ${fc(r.feeAmt)}</div>` : ''}` : '—'}
+              </td>
+              <td class="neutral" style="font-size:0.78rem">${r.parts!==null && r.parts>0?r.parts+' part'+(r.parts>1?'s':''):'—'}</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:4px">
+                  <input type="number" value="${r.minAmount??200}" min="0" step="10"
+                    style="width:65px;padding:3px 6px;font-size:0.78rem" onchange="updPlanMin('${r.id}',this.value)">
+                  <span class="neutral">€</span>
+                </div>
+              </td>
+              <td>
+                <div style="display:flex;align-items:center;gap:4px">
+                  <input type="number" value="${r.feePct??0}" min="0" max="5" step="0.01"
+                    style="width:52px;padding:3px 6px;font-size:0.78rem" onchange="updPlanFee('${r.id}',this.value)">
+                  <span class="neutral">%</span>
+                </div>
+              </td>
+              <td>${statusHtml}</td>
+              <td style="white-space:nowrap">
+                <div style="display:flex;gap:4px">
+                  ${r.amount>0?`<button class="btn btn-sm btn-success" onclick="execPlan('${r.id}',${r.amount.toFixed(2)},${r.parts??0})">✓ Acheter</button>`:''}
+                  <button class="btn-icon" onclick="delPlan('${r.id}')" title="Supprimer">🗑</button>
+                </div>
+              </td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table></div>
+        <div style="margin-top:10px;font-size:0.78rem;display:flex;gap:16px;flex-wrap:wrap">
+          <span>Budget ETF utilisé: <strong class="${totalEtfUsed>etfBudget+0.01?'negative':'positive'}">${fc(totalEtfUsed)}</strong> / ${fc(etfBudget)}</span>
+          ${totalEtfUsed < etfBudget - 0.5 ? `<span class="neutral">Non utilisé: ${fc(etfBudget-totalEtfUsed)}</span>` : ''}
+          <span class="neutral" style="font-size:0.72rem">💡 ±${REBAL_TOL}% = tolérance max après achat. ↑ Renforcé = budget reçu d'un autre ETF. ⏭ Différé = achat reporté au mois prochain (budget donné à un sous-pondéré). ↓ Réduit = achat réduit pour la même raison. ⚡ Min. forcé = idéal &lt; min. d'achat.</span>
+        </div>
+      ` : `<div class="empty" style="padding:20px"><div class="ico">📊</div><p>Aucun ETF planifié</p><button class="btn btn-primary" onclick="openPlanModal()">+ Ajouter un ETF</button></div>`}
+    </div>
+
+    <!-- TITRES DIRECTS SECTION -->
+    <div class="card">
+      <div class="section-title mb16">Titres directs — Nombre de parts mensuel</div>
+      ${stockItems.length ? `
+        <div class="table-wrap"><table>
+          <thead><tr>
+            <th>Ticker</th><th>Nom</th><th>Parts/mois</th><th>Cours actuel</th><th title="Cash total débité (net + frais)">Montant total</th><th title="Frais de courtage en % du montant brut">Frais %</th><th>Notes</th><th></th>
+          </tr></thead>
+          <tbody>${stockItems.map(item => {
+            const price    = S.data.priceCache[item.ticker]?.price ?? null;
+            const shares   = item.monthlyShares ?? 0;
+            const feePct   = item.feePct ?? 0;
+            const feeMul   = 1 + feePct / 100;
+            const netAmt   = price && shares > 0 ? shares * price : null;
+            const cashAmt  = netAmt !== null ? netAmt * feeMul : null;
+            const feeAmt   = cashAmt !== null ? cashAmt - netAmt : null;
+            return `<tr>
+              <td><span class="chip">${esc(item.ticker)}</span></td>
+              <td>${esc(item.name)}</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:4px">
+                  <input type="number" value="${shares}" min="0" step="1"
+                    style="width:70px;padding:3px 6px;font-size:0.78rem" onchange="updPlanShares('${item.id}',this.value)">
+                  <span class="neutral">parts</span>
+                </div>
+              </td>
+              <td>${price!==null?fc(price):'<span class="neutral">—</span>'}</td>
+              <td>${cashAmt!==null?`<strong>${fc(cashAmt)}</strong>${feePct>0?`<div style="font-size:0.7rem;color:var(--muted)">net ${fc(netAmt)} + frais ${fc(feeAmt)}</div>`:''}`:' <span class="neutral">—</span>'}</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:4px">
+                  <input type="number" value="${feePct}" min="0" max="5" step="0.01"
+                    style="width:52px;padding:3px 6px;font-size:0.78rem" onchange="updPlanFee('${item.id}',this.value)">
+                  <span class="neutral">%</span>
+                </div>
+              </td>
+              <td style="color:var(--muted);font-size:0.75rem">${esc(item.notes||'—')}</td>
+              <td style="white-space:nowrap">
+                <div style="display:flex;gap:4px">
+                  ${shares>0?`<button class="btn btn-sm btn-success" onclick="execPlanShares('${item.id}',${shares})">✓ Acheter</button>`:''}
+                  <button class="btn-icon" onclick="delPlan('${item.id}')" title="Supprimer">🗑</button>
+                </div>
+              </td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table></div>
+        <div style="margin-top:10px;font-size:0.78rem">
+          Total titres directs: <strong style="color:var(--accent)">${fc(stockBudget)}</strong>
+        </div>
+      ` : `<div class="empty" style="padding:20px"><div class="ico">📈</div><p>Aucun titre direct planifié</p><button class="btn btn-secondary" onclick="openPlanModal()">+ Ajouter un titre direct</button></div>`}
+    </div>
+
+    <!-- PROJECTION APRES ACHAT -->
+    ${projRows.length ? `
+    <div class="card">
+      <div class="section-title mb16">Projection du portefeuille après achat</div>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:14px;font-size:0.82rem">
+        <div>Portefeuille actuel&nbsp;: <strong>${fc(totalCurrentPF)}</strong></div>
+        <div title="Cash total débité du compte (net + frais)">Cash débité&nbsp;: <strong class="positive">+${fc(totalCashSpent)}</strong></div>
+        <div title="Investissement net réel (hors frais de courtage)">Net investi&nbsp;: <strong class="positive">+${fc(totalNetInvested)}</strong></div>
+        <div>Portefeuille projeté&nbsp;: <strong style="color:var(--accent)">${fc(totalProjectedPF)}</strong></div>
+        ${currentEtfTotal > 0 ? `<span style="color:var(--border)">|</span>
+        <div class="neutral">Bucket ETF&nbsp;: <strong>${fc(currentEtfTotal)}</strong> → <strong style="color:var(--accent)">${fc(etfProjectedTotal)}</strong></div>` : ''}
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Ticker</th><th>Nom</th><th>Valeur actuelle</th><th>Achat prévu</th><th>Valeur projetée</th>
+          <th title="% du portefeuille total (ETFs + titres directs)">% total actuel</th>
+          <th title="% du portefeuille total après achat">% total projeté</th>
+          <th title="% dans le bucket ETF uniquement (hors titres directs) — affiché seulement pour les ETFs du plan">% ETF actuel</th>
+          <th title="% dans le bucket ETF uniquement après achat">% ETF projeté</th>
+        </tr></thead>
+        <tbody>${projRows.map(row => `
+          <tr>
+            <td><span class="chip">${esc(row.ticker)}</span></td>
+            <td style="font-size:0.78rem">${esc(row.name)}</td>
+            <td>${fc(row.currentVal)}</td>
+            <td>${row.addVal > 0 ? `<span class="positive">+${fc(row.addVal)}</span>${row.addFees > 0.005 ? `<div style="font-size:0.7rem;color:var(--muted)">frais ${fc(row.addFees)}</div>` : ''}` : '<span class="neutral">—</span>'}</td>
+            <td><strong>${fc(row.projectedVal)}</strong></td>
+            <td class="neutral">${fn(row.currentPct,1)}%</td>
+            <td>${row.addVal > 0
+              ? `<strong style="color:var(--accent)">${fn(row.projectedPct,1)}%</strong>`
+              : `<span class="neutral">${fn(row.projectedPct,1)}%</span>`}</td>
+            <td>${row.etfCurrentPct !== null
+              ? `<span class="neutral">${fn(row.etfCurrentPct,1)}%</span>`
+              : '<span class="neutral">—</span>'}</td>
+            <td>${row.etfProjectedPct !== null
+              ? (row.addVal > 0
+                  ? `<strong style="color:var(--accent)">${fn(row.etfProjectedPct,1)}%</strong>`
+                  : `<span class="neutral">${fn(row.etfProjectedPct,1)}%</span>`)
+              : '<span class="neutral">—</span>'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>` : ''}
+  `;
+  requestAnimationFrame(() => makePlanChart(etfItems));
+}
+
+// ======================================================
+// PAGE — NEWS
+// ======================================================
+function renderNews() {
+  const positions = computePositions();
+  const tickers = positions.map(p=>p.ticker);
+
+  document.getElementById('page-news').innerHTML = `
+    <div class="page-header">
+      <div><h2>Actualités</h2><div class="page-sub">Suivez les nouvelles de vos titres et des marchés</div></div>
+    </div>
+    <div class="card mb16" style="padding:14px 16px">
+      <div class="flex gap8 wrap items-center">
+        <input type="text" id="news-inp" placeholder="Ticker (ex: CW8.PA, AIR.PA, ^FCHI)" style="width:240px">
+        <button class="btn btn-primary" onclick="loadNewsTicker()">Charger les news</button>
+        ${tickers.length?`<button class="btn btn-secondary" onclick="loadNewsPortfolio()">📰 News du portefeuille (${tickers.length})</button>`:''}
+        <button class="btn btn-secondary" onclick="loadNewsMarket()">🌍 Marchés (CAC40 / S&P500)</button>
+      </div>
+    </div>
+    <div id="news-body"><div class="empty"><div class="ico">📰</div><p>Sélectionnez un ticker ou chargez les actualités de votre portefeuille</p></div></div>
+  `;
+}
+
+function showNewsLoading(msg) {
+  document.getElementById('news-body').innerHTML = `<div class="empty"><div class="spinner" style="width:24px;height:24px;margin:0 auto 14px"></div><p>${msg}</p></div>`;
+}
+
+function renderNewsMap(map) {
+  S.newsCache = { ...S.newsCache, ...map };
+  const entries = Object.entries(map);
+  const total = entries.reduce((s,[,v])=>s+v.length,0);
+  if (!total) {
+    document.getElementById('news-body').innerHTML = `<div class="empty"><div class="ico">📰</div><p>Aucune actualité trouvée. Vérifiez le ticker ou réessayez.</p></div>`;
+    return;
+  }
+  document.getElementById('news-body').innerHTML = entries.filter(([,v])=>v.length).map(([ticker,items])=>`
+    <div style="margin-bottom:18px">
+      <div style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
+        <span class="chip">${esc(ticker)}</span>
+        <span style="font-size:0.78rem;color:var(--muted)">${items.length} actualité${items.length!==1?'s':''}</span>
+      </div>
+      ${items.map(n=>`
+        <div class="news-card">
+          <a href="${esc(n.link)}" target="_blank" rel="noopener noreferrer">
+            <div class="news-title">${esc(n.title)}</div>
+            ${n.desc?`<div style="font-size:0.78rem;color:var(--muted);margin:5px 0;line-height:1.4">${esc(n.desc)}${n.desc.length>=159?'…':''}</div>`:''}
+            <div class="news-meta">
+              ${n.date?`<span>📅 ${new Date(n.date).toLocaleDateString('fr-FR')}</span>`:''}
+              <span style="color:var(--accent)">Lire l'article →</span>
+            </div>
+          </a>
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
+}
+
+async function loadNewsTicker() {
+  const t = document.getElementById('news-inp')?.value?.trim().toUpperCase();
+  if (!t) { toast('Entrez un ticker', 'error'); return; }
+  showNewsLoading(`Chargement des actualités pour ${t}…`);
+  const items = await fetchNews(t);
+  renderNewsMap({ [t]: items });
+}
+async function loadNewsPortfolio() {
+  const positions = computePositions();
+  const tickers = positions.map(p=>p.ticker);
+  showNewsLoading(`Chargement pour ${tickers.length} titre${tickers.length!==1?'s':''}…`);
+  const map = {};
+  for (const t of tickers) map[t] = await fetchNews(t);
+  renderNewsMap(map);
+}
+async function loadNewsMarket() {
+  showNewsLoading('Chargement des actualités marché…');
+  const map = { 'CAC 40 (^FCHI)': await fetchNews('^FCHI'), 'S&P 500 (^GSPC)': await fetchNews('^GSPC') };
+  renderNewsMap(map);
+}
+
+// ======================================================
+// PAGE — AI
+// ======================================================
+function renderAI() {
+  const hasKey = !!S.data.settings.claudeApiKey;
+  document.getElementById('page-ai').innerHTML = `
+    <div class="page-header">
+      <div><h2>Analyse IA</h2><div class="page-sub">Conseils personnalisés par Claude ${CLAUDE_MODEL}</div></div>
+    </div>
+    ${!hasKey?`<div class="info-box info-warning mb16">🔑 Configurez votre clé API Anthropic dans <a href="#" onclick="navigate('settings')">⚙️ Paramètres</a> pour utiliser l'analyse IA.</div>`:''}
+    <div class="card mb16" style="padding:14px 16px">
+      <div class="section-title" style="margin-bottom:10px">Actions rapides</div>
+      <div class="flex gap8 wrap">
+        <button class="btn btn-primary" onclick="aiAnalyze()" ${!hasKey?'disabled':''}>📊 Analyser mon portefeuille</button>
+        <button class="btn btn-secondary" onclick="aiMonthly()" ${!hasKey?'disabled':''}>📅 Conseil achat mensuel</button>
+        <button class="btn btn-secondary" onclick="aiRisk()" ${!hasKey?'disabled':''}>⚡ Analyse des risques</button>
+        <button class="btn btn-secondary btn-sm" onclick="clearAI()" style="margin-left:auto">🗑 Effacer</button>
+      </div>
+    </div>
+    <div class="card mb16" style="padding:14px 16px">
+      <div class="flex gap8">
+        <textarea id="ai-q" placeholder="Posez une question sur votre portefeuille…" style="flex:1;height:70px;resize:none" ${!hasKey?'disabled':''} onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();aiSend()}"></textarea>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <button class="btn btn-primary" id="btn-ai-send" onclick="aiSend()" ${!hasKey?'disabled':''}>Envoyer</button>
+          <span style="font-size:0.7rem;color:var(--muted);text-align:center">Entrée = envoyer</span>
+        </div>
+      </div>
+    </div>
+    <div id="ai-msgs">
+      ${S.ai.length===0?`<div class="empty"><div class="ico">🤖</div><p>Commencez avec "Analyser mon portefeuille"</p><p style="font-size:0.75rem;margin-top:8px">Les actualités chargées dans l'onglet 📰 Actualités seront incluses dans l'analyse.</p></div>`
+        : S.ai.map(m=>`
+        <div class="ai-msg ${m.role}">
+          <div class="ai-msg-role">${m.role==='user'?'👤 Vous':'🤖 Claude'} · ${m.time}</div>
+          <div>${m.role==='assistant'?mdToHtml(m.content):esc(m.content)}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  setTimeout(()=>{ const el=document.getElementById('ai-msgs'); if(el) el.scrollTop=el.scrollHeight; }, 80);
+}
+
+async function aiRun(prompt) {
+  const now = new Date().toLocaleTimeString('fr-FR');
+  S.ai.push({ role:'user', content:prompt, time:now });
+  renderAI();
+  const btn = document.getElementById('btn-ai-send');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'; }
+  try {
+    const res = await callClaude(prompt);
+    S.ai.push({ role:'assistant', content:res, time:new Date().toLocaleTimeString('fr-FR') });
+  } catch(e) {
+    S.ai.push({ role:'assistant', content:`❌ Erreur: ${e.message}`, time:new Date().toLocaleTimeString('fr-FR') });
+    toast(e.message, 'error', 6000);
+  }
+  renderAI();
+}
+
+async function aiSend() {
+  const q = document.getElementById('ai-q')?.value?.trim();
+  if (!q) { toast('Entrez une question', 'error'); return; }
+  await aiRun(q);
+}
+
+function clearAI() { S.ai = []; renderAI(); }
+
+function buildPortfolioContext() {
+  const { positions, cash, deposited, portValue, totalCost, pnl, pnlP } = computeSummary();
+  const recent = [...S.data.transactions].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10);
+  const plan = S.data.planItems.filter(p=>p.active);
+  const news = Object.entries(S.newsCache).flatMap(([t,items])=>items.slice(0,3).map(n=>`[${t}] ${n.title}`)).slice(0,15);
+
+  return `**PORTEFEUILLE PEA — DONNÉES AU ${new Date().toLocaleDateString('fr-FR')}**
+
+📊 RÉSUMÉ:
+• Valeur portefeuille: ${fc(portValue)}
+• Capital investi: ${fc(totalCost)}
+• Plus-value latente: ${fc(pnl)} (${fp(pnlP)})
+• Liquidités: ${fc(cash)}
+• Total versé (vs plafond 150k€): ${fc(deposited)} (${(deposited/PEA_MAX*100).toFixed(1)}%)
+• Budget mensuel: ${fc(S.data.settings.monthlyBudget)}
+
+💼 POSITIONS (${positions.length} ligne${positions.length!==1?'s':''}):
+${positions.map(p=>`• ${p.ticker} (${p.name}): ${fn(p.quantity)} parts @ ${fc(p.avgPrice)} moy | Valeur: ${fc(p.marketValue)} | P&L: ${p.pnl!==null?fc(p.pnl):'N/A'} (${p.pnlPct!==null?fp(p.pnlPct):'N/A'}) | Poids: ${portValue>0?(p.marketValue/portValue*100).toFixed(1):'0'}%`).join('\n') || '• Aucune position'}
+
+📅 PLANNING MENSUEL:
+${plan.map(p=>`• ${p.ticker} (${p.name}): ${p.allocationPct}% = ${fc(S.data.settings.monthlyBudget*p.allocationPct/100)}/mois`).join('\n') || '• Aucun planning défini'}
+
+🔄 TRANSACTIONS RÉCENTES:
+${recent.map(tx=>`• ${fd(tx.date)}: ${txLbl(tx.type)} ${fn(tx.quantity)} x ${tx.ticker} @ ${fc(tx.price)}`).join('\n') || '• Aucune'}
+
+📰 ACTUALITÉS (si chargées dans l'onglet Actualités):
+${news.length?news.join('\n'):'• Chargez les actualités depuis l\'onglet 📰 Actualités pour les inclure dans l\'analyse'}`;
+}
+
+async function aiAnalyze() {
+  const ctx = buildPortfolioContext();
+  await aiRun(`${ctx}\n\n**DEMANDE:**\nFais une analyse complète de ce portefeuille PEA:\n1. Évaluation de la performance et de la stratégie\n2. Diversification (géographique, sectorielle, par actifs)\n3. Concentration des risques\n4. Cohérence avec une approche long-terme\n5. Recommandations concrètes pour les prochains achats (budget: ${fc(S.data.settings.monthlyBudget)}/mois)`);
+}
+async function aiMonthly() {
+  const ctx = buildPortfolioContext();
+  await aiRun(`${ctx}\n\n**DEMANDE:**\nDonne-moi un plan d'achat précis pour ce mois avec mon budget de ${fc(S.data.settings.monthlyBudget)}, en tenant compte des cours actuels, de l'équilibre du portefeuille, et des actualités récentes. Justifie chaque choix.`);
+}
+async function aiRisk() {
+  const ctx = buildPortfolioContext();
+  await aiRun(`${ctx}\n\n**DEMANDE:**\nAnalyse en détail les risques de ce portefeuille: concentration, corrélation entre les actifs, exposition géographique et sectorielle, risque de change, volatilité. Propose des améliorations concrètes.`);
+}
+
+// ======================================================
+// PAGE — SETTINGS
+// ======================================================
+function renderSettings() {
+  const s = S.data.settings;
+  document.getElementById('page-settings').innerHTML = `
+    <div class="page-header"><div><h2>Paramètres</h2><div class="page-sub">Configuration et gestion des données</div></div></div>
+    <div class="grid-2">
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="card">
+          <div class="section-title mb16">Compte</div>
+          <div class="form-group">
+            <label>Nom du PEA</label>
+            <input type="text" value="${esc(s.brokerName)}" onchange="updSetting('brokerName',this.value)" placeholder="Mon PEA">
+          </div>
+          <div class="form-group">
+            <label>Budget mensuel (€)</label>
+            <input type="number" value="${s.monthlyBudget}" min="0" step="50" onchange="updSetting('monthlyBudget',parseFloat(this.value)||0)">
+          </div>
+        </div>
+        <div class="card">
+          <div class="section-title" style="margin-bottom:8px">Clé API Anthropic (Analyse IA)</div>
+          <div class="info-box mb16">
+            Obtenez une clé gratuite sur <strong>console.anthropic.com</strong>. Elle est stockée uniquement dans votre navigateur, jamais envoyée ailleurs.
+          </div>
+          <div class="form-group">
+            <label>Clé API (sk-ant-…)</label>
+            <input type="password" id="inp-key" value="${esc(s.claudeApiKey)}" placeholder="sk-ant-api03-…" onchange="updSetting('claudeApiKey',this.value)">
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="testKey()">🔑 Tester la clé</button>
+          ${s.claudeApiKey?`<span style="margin-left:10px;font-size:0.75rem;color:var(--success)">✓ Clé enregistrée</span>`:''}
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="card">
+          <div class="section-title mb16">Import / Export</div>
+          <div style="display:flex;flex-direction:column;gap:9px">
+            <button class="btn btn-secondary w-full" onclick="exportJSON()">⬇ Exporter toutes les données (JSON)</button>
+            <label class="btn btn-secondary w-full" style="cursor:pointer;justify-content:center">
+              ⬆ Importer des données (JSON)
+              <input type="file" accept=".json" onchange="importJSON(this)" style="display:none">
+            </label>
+            <button class="btn btn-secondary w-full" onclick="exportCSV()">⬇ Exporter transactions (CSV)</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="section-title mb16">Données de démonstration</div>
+          <div style="display:flex;flex-direction:column;gap:9px">
+            <button class="btn btn-secondary w-full" onclick="loadDemo()">📦 Charger des données exemple</button>
+            <button class="btn btn-danger w-full" onclick="resetAll()">🗑 Réinitialiser toutes les données</button>
+          </div>
+          <div style="font-size:0.72rem;color:var(--muted);margin-top:8px">⚠ La réinitialisation est irréversible sans export préalable.</div>
+        </div>
+        <div class="card">
+          <div class="section-title mb16">À propos</div>
+          <div style="font-size:0.78rem;color:var(--muted);line-height:1.7">
+            <p><strong>PEA Manager 2026</strong> v1.0</p>
+            <p>Données stockées localement (localStorage).</p>
+            <p>Cours: Yahoo Finance · News: RSS Yahoo Finance · IA: Claude Anthropic.</p>
+            <p style="margin-top:8px;color:rgba(239,68,68,0.8)">⚠ Application à usage personnel. Ne constitue pas un conseil financier.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ======================================================
+// HANDLERS — TRANSACTIONS
+// ======================================================
+function handleTx(e) {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const tx = {
+    id: uid(), date: fd.get('date'), type: fd.get('type'),
+    ticker: fd.get('ticker').toUpperCase().trim(),
+    name: fd.get('name').trim(),
+    quantity: parseFloat(fd.get('quantity')),
+    price: parseFloat(fd.get('price')),
+    fees: parseFloat(fd.get('fees') || 0),
+    notes: fd.get('notes') || ''
+  };
+  if (!tx.date) { toast('Date requise', 'error'); return; }
+  if (isNaN(tx.quantity) || tx.quantity <= 0) { toast('Quantité invalide', 'error'); return; }
+  if (isNaN(tx.price) || tx.price < 0) { toast('Prix invalide', 'error'); return; }
+  if (tx.type === 'sell') {
+    const pos = computePositions().find(p => p.ticker === tx.ticker);
+    if (!pos || pos.quantity < tx.quantity - 0.0001) {
+      toast(`Quantité insuffisante: vous détenez ${pos?fn(pos.quantity,4):'0'} parts de ${tx.ticker}`, 'error'); return;
+    }
+  }
+  if (window._editTxId) {
+    const idx = S.data.transactions.findIndex(t => t.id === window._editTxId);
+    if (idx !== -1) { tx.id = window._editTxId; S.data.transactions[idx] = tx; }
+    window._editTxId = null;
+    saveData(); takeSnapshot(); closeModal('modal-tx'); e.target.reset();
+    toast('Transaction modifiée ✓'); renderPage(S.page);
+  } else {
+    S.data.transactions.push(tx);
+    saveData(); takeSnapshot(); closeModal('modal-tx'); e.target.reset();
+    toast('Transaction ajoutée ✓'); renderPage(S.page);
+  }
+}
+
+function delTx(id) {
+  if (!confirm('Supprimer cette transaction ?')) return;
+  S.data.transactions = S.data.transactions.filter(t => t.id !== id);
+  saveData(); toast('Transaction supprimée'); renderPage(S.page);
+}
+
+function delPosition(ticker) {
+  const count = S.data.transactions.filter(t => t.ticker === ticker).length;
+  if (!confirm(`Supprimer la position ${ticker} ?\nCela supprimera ${count} transaction${count>1?'s':''} liée${count>1?'s':''}.`)) return;
+  S.data.transactions = S.data.transactions.filter(t => t.ticker !== ticker);
+  saveData(); toast(`Position ${ticker} supprimée`); renderPage(S.page);
+}
+
+function editPosition(ticker) {
+  S.txFilter = 'all';
+  S.txSearch = ticker;
+  navigate('transactions');
+}
+
+// ======================================================
+// HANDLERS — DEPOSITS
+// ======================================================
+function handleDep(e) {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const dep = {
+    id: uid(), date: fd.get('date'), type: fd.get('type'),
+    amount: parseFloat(fd.get('amount')), notes: fd.get('notes') || ''
+  };
+  if (!dep.date) { toast('Date requise', 'error'); return; }
+  if (isNaN(dep.amount) || dep.amount <= 0) { toast('Montant invalide', 'error'); return; }
+  if (dep.type === 'deposit') {
+    const cur = computeDeposited();
+    if (cur + dep.amount > PEA_MAX) {
+      toast(`⚠ Ce versement dépasse le plafond légal de 150 000 €`, 'error'); return;
+    }
+  }
+  S.data.deposits.push(dep);
+  saveData(); takeSnapshot();
+  closeModal('modal-dep');
+  e.target.reset();
+  toast(`${dep.type==='deposit'?'Versement':'Retrait'} enregistré ✓`);
+  renderPage(S.page);
+}
+
+function delDep(id) {
+  if (!confirm('Supprimer ce mouvement ?')) return;
+  S.data.deposits = S.data.deposits.filter(d => d.id !== id);
+  saveData(); toast('Mouvement supprimé'); renderPage(S.page);
+}
+
+// ======================================================
+// HANDLERS — PLAN
+// ======================================================
+function handlePlan(e) {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const isEtf = fd.get('isEtf') !== 'false';
+  const item = {
+    id: uid(),
+    ticker: fd.get('ticker').toUpperCase().trim(),
+    name: fd.get('name').trim(),
+    isEtf,
+    allocationPct: isEtf ? (parseFloat(fd.get('allocationPct')) || 0) : 0,
+    monthlyShares: !isEtf ? (parseFloat(fd.get('monthlyShares')) || 0) : 0,
+    monthlyAmount: 0,
+    minAmount: parseFloat(fd.get('minAmount')) || 200,
+    feePct: parseFloat(fd.get('feePct')) || 0,
+    priority: S.data.planItems.length + 1,
+    active: true,
+    notes: fd.get('notes') || ''
+  };
+  if (isEtf && item.allocationPct <= 0) { toast('Pourcentage cible invalide', 'error'); return; }
+  if (!isEtf && item.monthlyShares <= 0) { toast('Nombre de parts invalide', 'error'); return; }
+  S.data.planItems.push(item);
+  saveData(); closeModal('modal-plan'); e.target.reset();
+  toast('Titre ajouté au planning ✓'); renderPlanning();
+}
+
+function delPlan(id) {
+  S.data.planItems = S.data.planItems.filter(p => p.id !== id);
+  saveData(); toast('Retiré du planning'); renderPlanning();
+}
+
+function updPlanPct(id, val) {
+  const item = S.data.planItems.find(p => p.id === id);
+  if (item) { item.allocationPct = parseFloat(val)||0; saveData(); renderPlanning(); }
+}
+
+function updBudget(v) {
+  S.data.settings.monthlyBudget = parseFloat(v)||0;
+  saveData(); renderPlanning();
+}
+
+function execPlan(id, suggestedAmount, suggestedParts) {
+  const item = S.data.planItems.find(p => p.id === id);
+  if (!item) return;
+  const price = S.data.priceCache[item.ticker]?.price ?? null;
+  const qty = suggestedParts > 0 ? suggestedParts : (price && suggestedAmount > 0 ? Math.floor((suggestedAmount / (1 + (item.feePct??0)/100)) / price) : null);
+  openTxModal({ ticker: item.ticker, name: item.name, price: price?.toFixed(4), quantity: qty });
+  toast('Formulaire pré-rempli — vérifiez et confirmez', 'success', 3000);
+}
+
+function execPlanShares(id, shares) {
+  const item = S.data.planItems.find(p => p.id === id);
+  if (!item) return;
+  const price = S.data.priceCache[item.ticker]?.price ?? null;
+  openTxModal({ ticker: item.ticker, name: item.name, price: price?.toFixed(4), quantity: shares });
+  toast('Formulaire pré-rempli — vérifiez et confirmez', 'success', 3000);
+}
+
+// ======================================================
+// HANDLERS — SETTINGS
+// ======================================================
+function updSetting(k, v) {
+  S.data.settings[k] = v;
+  saveData();
+  if (k === 'brokerName') document.getElementById('sidebar-broker').textContent = v || 'Mon PEA';
+  toast('Enregistré ✓');
+}
+
+async function testKey() {
+  const key = document.getElementById('inp-key')?.value?.trim();
+  if (!key) { toast('Entrez une clé API', 'error'); return; }
+  S.data.settings.claudeApiKey = key; saveData();
+  try {
+    const r = await fetch(CLAUDE_URL, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
+      body: JSON.stringify({ model:CLAUDE_MODEL, max_tokens:10, messages:[{role:'user',content:'OK'}] })
+    });
+    r.ok ? toast('✓ Clé API valide !', 'success') : toast('Clé invalide: ' + r.status, 'error');
+  } catch(e) { toast('Erreur connexion: ' + e.message, 'error'); }
+  renderSettings();
+}
+
+// ======================================================
+// IMPORT / EXPORT
+// ======================================================
+function exportJSON() {
+  dlFile(JSON.stringify(S.data, null, 2), `pea_export_${today()}.json`, 'application/json');
+  toast('Export JSON téléchargé ✓');
+}
+
+function importJSON(inp) {
+  const file = inp.files[0]; if (!file) return;
+  const r = new FileReader();
+  r.onload = e => {
+    try {
+      const d = JSON.parse(e.target.result);
+      if (!confirm('Importer ces données ? Les données actuelles seront remplacées.')) return;
+      S.data = { ...defData(), ...d, settings:{ ...defData().settings, ...d.settings }, priceCache: d.priceCache||{} };
+      saveData(); toast('Import réussi ✓'); navigate('dashboard');
+    } catch(err) { toast('Fichier JSON invalide', 'error'); }
+  };
+  r.readAsText(file); inp.value = '';
+}
+
+function exportCSV() {
+  const txs = [...S.data.transactions].sort((a,b)=>a.date.localeCompare(b.date));
+  if (!txs.length) { toast('Aucune transaction', 'error'); return; }
+  const hdr = 'Date,Type,Ticker,Nom,Quantite,Prix,Frais,Total,Notes';
+  const rows = txs.map(tx => {
+    const tot = tx.type==='buy' ? tx.quantity*tx.price+(tx.fees||0) : tx.quantity*tx.price-(tx.fees||0);
+    return [tx.date,txLbl(tx.type),tx.ticker,`"${tx.name}"`,tx.quantity,tx.price,tx.fees||0,tot.toFixed(2),`"${tx.notes||''}"`].join(',');
+  });
+  dlFile([hdr,...rows].join('\n'), `transactions_${today()}.csv`, 'text/csv;charset=utf-8');
+  toast('Export CSV téléchargé ✓');
+}
+
+function dlFile(content, name, mime) {
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([content],{type:mime})), download: name });
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+// ======================================================
+// DEMO DATA
+// ======================================================
+function loadDemo() {
+  if (!confirm('Charger les données de démonstration ? Les données actuelles seront remplacées.')) return;
+  S.data = defData();
+  S.data.settings.brokerName = 'Mon PEA Demo';
+  S.data.settings.monthlyBudget = 600;
+
+  const months = ['2025-01','2025-02','2025-03','2025-04','2025-05','2025-06','2025-07','2025-08','2025-09','2025-10','2025-11','2025-12','2026-01','2026-02'];
+  months.forEach(m => S.data.deposits.push({ id:uid(), date:`${m}-01`, type:'deposit', amount:600, notes:'Versement mensuel' }));
+
+  [
+    ['2025-01-05','buy','CW8.PA','Amundi MSCI World',3,400.5],
+    ['2025-02-05','buy','CW8.PA','Amundi MSCI World',3,415.2],
+    ['2025-03-05','buy','SP500.PA','Amundi S&P 500',5,95.3],
+    ['2025-04-05','buy','CW8.PA','Amundi MSCI World',2,420.1],
+    ['2025-04-05','buy','ESE.PA','BNP Paribas Easy MSCI EM SRI',8,11.5],
+    ['2025-05-05','buy','SP500.PA','Amundi S&P 500',5,98.7],
+    ['2025-06-05','buy','CW8.PA','Amundi MSCI World',2,430.0],
+    ['2025-07-05','buy','PAEEM.PA','Amundi MSCI Emerging Markets',15,38.2],
+    ['2025-08-05','buy','CW8.PA','Amundi MSCI World',2,435.5],
+    ['2025-09-05','buy','SP500.PA','Amundi S&P 500',5,102.4],
+    ['2025-10-05','buy','CW8.PA','Amundi MSCI World',1,440.0],
+    ['2025-10-05','buy','ESE.PA','BNP Paribas Easy MSCI EM SRI',10,11.8],
+    ['2025-11-05','buy','CW8.PA','Amundi MSCI World',2,445.3],
+    ['2025-12-05','buy','SP500.PA','Amundi S&P 500',4,105.1],
+    ['2026-01-05','buy','CW8.PA','Amundi MSCI World',1,450.0],
+    ['2026-01-05','buy','PAEEM.PA','Amundi MSCI Emerging Markets',8,39.5],
+    ['2026-02-05','buy','CW8.PA','Amundi MSCI World',1,452.0],
+    ['2026-02-05','buy','SP500.PA','Amundi S&P 500',3,107.5],
+  ].forEach(([date,type,ticker,name,quantity,price]) =>
+    S.data.transactions.push({ id:uid(), date,type,ticker,name,quantity,price,fees:1.99,notes:'' })
+  );
+
+  [
+    ['CW8.PA','Amundi MSCI World',60,1],
+    ['SP500.PA','Amundi S&P 500',25,2],
+    ['PAEEM.PA','Amundi MSCI Emerging Markets',15,3],
+  ].forEach(([ticker,name,allocationPct,priority]) =>
+    S.data.planItems.push({ id:uid(), ticker,name,allocationPct,priority,active:true,notes:'' })
+  );
+
+  // Snapshots synthétiques sur 90 jours pour la démo
+  const demoSnaps = [];
+  let demoVal = 4200, demoDeposit = 4000;
+  for (let i = 90; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().slice(0,10);
+    demoVal += (Math.random() - 0.42) * 60;
+    if (i % 30 === 0 && i > 0) demoDeposit += 500;
+    demoSnaps.push({ date: dateStr, portValue: Math.max(3000, parseFloat(demoVal.toFixed(2))), cash: 150, deposited: demoDeposit });
+  }
+  S.data.snapshots = demoSnaps;
+
+  saveData(); toast('Données de démonstration chargées ✓'); navigate('dashboard');
+}
+
+function resetAll() {
+  if (!confirm('⚠ RÉINITIALISER toutes les données ? Action irréversible.')) return;
+  if (!confirm('Confirmez-vous la suppression définitive ?')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  S.data = defData(); S.ai = [];
+  toast('Données réinitialisées'); navigate('dashboard');
+}
+
+// ======================================================
+// SIDEBAR CEILING
+// ======================================================
+function updateSbCeiling(deposited) {
+  const pct = Math.min(100, (deposited/PEA_MAX)*100);
+  const bar = document.getElementById('sb-ceiling-bar');
+  const amt = document.getElementById('sb-ceiling-amt');
+  if (bar) { bar.style.width = pct+'%'; bar.style.background = pct>90?'var(--danger)':pct>70?'var(--warning)':'var(--success)'; }
+  if (amt) amt.textContent = `${fc(deposited,0)} / 150 000 €`;
+}
+
+// ======================================================
+// SCAN PHOTO — Claude Vision
+// ======================================================
+
+function handleScanDrop(e) {
+  e.preventDefault();
+  document.getElementById('scan-zone').classList.remove('drag-over');
+  const file = e.dataTransfer.files?.[0];
+  if (file && file.type.startsWith('image/')) processPhotoScan(file);
+  else toast('Fichier invalide — utilisez une image (JPG, PNG, WebP…)', 'error');
+}
+
+function scanFromPhoto(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  processPhotoScan(file);
+  input.value = '';
+}
+
+async function processPhotoScan(file) {
+  const key = S.data.settings.claudeApiKey;
+  if (!key) {
+    toast('🔑 Clé API Anthropic requise — configurez-la dans ⚙️ Paramètres', 'error', 5000);
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = async (ev) => {
+    const dataUrl = ev.target.result;
+    const base64  = dataUrl.split(',')[1];
+    const mime    = file.type || 'image/jpeg';
+
+    // Afficher l'aperçu et masquer la zone de dépôt
+    document.getElementById('scan-zone').style.display    = 'none';
+    document.getElementById('scan-preview').style.display = 'block';
+    document.getElementById('scan-img').src = dataUrl;
+    document.getElementById('scan-status').innerHTML =
+      '<span class="spinner" style="width:13px;height:13px;margin-right:6px"></span>Analyse par Claude en cours…';
+
+    try {
+      const txs = await extractTxFromImage(base64, mime, key);
+      showScanResults(txs);
+    } catch(err) {
+      document.getElementById('scan-status').innerHTML =
+        `<span style="color:var(--danger)">❌ ${esc(err.message)}</span>
+         <br><span style="font-size:0.72rem;color:var(--muted)">Remplissez le formulaire manuellement ou réessayez avec une image plus nette.</span>`;
+      document.getElementById('scan-zone').style.display = 'block';
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+function showScanResults(txs) {
+  const typeLbl = { buy:'Achat', sell:'Vente', dividend:'Dividende' };
+
+  if (txs.length === 1) {
+    // Comportement original : pré-remplir le formulaire
+    fillFormFromScan(txs[0]);
+    document.getElementById('scan-status').innerHTML =
+      '<span style="color:var(--success)">✓ Formulaire rempli — vérifiez et corrigez si besoin</span>';
+    toast('Transaction extraite ✓');
+    return;
+  }
+
+  // Plusieurs transactions : afficher la table de review
+  document.getElementById('scan-sep').style.display  = 'none';
+  document.getElementById('form-tx').style.display   = 'none';
+  document.getElementById('scan-status').innerHTML =
+    `<span style="color:var(--success)">✓ ${txs.length} transactions détectées — sélectionnez celles à importer</span>`;
+
+  const rows = txs.map((t, i) => `
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:5px 4px"><input type="checkbox" id="scan-cb-${i}" checked></td>
+      <td style="padding:5px 4px;white-space:nowrap">${esc(t.date||'')}</td>
+      <td style="padding:5px 4px;font-weight:600">${esc(t.ticker||'')}</td>
+      <td style="padding:5px 4px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name||'')}</td>
+      <td style="padding:5px 4px;text-align:right">${t.quantity??''}</td>
+      <td style="padding:5px 4px;text-align:right;white-space:nowrap">${t.price!=null?fn(t.price,4)+' €':''}</td>
+      <td style="padding:5px 4px;color:var(--muted)">${typeLbl[t.type]||t.type||''}</td>
+    </tr>`).join('');
+
+  document.getElementById('scan-multi').innerHTML = `
+    <div style="overflow-x:auto;margin-top:10px">
+      <table style="width:100%;font-size:0.72rem;border-collapse:collapse">
+        <thead><tr style="color:var(--muted);font-size:0.68rem;text-transform:uppercase">
+          <th></th><th style="text-align:left;padding:4px">Date</th>
+          <th style="text-align:left;padding:4px">Ticker</th><th style="text-align:left;padding:4px">Nom</th>
+          <th style="text-align:right;padding:4px">Qté</th><th style="text-align:right;padding:4px">Prix</th>
+          <th style="text-align:left;padding:4px">Type</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+      <button type="button" class="btn btn-ghost" style="font-size:0.8rem;padding:7px 12px" onclick="cancelScanMulti()">Annuler</button>
+      <button type="button" class="btn btn-primary" style="font-size:0.8rem;padding:7px 14px" onclick="importScannedTransactions()">
+        Importer les transactions sélectionnées →
+      </button>
+    </div>`;
+  document.getElementById('scan-multi').style.display = 'block';
+  window._scanTxs = txs;
+}
+
+function cancelScanMulti() {
+  document.getElementById('scan-multi').style.display = 'none';
+  document.getElementById('scan-multi').innerHTML = '';
+  document.getElementById('scan-sep').style.display  = '';
+  document.getElementById('form-tx').style.display   = '';
+  document.getElementById('scan-zone').style.display = 'block';
+  document.getElementById('scan-preview').style.display = 'none';
+  document.getElementById('scan-status').textContent = '';
+  document.getElementById('scan-input').value = '';
+  window._scanTxs = null;
+}
+
+function importScannedTransactions() {
+  const txs = window._scanTxs;
+  if (!txs) return;
+  const selected = txs.filter((_, i) => document.getElementById(`scan-cb-${i}`)?.checked);
+  if (!selected.length) { toast('Sélectionnez au moins une transaction', 'error'); return; }
+  selected.forEach(t => {
+    S.data.transactions.push({
+      id: uid(),
+      date:     t.date || today(),
+      type:     ['buy','sell','dividend'].includes(t.type) ? t.type : 'buy',
+      ticker:   (t.ticker || '').toUpperCase().trim(),
+      name:     (t.name   || '').trim(),
+      quantity: parseFloat(t.quantity) || 0,
+      price:    parseFloat(t.price)    || 0,
+      fees:     parseFloat(t.fees)     || 0,
+      notes:    t.notes || ''
+    });
+  });
+  saveData();
+  window._scanTxs = null;
+  closeModal('modal-tx');
+  renderTransactions();
+  toast(`${selected.length} transaction${selected.length>1?'s':''} importée${selected.length>1?'s':''} ✓`);
+}
+
+async function extractTxFromImage(base64, mimeType, key) {
+  const prompt = `Tu es un assistant spécialisé dans la lecture d'historiques d'ordres boursiers français (BoursoBank, Boursorama, Fortuneo, BforBank, Bourse Direct, Saxo).
+
+Extrais TOUTES les transactions visibles et retourne UNIQUEMENT un tableau JSON valide, sans aucun texte avant ou après:
+[
+  {
+    "type": "buy" | "sell" | "dividend",
+    "date": "YYYY-MM-DD",
+    "ticker": "code ticker Yahoo Finance",
+    "name": "nom complet du titre",
+    "quantity": nombre_décimal,
+    "price": prix_unitaire_décimal,
+    "fees": frais_ou_null,
+    "notes": "numéro d'ordre si visible"
+  }
+]
+
+RÉFÉRENTIEL TICKERS — correspondances noms BoursoBank → Yahoo Finance:
+ETF iShares/BlackRock Euronext Paris (.PA):
+  "iShares MSCI World Swap PEA" / "WPEA" → WPEA.PA
+  "iShares Core MSCI World" / "IWDA" / "CW8" → CW8.PA
+  "iShares Core S&P 500" / "CSPX" / "CS500" → CS500.PA
+  "iShares Core MSCI EM" / "iShares Emerging" / "AEEM" → AEEM.PA
+  "iShares Core Euro Stoxx 50" / "CS51" → CS51.PA
+  "iShares Core MSCI Europe" / "IMEU" → IMEU.PA
+  "iShares NASDAQ 100" / "NASD" → NASD.PA
+
+ETF Amundi/Lyxor Euronext Paris (.PA):
+  "Amundi PEA MSCI World" / "Amundi MSCI World" / "EWLD" / "MWRD" → EWLD.PA
+  "Amundi PEA US Tech Screened" / "Amundi US Tech" / "PANX" → PANX.PA
+  "Amundi PEA S&P 500" / "Amundi S&P 500" / "SP500" → SP500.PA
+  "Amundi PEA Emergent" / "Amundi MSCI Emerging" / "PAEEM" → PAEEM.PA
+  "Amundi PEA Europe" / "Amundi Stoxx Europe 600" / "PE600" → PE600.PA
+  "Amundi PEA Small Cap" / "PSMV" → PSMV.PA
+  "Lyxor MSCI World" / "Lyxor World" → EWLD.PA
+  "Lyxor S&P 500" → SP500.PA
+  "Lyxor Nasdaq-100" → PANX.PA
+  "BNP Paribas Easy S&P 500" / "ESE" → ESE.PA
+  "BNP Paribas Easy MSCI World" → EWLD.PA
+  "Xtrackers MSCI World" / "DBWT" → DBWT.PA
+  "Vanguard FTSE All-World" / "VWRL" → VWCE.PA
+
+Actions françaises CAC 40 (toutes avec suffixe .PA):
+  "TOTALENERGIES" / "Total" → TTE.PA
+  "AIR LIQUIDE" / "Air Liquide" → AI.PA
+  "LVMH" / "LVMH Moët" → MC.PA
+  "SANOFI" → SAN.PA
+  "AIRBUS" → AIR.PA
+  "HERMÈS" / "Hermès" → RMS.PA
+  "STELLANTIS" → STLAM.PA
+  "ORANGE" → ORA.PA
+  "BNP PARIBAS" / "BNP" → BNP.PA
+  "SOCIÉTÉ GÉNÉRALE" / "Société Générale" → GLE.PA
+  "CRÉDIT AGRICOLE" / "Crédit Agricole" → ACA.PA
+  "AXA" → CS.PA
+  "ENGIE" → ENGI.PA
+  "VINCI" → DG.PA
+  "DANONE" → BN.PA
+  "MICHELIN" / "CGDE" → ML.PA
+  "PERNOD RICARD" → RI.PA
+  "SAFRAN" → SAF.PA
+  "SCHNEIDER ELECTRIC" / "Schneider" → SU.PA
+  "DASSAULT SYSTÈMES" / "Dassault Systemes" → DSY.PA
+  "CAPGEMINI" / "Cap Gemini" → CAP.PA
+  "PUBLICIS" → PUB.PA
+  "KERING" → KER.PA
+  "L'ORÉAL" / "L'Oreal" → OR.PA
+  "LEGRAND" → LR.PA
+  "SAINT-GOBAIN" / "Saint Gobain" → SGO.PA
+  "VIVENDI" → VIV.PA
+  "RENAULT" → RNO.PA
+  "THALES" → HO.PA
+  "EDENRED" → EDEN.PA
+  "VEOLIA" → VIE.PA
+  "EUROFINS" → ERF.PA
+  "TELEPERFORMANCE" → TEP.PA
+
+Règles importantes:
+- Utilise en priorité le référentiel ci-dessus pour identifier le ticker
+- Si le nom correspond partiellement à une entrée du référentiel, utilise ce ticker
+- Pour tout autre titre sur Euronext Paris → ajoute .PA au ticker
+- Pour les actions US (NYSE/NASDAQ) → pas de suffixe (ex: AAPL, MSFT, NVDA)
+- Si tu vois un code ISIN, utilise-le pour confirmer le ticker
+- Les références d'ordre BoursoBank (ex: F26B...) ne sont PAS des ISIN — note-les dans "notes"
+- Si l'image n'est pas un historique d'ordres, retourne [{"error": "Image non reconnue"}]
+- Si un champ est illisible, mets null
+- Utilise TOUJOURS le point (.) comme séparateur décimal (ex: 6.2217 et non 6,2217)
+- Retourne un tableau même pour une seule transaction
+- Retourne UNIQUEMENT le tableau JSON, sans markdown ni texte.`;
+
+  const resp = await fetch(CLAUDE_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 2048,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } },
+          { type: 'text',  text: prompt }
+        ]
+      }]
+    })
+  });
+
+  if (!resp.ok) {
+    const e = await resp.json().catch(() => ({}));
+    throw new Error(e.error?.message || 'Erreur API Claude ' + resp.status);
+  }
+
+  const result = await resp.json();
+  const text = result.content[0].text.trim();
+
+  // Extrait le premier JSON complet (objet ou tableau) par comptage d'accolades équilibrées
+  // Évite le problème du regex greedy qui inclut plusieurs objets ({...},{...})
+  function extractFirstJson(str) {
+    const objIdx = str.indexOf('{');
+    const arrIdx = str.indexOf('[');
+    let start, open, close;
+    if (objIdx === -1 && arrIdx === -1) return null;
+    if (objIdx === -1 || (arrIdx !== -1 && arrIdx < objIdx)) {
+      start = arrIdx; open = '['; close = ']';
+    } else {
+      start = objIdx; open = '{'; close = '}';
+    }
+    let depth = 0, inStr = false, esc = false;
+    for (let i = start; i < str.length; i++) {
+      const c = str[i];
+      if (esc)               { esc = false; continue; }
+      if (c === '\\' && inStr) { esc = true; continue; }
+      if (c === '"')          { inStr = !inStr; continue; }
+      if (inStr)              continue;
+      if (c === open)         depth++;
+      else if (c === close)   { depth--; if (depth === 0) return str.slice(start, i + 1); }
+    }
+    return null;
+  }
+
+  const raw = extractFirstJson(text);
+  if (!raw) {
+    const hasStart = text.includes('[') || text.includes('{');
+    throw new Error(hasStart
+      ? 'JSON tronqué — trop de transactions, réessayez avec une image montrant moins de lignes'
+      : 'Réponse non reconnue comme JSON — vérifiez que l\'image contient bien un historique d\'ordres');
+  }
+
+  // Normalise les décimales françaises (6,2217 → 6.2217) sans toucher aux virgules JSON
+  const normalized = raw.replace(/(\d),(\d)/g, '$1.$2');
+  let parsed = JSON.parse(normalized);
+
+  // Normalise en tableau
+  const arr = Array.isArray(parsed) ? parsed : [parsed];
+  const valid = arr.filter(t => t && !t.error);
+  if (!valid.length) {
+    const errItem = arr.find(t => t?.error);
+    throw new Error(errItem?.error || 'Aucune transaction trouvée');
+  }
+  return valid;
+}
+
+function fillFormFromScan(data) {
+  const f = document.getElementById('form-tx');
+  if (!f) return;
+
+  if (data.type && ['buy','sell','dividend'].includes(data.type)) {
+    f.querySelector('[name=type]').value = data.type;
+    updateTxForm();
+  }
+  if (data.date) {
+    try {
+      const d = new Date(data.date);
+      if (!isNaN(d.getTime())) f.querySelector('[name=date]').value = d.toISOString().split('T')[0];
+    } catch(e) {}
+  }
+  if (data.ticker)   f.querySelector('[name=ticker]').value   = data.ticker.toUpperCase().trim();
+  if (data.name)     f.querySelector('[name=name]').value     = data.name.trim();
+  if (data.quantity != null) f.querySelector('[name=quantity]').value = parseFloat(data.quantity);
+  if (data.price    != null) f.querySelector('[name=price]').value    = parseFloat(data.price);
+  if (data.fees     != null) f.querySelector('[name=fees]').value     = parseFloat(data.fees);
+  if (data.notes)    f.querySelector('[name=notes]').value    = data.notes;
+}
+
+// ======================================================
+// ROUTER
+// ======================================================
+function navigate(page) {
+  S.page = page;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-'+page)?.classList.add('active');
+  document.querySelector(`[data-page="${page}"]`)?.classList.add('active');
+  renderPage(page);
+}
+
+function renderPage(page) {
+  ({ dashboard:renderDashboard, portfolio:renderPortfolio, transactions:renderTransactions,
+     treasury:renderTreasury, planning:renderPlanning, news:renderNews,
+     ai:renderAI, settings:renderSettings })[page]?.();
+}
+
+// ======================================================
+// INIT
+// ======================================================
+function init() {
+  S.data = loadData();
+  S.txFilter = 'all'; S.txSearch = ''; S.newsCache = {}; S.evolFilter = '1M';
+
+  document.getElementById('sidebar-broker').textContent = S.data.settings.brokerName || 'Mon PEA';
+  document.querySelectorAll('.nav-item').forEach(el => el.addEventListener('click', () => navigate(el.dataset.page)));
+  document.getElementById('form-tx').addEventListener('submit', handleTx);
+  document.getElementById('form-dep').addEventListener('submit', handleDep);
+  document.getElementById('form-plan').addEventListener('submit', handlePlan);
+
+  takeSnapshot();
+  navigate('dashboard');
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

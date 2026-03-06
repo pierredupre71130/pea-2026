@@ -2738,7 +2738,7 @@ function init() {
   S.txFilter = 'all'; S.txSearch = ''; S.newsCache = {}; S.evolFilter = '1M';
 
   document.getElementById('sidebar-broker').textContent = S.data.settings.brokerName || 'Mon PEA';
-  document.querySelectorAll('.nav-item').forEach(el => el.addEventListener('click', () => navigate(el.dataset.page)));
+  document.querySelectorAll('.nav-item, .mob-tab').forEach(el => el.addEventListener('click', () => navigate(el.dataset.page)));
   document.getElementById('form-tx').addEventListener('submit', handleTx);
   document.getElementById('form-dep').addEventListener('submit', handleDep);
   document.getElementById('form-plan').addEventListener('submit', handlePlan);

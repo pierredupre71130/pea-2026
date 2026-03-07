@@ -199,6 +199,7 @@
     <div class="mob-tab" data-page="transactions"><span class="mico">🔄</span>TX</div>
     <div class="mob-tab" data-page="treasury"><span class="mico">💰</span>Cash</div>
     <div class="mob-tab" data-page="planning"><span class="mico">📅</span>Plan</div>
+    <div class="mob-tab" data-page="simulation"><span class="mico">🔮</span>Sim</div>
     <div class="mob-tab" data-page="news"><span class="mico">📰</span>News</div>
     <div class="mob-tab" data-page="ai"><span class="mico">🤖</span>IA</div>
     <div class="mob-tab" data-page="settings"><span class="mico">⚙️</span>Config</div>
@@ -218,6 +219,7 @@
   <div class="nav-item" data-page="treasury"><span class="icon">💰</span>Trésorerie</div>
   <div class="nav-section">Outils</div>
   <div class="nav-item" data-page="planning"><span class="icon">📅</span>Planning Mensuel</div>
+  <div class="nav-item" data-page="simulation"><span class="icon">🔮</span>Simulation</div>
   <div class="nav-item" data-page="news"><span class="icon">📰</span>Actualités</div>
   <div class="nav-item" data-page="ai"><span class="icon">🤖</span>Analyse IA</div>
   <div class="nav-section">Compte</div>
@@ -238,6 +240,7 @@
   <div id="page-transactions" class="page"></div>
   <div id="page-treasury" class="page"></div>
   <div id="page-planning" class="page"></div>
+  <div id="page-simulation" class="page"></div>
   <div id="page-news" class="page"></div>
   <div id="page-ai" class="page"></div>
   <div id="page-settings" class="page"></div>
@@ -506,7 +509,8 @@ let S = {
   ai: [],
   newsCache: {},
   txFilter: 'all',
-  txSearch: ''
+  txSearch: '',
+  sim: null
 };
 
 // ======================================================
@@ -2800,6 +2804,411 @@ function fillFormFromScan(data) {
 }
 
 // ======================================================
+// PAGE — SIMULATION
+// ======================================================
+function renderSimulation() {
+  if (!S.sim) S.sim = { months: 36, annualReturn: 7, startFromCurrent: true, budget: null };
+  const sim = S.sim;
+  const budget = sim.budget ?? S.data.settings.monthlyBudget;
+  const etfItems  = S.data.planItems.filter(p => p.active && p.isEtf !== false);
+  const stockItems = S.data.planItems.filter(p => p.active && p.isEtf === false);
+  const hasPlan = etfItems.length > 0 || stockItems.length > 0;
+  const totalEtfPct = etfItems.reduce((s, p) => s + (p.allocationPct || 0), 0);
+
+  document.getElementById('page-simulation').innerHTML = `
+    <div class="page-header">
+      <div><h2>Simulation Long Terme</h2><div class="page-sub">Projetez l'évolution de votre PEA selon votre plan mensuel</div></div>
+    </div>
+
+    ${!hasPlan ? `<div class="info-box info-warning mb16">⚠ Configurez d'abord votre <a href="#" onclick="navigate('planning')">📅 Planning Mensuel</a> avant de lancer une simulation.</div>` : ''}
+
+    <!-- CONFIG -->
+    <div class="card mb16">
+      <div class="section-title mb16">Paramètres de simulation</div>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-end">
+        <div>
+          <label>Horizon</label>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:5px">
+            <input type="number" id="sim-months" value="${sim.months}" min="1" max="360" step="1" style="width:72px" oninput="onSimMonths(this.value)">
+            <span class="neutral">mois</span>
+            <span class="neutral" style="margin:0 2px">→</span>
+            <input type="number" id="sim-years-inp" value="${(sim.months/12).toFixed(1)}" min="0.1" max="30" step="0.5" style="width:65px" oninput="onSimYears(this.value)">
+            <span class="neutral">ans</span>
+          </div>
+        </div>
+        <div>
+          <label>Budget mensuel</label>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:5px">
+            <input type="number" id="sim-budget" value="${budget}" min="0" step="50" style="width:100px">
+            <span class="neutral">€/mois</span>
+          </div>
+        </div>
+        <div>
+          <label>Rendement annuel supposé</label>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:5px">
+            <input type="number" id="sim-return" value="${sim.annualReturn}" min="-20" max="50" step="0.5" style="width:72px">
+            <span class="neutral">%/an</span>
+          </div>
+        </div>
+        <div>
+          <label>Point de départ</label>
+          <div style="display:flex;gap:12px;margin-top:9px">
+            <label style="display:flex;align-items:center;gap:5px;font-weight:normal;cursor:pointer;font-size:0.82rem">
+              <input type="radio" name="sim-start" value="current" ${sim.startFromCurrent !== false ? 'checked' : ''}> Portefeuille actuel
+            </label>
+            <label style="display:flex;align-items:center;gap:5px;font-weight:normal;cursor:pointer;font-size:0.82rem">
+              <input type="radio" name="sim-start" value="zero" ${sim.startFromCurrent === false ? 'checked' : ''}> De zéro
+            </label>
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="launchSimulation()">▶ Lancer la simulation</button>
+      </div>
+    </div>
+
+    <!-- PLAN RECAP -->
+    ${hasPlan ? `
+    <div class="card mb16" style="padding:12px 16px">
+      <div class="section-title" style="margin-bottom:8px">Plan mensuel utilisé</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        ${stockItems.map(item => {
+          const price = S.data.priceCache[item.ticker]?.price;
+          const cost = price && item.monthlyShares ? item.monthlyShares * price * (1 + (item.feePct??0)/100) : null;
+          return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:7px 12px;font-size:0.8rem">
+            <div style="font-weight:600"><span class="chip">${esc(item.ticker)}</span> <span style="color:var(--muted)">${esc(item.name)}</span></div>
+            <div style="color:var(--accent);margin-top:2px">📌 ${item.monthlyShares} part${item.monthlyShares>1?'s':''}/mois fixe${cost ? ' · ~'+fc(cost) : ''}</div>
+          </div>`;
+        }).join('')}
+        ${etfItems.map(item => {
+          const norm = totalEtfPct > 0 ? (item.allocationPct / totalEtfPct * 100) : 0;
+          return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:7px 12px;font-size:0.8rem">
+            <div style="font-weight:600"><span class="chip">${esc(item.ticker)}</span> <span style="color:var(--muted)">${esc(item.name)}</span></div>
+            <div style="color:var(--success);margin-top:2px">📊 ${item.allocationPct}% du budget ETF${Math.abs(norm - item.allocationPct) > 0.5 ? ` <span style="color:var(--muted)">(normalisé: ${norm.toFixed(1)}%)</span>` : ''}</div>
+          </div>`;
+        }).join('')}
+        ${etfItems.length && stockItems.length ? `
+          <div style="background:rgba(245,166,35,0.07);border:1px solid rgba(245,166,35,0.2);border-radius:7px;padding:7px 12px;font-size:0.78rem;color:var(--muted);align-self:center">
+            💡 Le % ETF s'applique uniquement sur le budget restant après les achats d'actions fixes
+          </div>` : ''}
+      </div>
+    </div>
+    ` : ''}
+
+    <!-- RESULTS -->
+    <div id="sim-results" style="display:none">
+      <div class="grid-4 mb16" id="sim-cards"></div>
+      <div class="card mb16">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div class="section-title" style="margin:0">Évolution projetée</div>
+          <span style="font-size:0.78rem;color:var(--accent);cursor:pointer" onclick="toggleSimYearTable()" id="sim-year-toggle">▼ Détail annuel</span>
+        </div>
+        <div style="height:300px;position:relative"><canvas id="chart-sim"></canvas></div>
+        <div id="sim-year-table" style="display:none;margin-top:16px"></div>
+      </div>
+      <div class="card">
+        <div class="section-title mb16">Allocation finale simulée</div>
+        <div id="sim-alloc-table"></div>
+      </div>
+    </div>
+
+    <!-- EMPTY STATE -->
+    <div id="sim-empty" class="card">
+      <div class="empty">
+        <div class="ico">🔮</div>
+        <p>Configurez les paramètres et cliquez sur <strong>▶ Lancer la simulation</strong></p>
+        <p style="font-size:0.75rem;margin-top:6px;color:var(--muted)">Utilise les cours actuels et le plan défini dans <a href="#" onclick="navigate('planning')">📅 Planning Mensuel</a>.<br>Les ETFs reçoivent leur % sur le budget restant après les achats d'actions fixes.</p>
+      </div>
+    </div>
+  `;
+}
+
+function onSimMonths(v) {
+  if (!S.sim) S.sim = { months: 36, annualReturn: 7, startFromCurrent: true, budget: null };
+  S.sim.months = Math.max(1, parseInt(v) || 36);
+  const el = document.getElementById('sim-years-inp');
+  if (el) el.value = (S.sim.months / 12).toFixed(1);
+}
+
+function onSimYears(v) {
+  if (!S.sim) S.sim = { months: 36, annualReturn: 7, startFromCurrent: true, budget: null };
+  S.sim.months = Math.max(1, Math.round((parseFloat(v) || 3) * 12));
+  const el = document.getElementById('sim-months');
+  if (el) el.value = S.sim.months;
+}
+
+function launchSimulation() {
+  if (!S.sim) S.sim = { months: 36, annualReturn: 7, startFromCurrent: true, budget: null };
+  S.sim.months          = parseInt(document.getElementById('sim-months')?.value) || 36;
+  S.sim.annualReturn    = parseFloat(document.getElementById('sim-return')?.value) ?? 7;
+  S.sim.budget          = parseFloat(document.getElementById('sim-budget')?.value) || S.data.settings.monthlyBudget;
+  S.sim.startFromCurrent = document.querySelector('[name=sim-start]:checked')?.value !== 'zero';
+
+  const etfItems  = S.data.planItems.filter(p => p.active && p.isEtf !== false);
+  const stockItems = S.data.planItems.filter(p => p.active && p.isEtf === false);
+  if (!etfItems.length && !stockItems.length) {
+    toast('Aucun titre dans le planning mensuel. Ajoutez des ETFs et/ou des actions dans Planning.', 'error', 5000);
+    return;
+  }
+
+  const snapshots = runSimulation(S.sim);
+  if (!snapshots || snapshots.length < 2) {
+    toast('Erreur lors du calcul de la simulation.', 'error');
+    return;
+  }
+
+  // Avertissement plafond PEA
+  const ceilIdx = snapshots.findIndex(s => s.totalDeposited > PEA_MAX);
+  if (ceilIdx > 0) {
+    toast(`⚠ Plafond PEA 150k€ atteint à M+${snapshots[ceilIdx].month} — les versements s'arrêtent`, 'error', 6000);
+  }
+
+  document.getElementById('sim-results').style.display = '';
+  document.getElementById('sim-empty').style.display   = 'none';
+  renderSimResults(snapshots);
+}
+
+function runSimulation({ months, annualReturn, budget, startFromCurrent }) {
+  const monthlyGrowth = Math.pow(1 + (annualReturn || 7) / 100, 1 / 12);
+  const etfItems   = S.data.planItems.filter(p => p.active && p.isEtf !== false);
+  const stockItems = S.data.planItems.filter(p => p.active && p.isEtf === false);
+  const totalEtfPct = etfItems.reduce((s, p) => s + (p.allocationPct || 0), 0);
+
+  const positions = {};  // ticker → { quantity, price, name, isEtf, feePct }
+  let totalDeposited = 0;
+
+  if (startFromCurrent) {
+    computePositions().forEach(p => {
+      const price = S.data.priceCache[p.ticker]?.price ?? p.avgPrice;
+      const plan  = S.data.planItems.find(pl => pl.ticker === p.ticker);
+      positions[p.ticker] = { quantity: p.quantity, price, name: p.name, isEtf: plan ? plan.isEtf !== false : true, feePct: plan?.feePct ?? 0 };
+    });
+    totalDeposited = computeDeposited();
+  }
+
+  // Initialise les positions des titres du plan non encore en portefeuille
+  [...etfItems, ...stockItems].forEach(item => {
+    if (!positions[item.ticker]) {
+      const price = S.data.priceCache[item.ticker]?.price ?? 100;
+      positions[item.ticker] = { quantity: 0, price, name: item.name, isEtf: item.isEtf !== false, feePct: item.feePct ?? 0 };
+    }
+  });
+
+  const getVal = () => Object.values(positions).reduce((s, p) => s + p.quantity * p.price, 0);
+  const snapshots = [{ month: 0, portfolioValue: getVal(), totalDeposited, positions: simCopyPos(positions) }];
+
+  for (let m = 1; m <= months; m++) {
+    // 1. Versement mensuel (limité au plafond PEA)
+    const depositAmount = Math.min(budget, Math.max(0, PEA_MAX - totalDeposited));
+    totalDeposited += depositAmount;
+
+    // 2. Achats actions fixes (en parts fixes/mois)
+    let stockCost = 0;
+    stockItems.forEach(item => {
+      const p = positions[item.ticker];
+      if (!p || !(item.monthlyShares > 0)) return;
+      const feeMul = 1 + (p.feePct || 0) / 100;
+      p.quantity += item.monthlyShares;
+      stockCost  += item.monthlyShares * p.price * feeMul;
+    });
+
+    // 3. Budget ETF = ce qui reste après les actions fixes
+    const etfBudget = Math.max(0, depositAmount - stockCost);
+    if (totalEtfPct > 0 && etfBudget > 0) {
+      etfItems.forEach(item => {
+        const p = positions[item.ticker];
+        if (!p || !(item.allocationPct > 0)) return;
+        const frac   = item.allocationPct / totalEtfPct;          // proportion normalisée dans le bucket ETF
+        const feeMul = 1 + (p.feePct || 0) / 100;
+        // parts fractionnaires pour la simulation (précision long terme)
+        p.quantity += (etfBudget * frac) / (feeMul * p.price);
+      });
+    }
+
+    // 4. Croissance des prix (rendement mensuel composé)
+    Object.values(positions).forEach(p => { p.price *= monthlyGrowth; });
+
+    snapshots.push({ month: m, portfolioValue: getVal(), totalDeposited, positions: simCopyPos(positions) });
+  }
+  return snapshots;
+}
+
+function simCopyPos(positions) {
+  const c = {};
+  Object.entries(positions).forEach(([k, v]) => { c[k] = { ...v }; });
+  return c;
+}
+
+function renderSimResults(snapshots) {
+  const first = snapshots[0];
+  const last  = snapshots[snapshots.length - 1];
+  const months = last.month;
+  const years  = months / 12;
+  const finalValue   = last.portfolioValue;
+  const totalCapital = last.totalDeposited;
+  const pnl    = finalValue - totalCapital;
+  const pnlPct = totalCapital > 0 ? (pnl / totalCapital) * 100 : 0;
+  // CAGR : rendement annualisé sur l'ensemble du capital investi
+  const cagr = totalCapital > 0 && years > 0 ? (Math.pow(finalValue / Math.max(1, totalCapital), 1 / years) - 1) * 100 : 0;
+
+  document.getElementById('sim-cards').innerHTML = `
+    <div class="card">
+      <div class="section-title">Capital total investi</div>
+      <div class="stat-val">${fc(totalCapital)}</div>
+      <div class="stat-sub neutral">Sur ${months} mois · ${years.toFixed(1)} ans</div>
+    </div>
+    <div class="card">
+      <div class="section-title">Valeur finale simulée</div>
+      <div class="stat-val positive">${fc(finalValue)}</div>
+      <div class="stat-sub neutral">Départ : ${fc(first.portfolioValue)}</div>
+    </div>
+    <div class="card">
+      <div class="section-title">Plus-value simulée</div>
+      <div class="stat-val ${pnl >= 0 ? 'positive' : 'negative'}">${fc(pnl)}</div>
+      <div class="stat-sub ${pnl >= 0 ? 'positive' : 'negative'}">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%</div>
+    </div>
+    <div class="card">
+      <div class="section-title">CAGR effectif</div>
+      <div class="stat-val ${cagr >= 0 ? 'positive' : 'negative'}">${cagr.toFixed(1)}%</div>
+      <div class="stat-sub neutral">Rendement annualisé</div>
+    </div>
+  `;
+  makeSimChart(snapshots);
+  renderSimYearTable(snapshots);
+  renderSimAllocTable(last.positions, last.portfolioValue);
+}
+
+function makeSimChart(snapshots) {
+  destroyChart('sim');
+  const ctx = document.getElementById('chart-sim');
+  if (!ctx) return;
+  const stride = Math.max(1, Math.ceil(snapshots.length / 72));
+  const data   = snapshots.filter((s, i) => i % stride === 0 || i === snapshots.length - 1);
+  const labels = data.map(s => {
+    if (s.month === 0) return 'Départ';
+    const y = Math.floor(s.month / 12), mo = s.month % 12;
+    return mo === 0 ? `${y} an${y > 1 ? 's' : ''}` : `M+${s.month}`;
+  });
+  S.charts['sim'] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Valeur PEA simulée',
+          data: data.map(s => +s.portfolioValue.toFixed(2)),
+          borderColor: '#2d7ef7', backgroundColor: 'rgba(45,126,247,0.09)',
+          borderWidth: 2.5, pointRadius: data.length > 50 ? 0 : 3, tension: 0.3, fill: true },
+        { label: 'Capital investi total',
+          data: data.map(s => +s.totalDeposited.toFixed(2)),
+          borderColor: '#94a3b8', backgroundColor: 'transparent',
+          borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, tension: 0.1 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 14, padding: 12 } },
+        tooltip: { callbacks: { label: c => ` ${c.dataset.label} : ${fc(c.raw)}` } }
+      },
+      scales: {
+        x: { ticks: { color: '#94a3b8', maxTicksLimit: 10, maxRotation: 0 }, grid: { color: '#1e293b' } },
+        y: { ticks: { color: '#94a3b8', callback: v => fc(v, 0) }, grid: { color: '#334155' } }
+      }
+    }
+  });
+}
+
+function renderSimYearTable(snapshots) {
+  const el = document.getElementById('sim-year-table');
+  if (!el) return;
+  const last = snapshots[snapshots.length - 1];
+  const yearly = snapshots.filter(s => s.month % 12 === 0 || s.month === last.month);
+  el.innerHTML = `
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Période</th><th>Capital investi</th><th>Valeur PEA</th><th>Plus-value</th><th>P&amp;L %</th>
+      </tr></thead>
+      <tbody>${yearly.map(s => {
+        const pnl    = s.portfolioValue - s.totalDeposited;
+        const pnlPct = s.totalDeposited > 0 ? (pnl / s.totalDeposited) * 100 : 0;
+        const lbl    = s.month === 0 ? 'Départ' : s.month % 12 === 0 ? `An ${s.month/12}` : `M+${s.month} (fin)`;
+        return `<tr>
+          <td><strong>${lbl}</strong></td>
+          <td>${fc(s.totalDeposited)}</td>
+          <td><strong class="positive">${fc(s.portfolioValue)}</strong></td>
+          <td class="${pnl >= 0 ? 'positive' : 'negative'}">${fc(pnl)}</td>
+          <td class="${pnlPct >= 0 ? 'positive' : 'negative'}">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>
+  `;
+}
+
+function toggleSimYearTable() {
+  const el  = document.getElementById('sim-year-table');
+  const tog = document.getElementById('sim-year-toggle');
+  if (!el || !tog) return;
+  const hidden = el.style.display === 'none';
+  el.style.display = hidden ? '' : 'none';
+  tog.textContent  = hidden ? '▲ Masquer le détail annuel' : '▼ Détail annuel';
+}
+
+function renderSimAllocTable(finalPositions, totalPortfolioValue) {
+  const entries = Object.entries(finalPositions)
+    .map(([ticker, p]) => ({ ticker, ...p, marketValue: p.quantity * p.price }))
+    .filter(p => p.quantity > 0.0001)
+    .sort((a, b) => b.marketValue - a.marketValue);
+  const etfTotal   = entries.filter(p =>  p.isEtf).reduce((s, p) => s + p.marketValue, 0);
+  const stockTotal = entries.filter(p => !p.isEtf).reduce((s, p) => s + p.marketValue, 0);
+  const el = document.getElementById('sim-alloc-table');
+  if (!entries.length) { el.innerHTML = '<div class="empty"><p>Aucune position</p></div>'; return; }
+
+  el.innerHTML = `
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;font-size:0.82rem">
+      <div>Total&nbsp;: <strong style="color:var(--accent)">${fc(totalPortfolioValue)}</strong></div>
+      ${etfTotal   > 0 ? `<span style="color:var(--border)">|</span><div class="neutral">Bucket ETF&nbsp;: <strong>${fc(etfTotal)}</strong> (${(etfTotal/totalPortfolioValue*100).toFixed(1)}% du PEA)</div>` : ''}
+      ${stockTotal > 0 ? `<span style="color:var(--border)">|</span><div class="neutral">Actions&nbsp;: <strong>${fc(stockTotal)}</strong> (${(stockTotal/totalPortfolioValue*100).toFixed(1)}% du PEA)</div>` : ''}
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Ticker</th><th>Nom</th><th>Type</th><th>Quantité finale</th>
+        <th>Prix final simulé</th><th>Valeur finale</th>
+        <th title="% dans le bucket ETF uniquement — hors actions directes">% Bucket ETF</th>
+        <th title="% du PEA total (ETFs + actions) — vue consolidée">% Total PEA</th>
+      </tr></thead>
+      <tbody>${entries.map(p => {
+        const totalPct = totalPortfolioValue > 0 ? p.marketValue / totalPortfolioValue * 100 : 0;
+        const etfPct   = p.isEtf && etfTotal > 0 ? p.marketValue / etfTotal * 100 : null;
+        return `<tr>
+          <td><span class="chip">${esc(p.ticker)}</span></td>
+          <td>${esc(p.name)}</td>
+          <td>${p.isEtf
+            ? '<span class="badge badge-deposit" style="font-size:0.68rem">ETF</span>'
+            : '<span class="badge badge-buy" style="font-size:0.68rem">Action</span>'}</td>
+          <td class="neutral">${p.isEtf ? p.quantity.toFixed(3) : Math.round(p.quantity)}</td>
+          <td class="neutral">${fc(p.price)}</td>
+          <td><strong>${fc(p.marketValue)}</strong></td>
+          <td>${etfPct !== null
+            ? `<div style="display:flex;align-items:center;gap:5px">
+                 <span class="positive" style="font-weight:600">${etfPct.toFixed(1)}%</span>
+                 <div class="progress" style="width:44px"><div class="progress-fill" style="width:${Math.min(100,etfPct)}%;background:var(--success)"></div></div>
+               </div>`
+            : '<span class="neutral">—</span>'}</td>
+          <td><div style="display:flex;align-items:center;gap:5px">
+            <span style="color:var(--accent);font-weight:600">${totalPct.toFixed(1)}%</span>
+            <div class="progress" style="width:44px"><div class="progress-fill" style="width:${Math.min(100,totalPct)}%;background:var(--accent)"></div></div>
+          </div></td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>
+    <div style="margin-top:10px;font-size:0.72rem;color:var(--muted)">
+      💡 <strong>% Bucket ETF</strong> = part dans le sous-ensemble ETF uniquement (hors actions) ·
+      <strong>% Total PEA</strong> = part dans l'ensemble du portefeuille (ETFs + actions) ·
+      Parts ETF en fractions pour la précision de la simulation long terme.
+    </div>
+  `;
+}
+
+// ======================================================
 // ROUTER
 // ======================================================
 function navigate(page) {
@@ -2815,8 +3224,8 @@ function navigate(page) {
 
 function renderPage(page) {
   ({ dashboard:renderDashboard, portfolio:renderPortfolio, transactions:renderTransactions,
-     treasury:renderTreasury, planning:renderPlanning, news:renderNews,
-     ai:renderAI, settings:renderSettings })[page]?.();
+     treasury:renderTreasury, planning:renderPlanning, simulation:renderSimulation,
+     news:renderNews, ai:renderAI, settings:renderSettings })[page]?.();
 }
 
 // ======================================================

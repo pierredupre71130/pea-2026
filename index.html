@@ -542,6 +542,7 @@ function defData() {
     transactions: [],
     deposits: [],
     planItems: [],
+    savedPlans: [],
     snapshots: [],
     priceCache: {},
     pruOverrides: {}
@@ -572,7 +573,7 @@ function loadData() {
     const r = localStorage.getItem(STORAGE_KEY);
     if (r) {
       const p = JSON.parse(r);
-      const d = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings }, snapshots: p.snapshots || [], priceCache: p.priceCache || {}, pruOverrides: p.pruOverrides || {} };
+      const d = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings }, snapshots: p.snapshots || [], savedPlans: p.savedPlans || [], priceCache: p.priceCache || {}, pruOverrides: p.pruOverrides || {} };
       migrateFees(d);
       return d;
     }
@@ -1035,16 +1036,10 @@ async function fetchNews(ticker) {
 // ======================================================
 // API — CLAUDE
 // ======================================================
-async function callClaude(messages) {
+async function callClaude(messages, opts = {}) {
   const key = S.data.settings.claudeApiKey;
   if (!key) throw new Error('Clé API Anthropic non configurée. Allez dans ⚙️ Paramètres.');
-  const resp = await fetch(CLAUDE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
-    body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 2048,
-      system: `Tu es un gérant de portefeuille senior avec 20 ans d'expérience en gestion d'actifs, niveau CFA, spécialisé ETF et allocation d'actifs dans le cadre du PEA français. Tu penses et parles comme un professionnel chez Amundi, Blackrock ou une banque privée de premier rang.
+  const defaultSystem = `Tu es un gérant de portefeuille senior avec 20 ans d'expérience en gestion d'actifs, niveau CFA, spécialisé ETF et allocation d'actifs dans le cadre du PEA français. Tu penses et parles comme un professionnel chez Amundi, Blackrock ou une banque privée de premier rang.
 
 RÈGLES ABSOLUES DE TES RÉPONSES :
 1. VERDICTS CLAIRS — chaque position, chaque ETF reçoit un verdict explicite : ✅ Renforcer / ⏸ Maintenir / ⚠️ Surveiller / 🔴 Alléger. Jamais de flou.
@@ -1055,7 +1050,14 @@ RÈGLES ABSOLUES DE TES RÉPONSES :
 6. TON PROFESSIONNEL — direct, confiant, sans excès de précautions. Tu donnes ton avis d'expert, pas une liste de possibilités.
 
 FORMAT : Markdown structuré avec titres ##, tableaux pour les comparaisons, bullets pour les actions. Concis et dense, pas de rembourrage.
-NOTE : Analyse à titre informatif — l'investisseur garde la responsabilité finale.`,
+NOTE : Analyse à titre informatif — l'investisseur garde la responsabilité finale.`;
+  const resp = await fetch(CLAUDE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: opts.maxTokens ?? 4096,
+      system: opts.system ?? defaultSystem,
       messages: Array.isArray(messages) ? messages : [{ role: 'user', content: messages }]
     })
   });
@@ -1652,6 +1654,7 @@ function renderPlanning() {
     return { ticker, name, currentVal, addVal, addFees, projectedVal, currentPct, projectedPct, isEtf, etfCurrentPct, etfProjectedPct };
   }).sort((a,b) => b.projectedVal - a.projectedVal);
 
+  const savedPlans = S.data.savedPlans || [];
   document.getElementById('page-planning').innerHTML = `
     <div class="page-header">
       <div>
@@ -1659,10 +1662,29 @@ function renderPlanning() {
         <div class="page-sub">Simulation d'achat mensuel${lastUpd ? ` · Cours: ${lastUpd}` : ''}</div>
       </div>
       <div class="page-actions">
+        <button class="btn btn-secondary" onclick="saveCurrentPlan()">💾 Sauvegarder</button>
         <button class="btn btn-secondary" onclick="doRefreshPlan()" id="btn-refresh-plan">⟳ Actualiser les cours</button>
         <button class="btn btn-primary" onclick="openPlanModal()">+ Ajouter un titre</button>
       </div>
     </div>
+
+    ${savedPlans.length ? `
+    <div class="card mb16">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div class="section-title" style="margin:0">📋 Plans Sauvegardés</div>
+        <span style="font-size:0.72rem;color:var(--muted)">${savedPlans.length} plan${savedPlans.length>1?'s':''} · cliquez pour appliquer</span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${savedPlans.map(sp => `
+          <div style="display:flex;align-items:stretch;border:1.5px solid ${sp.aiColor||'var(--border)'};border-radius:8px;overflow:hidden">
+            <button onclick="loadSavedPlan('${sp.id}')" style="background:${sp.aiColor?sp.aiColor+'18':'var(--surface2)'};color:${sp.aiColor||'var(--text)'};border:none;padding:7px 12px;cursor:pointer;font-size:0.8rem;font-weight:600;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left">
+              <span>${sp.source==='ai'?'🤖 ':'📋 '}${esc(sp.name)}</span>
+              <span style="font-size:0.68rem;opacity:0.65;font-weight:400">${sp.date} · ${sp.items.length} titre${sp.items.length>1?'s':''}</span>
+            </button>
+            <button onclick="deleteSavedPlan('${sp.id}')" title="Supprimer ce plan" style="background:rgba(239,68,68,0.06);color:#ef4444;border:none;border-left:1px solid var(--border);padding:6px 9px;cursor:pointer;font-size:1rem;line-height:1">×</button>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
 
     <div class="grid-2 mb16">
       <div class="card">
@@ -2352,6 +2374,80 @@ function execPlanShares(id, shares) {
   const price = S.data.priceCache[item.ticker]?.price ?? null;
   openTxModal({ ticker: item.ticker, name: item.name, price: price?.toFixed(4), quantity: shares });
   toast('Formulaire pré-rempli — vérifiez et confirmez', 'success', 3000);
+}
+
+// ======================================================
+// HANDLERS — PLANS SAUVEGARDÉS
+// ======================================================
+function saveCurrentPlan() {
+  const active = S.data.planItems.filter(p => p.active);
+  if (!active.length) { toast('Aucun titre dans le plan actuel', 'error'); return; }
+  const defaultName = 'Plan ' + today();
+  // Mini-modal inline
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;min-width:320px;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.5)">
+    <div style="font-weight:700;font-size:1rem;margin-bottom:14px">💾 Sauvegarder le plan actuel</div>
+    <label style="font-size:0.8rem;color:var(--muted);display:block;margin-bottom:6px">Nom du plan</label>
+    <input id="_save-plan-name" type="text" value="${defaultName}" style="width:100%;margin-bottom:16px" />
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button onclick="this.closest('[style*=position]').remove()" class="btn btn-secondary">Annuler</button>
+      <button onclick="(function(){
+        const n=(document.getElementById('_save-plan-name').value||'${defaultName}').trim();
+        document.querySelector('[style*=position][style*=z-index]').remove();
+        if(!S.data.savedPlans)S.data.savedPlans=[];
+        S.data.savedPlans.push({id:uid(),name:n,date:'${today()}',source:'manual',aiColor:null,items:S.data.planItems.map(p=>({...p}))});
+        saveData();toast('Plan \u201c'+n+'\u201d sauvegardé ✓','success');renderPlanning();
+      })()" class="btn btn-primary">💾 Sauvegarder</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const inp = document.getElementById('_save-plan-name');
+  if (inp) { inp.focus(); inp.select(); }
+}
+
+function loadSavedPlan(id) {
+  const sp = (S.data.savedPlans || []).find(p => p.id === id);
+  if (!sp) return;
+  const prev = S.data.planItems.map(p => ({...p}));
+  S.data.planItems = sp.items.map(p => ({...p}));
+  saveData();
+  toast(`Plan "${sp.name}" appliqué — ${sp.items.length} titre(s) chargé(s) ✓`, 'success', 4000);
+  renderPlanning();
+}
+
+function deleteSavedPlan(id) {
+  const sp = (S.data.savedPlans || []).find(p => p.id === id);
+  if (!sp) return;
+  S.data.savedPlans = S.data.savedPlans.filter(p => p.id !== id);
+  saveData();
+  toast(`Plan "${sp.name}" supprimé`, 'success');
+  renderPlanning();
+}
+
+function applyAiPlanByIndex(i) {
+  const plan = S._aiPlans?.[i];
+  if (!plan) { toast('Plan introuvable — régénérez les plans IA', 'error'); return; }
+  // Sauvegarde automatique du plan actuel
+  if (S.data.planItems.filter(p => p.active).length) {
+    if (!S.data.savedPlans) S.data.savedPlans = [];
+    S.data.savedPlans.push({ id: uid(), name: 'Avant IA — ' + today(), date: today(), source: 'manual', aiColor: null, items: S.data.planItems.map(p => ({...p})) });
+  }
+  // Convertir items IA en format planItems
+  const newItems = plan.items.map((item, idx) => ({
+    id: uid(), ticker: item.ticker, name: item.name,
+    isEtf: item.isEtf,
+    allocationPct: item.isEtf ? (item.allocationPct || 0) : 0,
+    monthlyShares: !item.isEtf ? (item.monthlyShares || 1) : 0,
+    monthlyAmount: 0, minAmount: 200, feePct: item.isEtf ? 0.5 : 0.9,
+    priority: idx + 1, active: true, notes: ''
+  }));
+  // Sauvegarder ce plan IA dans les plans sauvegardés
+  S.data.savedPlans.push({ id: uid(), name: plan.name, date: today(), source: 'ai', aiColor: plan.color, aiRisk: plan.risk, aiRiskLabel: plan.riskLabel, items: newItems });
+  S.data.planItems = newItems;
+  saveData();
+  toast(`✅ Plan "${plan.name}" appliqué et sauvegardé — redirection vers Planning…`, 'success', 4000);
+  setTimeout(() => navigate('planning'), 1200);
 }
 
 // ======================================================
@@ -3107,7 +3203,10 @@ RÉPONDS UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après 
 }`;
 
   try {
-    const raw = await callClaude([{ role: 'user', content: prompt }]);
+    const raw = await callClaude([{ role: 'user', content: prompt }], {
+      maxTokens: 6000,
+      system: 'Tu es un expert en gestion de portefeuille PEA. Réponds UNIQUEMENT avec un objet JSON valide et bien formé, sans aucun texte, explication, balise markdown ou bloc de code. Commence directement par { et termine par }. Ne génère rien en dehors du JSON.'
+    });
     // Extraire le JSON de la réponse (réutilise la fonction existante extractFirstJson)
     function extractFirstJson(str) {
       const arrIdx = str.indexOf('['), objIdx = str.indexOf('{');
@@ -3159,6 +3258,7 @@ RÉPONDS UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après 
       return snaps;
     });
 
+    S._aiPlans = plans;
     renderAiPlans(plans, simResults, months, budget);
   } catch(e) {
     if (el) el.innerHTML = `<div class="info-box info-danger">❌ ${esc(e.message)}<br><span style="font-size:0.75rem;color:var(--muted)">Vérifiez votre clé API dans Paramètres et réessayez.</span></div>`;
@@ -3223,6 +3323,9 @@ function renderAiPlans(plans, simResults, months, budget) {
             <div style="font-size:0.72rem;color:var(--danger)">⚠ ${plan.risks?.slice(0,1).map(s=>esc(s)).join('') || ''}</div>
           </div>
           <div style="font-size:0.74rem;color:var(--muted);font-style:italic;border-top:1px solid var(--border);padding-top:8px;line-height:1.4">${esc(plan.context || '')}</div>
+          <button onclick="applyAiPlanByIndex(${i})" style="width:100%;margin-top:8px;padding:9px;background:${col}18;color:${col};border:1.5px solid ${col};border-radius:8px;cursor:pointer;font-size:0.82rem;font-weight:600;transition:background 0.2s" onmouseover="this.style.background='${col}30'" onmouseout="this.style.background='${col}18'">
+            📋 Intégrer dans le planning
+          </button>
         </div>`;
       }).join('')}
     </div>

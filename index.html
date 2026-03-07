@@ -499,6 +499,26 @@ const PRICE_TTL = 15 * 60 * 1000;
 const PEA_MAX = 150000;
 const COLORS = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6','#a855f7','#0ea5e9'];
 
+// Proxies historiques : ETF PEA → ticker Yahoo Finance avec longue historique
+const PROXY_MAP = {
+  'CW8.PA':'IWDA.L',  'WPEA.PA':'IWDA.L', 'EWLD.PA':'IWDA.L', 'MWRD.PA':'IWDA.L',
+  'IWEA.PA':'IWDA.L', 'WPAE.PA':'IWDA.L',
+  'SP500.PA':'^GSPC', 'CS500.PA':'^GSPC', 'ESE.PA':'^GSPC',
+  'PAEEM.PA':'EEM',   'AEEM.PA':'EEM',
+  'PANX.PA':'QQQ',    'NASD.PA':'QQQ',
+  'PE600.PA':'^STOXX50E',
+};
+
+const HISTORICAL_SCENARIOS = [
+  { id:'dotcom',  icon:'💻', label:'Bulle Internet',      period:'2000–2003', from:'2000-01-01', to:'2003-12-31', color:'#ef4444', desc:'Éclatement bulle tech — NASDAQ -78%, S&P500 -49%' },
+  { id:'gfc',     icon:'🏦', label:'Crise Financière',    period:'2007–2009', from:'2007-07-01', to:'2009-06-30', color:'#ef4444', desc:'Subprimes + Lehman Brothers — S&P500 -57%' },
+  { id:'reprise', icon:'🚀', label:'Bull Market 2010–19', period:'2010–2019', from:'2010-01-01', to:'2019-12-31', color:'#22c55e', desc:'Plus longue hausse de l\'histoire — S&P500 +400%' },
+  { id:'covid',   icon:'🦠', label:'Crise Covid',         period:'2020–2021', from:'2020-01-01', to:'2021-12-31', color:'#f59e0b', desc:'Krach -34% en 33 jours puis rebond record +100%' },
+  { id:'krach22', icon:'📉', label:'Bear Market 2022',    period:'2022',      from:'2022-01-01', to:'2022-12-31', color:'#ef4444', desc:'Inflation + hausses de taux — MSCI World -18%' },
+  { id:'bull23',  icon:'🌟', label:'Reprise IA 2023–24',  period:'2023–2024', from:'2023-01-01', to:'2024-12-31', color:'#22c55e', desc:'Bull porté par la tech IA — S&P500 +50%' },
+  { id:'full',    icon:'🌍', label:'Cycle complet',       period:'2010–2024', from:'2010-01-01', to:'2024-12-31', color:'#3b82f6', desc:'15 ans incluant crises majeures et reprises' },
+];
+
 // ======================================================
 // STATE
 // ======================================================
@@ -2804,16 +2824,486 @@ function fillFormFromScan(data) {
 }
 
 // ======================================================
+// BACKTESTING — UTILITAIRES
+// ======================================================
+function getMonthsBetween(fromDate, toDate) {
+  const months = [];
+  let cur = new Date(fromDate);
+  const end = new Date(toDate);
+  while (cur <= end) { months.push(cur.toISOString().slice(0, 7)); cur.setMonth(cur.getMonth() + 1); }
+  return months;
+}
+
+async function fetchHistoricalMonthly(ticker, fromDate, toDate) {
+  const p1 = Math.floor(new Date(fromDate).getTime() / 1000);
+  const p2 = Math.floor(new Date(toDate).getTime()   / 1000);
+  const url = `${YF_CHART}${encodeURIComponent(ticker)}?interval=1mo&period1=${p1}&period2=${p2}`;
+  try {
+    const r = await fetch(`${PROXY}${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(20000) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    const j = JSON.parse(d.contents);
+    const res = j?.chart?.result?.[0];
+    if (!res) return [];
+    const ts  = res.timestamp || [];
+    const cl  = res.indicators?.adjclose?.[0]?.adjclose || res.indicators?.quote?.[0]?.close || [];
+    return ts.map((t, i) => ({ date: new Date(t * 1000).toISOString().slice(0, 7), price: cl[i] }))
+             .filter(p => p.price != null && !isNaN(p.price) && p.price > 0);
+  } catch(e) { console.warn('fetchHistoricalMonthly', ticker, e.message); return []; }
+}
+
+async function fetchHistoricalPricesWithProxy(ticker, fromDate, toDate) {
+  const allMonths = getMonthsBetween(fromDate, toDate);
+  let data = await fetchHistoricalMonthly(ticker, fromDate, toDate);
+  let usedTicker = ticker;
+  let isProxy = false;
+  // Si couverture < 70 %, essayer le proxy
+  if (data.length / allMonths.length < 0.7 && PROXY_MAP[ticker]) {
+    const proxyTicker = PROXY_MAP[ticker];
+    const proxyData   = await fetchHistoricalMonthly(proxyTicker, fromDate, toDate);
+    if (proxyData.length > data.length) {
+      data = proxyData; usedTicker = proxyTicker; isProxy = true;
+    }
+  }
+  const map = {};
+  data.forEach(p => { map[p.date] = p.price; });
+  return { ticker: usedTicker, originalTicker: ticker, isProxy, data: map, count: data.length };
+}
+
+// ======================================================
+// BACKTESTING — RUNNER
+// ======================================================
+async function runBacktest(scenarioId) {
+  const scenario = HISTORICAL_SCENARIOS.find(s => s.id === scenarioId);
+  if (!scenario) return;
+
+  // Marquer le bouton actif
+  document.querySelectorAll('.bt-scenario-btn').forEach(b => b.classList.remove('active'));
+  const activeBtn = document.querySelector(`.bt-scenario-btn[data-sid="${scenarioId}"]`);
+  if (activeBtn) activeBtn.classList.add('active');
+
+  const elR = document.getElementById('backtest-results');
+  if (elR) elR.innerHTML = `<div style="text-align:center;padding:28px 0"><div class="spinner" style="width:22px;height:22px;border-width:3px;margin:0 auto 12px"></div><div style="color:var(--muted);font-size:0.82rem">Chargement des données historiques ${scenario.period}…</div></div>`;
+
+  const planItems  = S.data.planItems.filter(p => p.active);
+  const tickers    = [...new Set(planItems.map(p => p.ticker))];
+  const budget     = S.data.settings.monthlyBudget;
+  const etfItems   = planItems.filter(p => p.isEtf !== false);
+  const stockItems = planItems.filter(p => p.isEtf === false);
+  const totalEtfPct = etfItems.reduce((s, p) => s + (p.allocationPct || 0), 0);
+
+  // Fetch toutes les données en parallèle
+  const fetched = await Promise.all(tickers.map(t => fetchHistoricalPricesWithProxy(t, scenario.from, scenario.to)));
+  const priceData = {}; // originalTicker → { date: price }
+  const warnings  = [];
+  fetched.forEach(r => {
+    if (r.count === 0) { warnings.push(`${r.originalTicker} : aucune donnée`); return; }
+    priceData[r.originalTicker] = r.data;
+    if (r.isProxy) warnings.push(`${r.originalTicker} → proxy ${r.ticker} (ETF inexistant sur cette période)`);
+  });
+
+  const months = getMonthsBetween(scenario.from, scenario.to);
+  if (months.length === 0 || Object.keys(priceData).length === 0) {
+    if (elR) elR.innerHTML = `<div class="empty"><div class="ico">📭</div><p>Aucune donnée disponible pour cette période.</p><p style="font-size:0.78rem;color:var(--muted)">Les ETFs PEA ont une historique limitée. Essayez Covid 2020 ou Reprise 2023.</p></div>`;
+    return;
+  }
+
+  // Initialiser les positions
+  const positions = {};
+  planItems.forEach(item => {
+    const mp = priceData[item.ticker];
+    const firstPrice = mp ? Object.values(mp)[0] : (S.data.priceCache[item.ticker]?.price ?? 100);
+    positions[item.ticker] = { quantity: 0, price: firstPrice || 100, name: item.name, isEtf: item.isEtf !== false, feePct: item.feePct ?? 0 };
+  });
+
+  const getVal = () => Object.values(positions).reduce((s, p) => s + p.quantity * p.price, 0);
+  let totalDeposited = 0;
+  const snapshots = [{ month: 0, label: scenario.from.slice(0, 7), portfolioValue: 0, totalDeposited: 0 }];
+
+  months.forEach((monthStr, idx) => {
+    // Mise à jour des prix réels du mois
+    planItems.forEach(item => {
+      const mp = priceData[item.ticker];
+      if (mp && mp[monthStr]) positions[item.ticker].price = mp[monthStr];
+    });
+
+    totalDeposited += budget;
+
+    // Achats actions fixes
+    let stockCost = 0;
+    stockItems.forEach(item => {
+      const p = positions[item.ticker];
+      if (!p || !(item.monthlyShares > 0)) return;
+      p.quantity += item.monthlyShares;
+      stockCost  += item.monthlyShares * p.price * (1 + (p.feePct || 0) / 100);
+    });
+
+    // Achats ETFs proportionnels
+    const etfBudget = Math.max(0, budget - stockCost);
+    if (totalEtfPct > 0 && etfBudget > 0) {
+      etfItems.forEach(item => {
+        const p = positions[item.ticker];
+        if (!p || !(item.allocationPct > 0)) return;
+        const frac = item.allocationPct / totalEtfPct;
+        p.quantity += (etfBudget * frac) / ((1 + (p.feePct || 0) / 100) * p.price);
+      });
+    }
+
+    snapshots.push({ month: idx + 1, label: monthStr, portfolioValue: getVal(), totalDeposited });
+  });
+
+  S._backtestResult = { scenario, snapshots, warnings };
+  renderBacktestResults(scenario, snapshots, warnings);
+}
+
+function renderBacktestResults(scenario, snapshots, warnings) {
+  const el = document.getElementById('backtest-results');
+  if (!el) return;
+  const last    = snapshots[snapshots.length - 1];
+  const pnl     = last.portfolioValue - last.totalDeposited;
+  const pnlPct  = last.totalDeposited > 0 ? (pnl / last.totalDeposited) * 100 : 0;
+  const years   = last.month / 12;
+  const cagr    = last.totalDeposited > 0 && years > 0 ? (Math.pow(last.portfolioValue / Math.max(1, last.totalDeposited), 1 / years) - 1) * 100 : 0;
+  const pos     = pnl >= 0;
+  const c       = pos ? '#22c55e' : '#ef4444';
+
+  el.innerHTML = `
+    ${warnings.length ? `<div class="info-box info-warning mb16" style="font-size:0.78rem">⚠ ${warnings.map(w=>esc(w)).join(' · ')}</div>` : ''}
+    <div style="background:rgba(${pos?'34,197,94':'239,68,68'},0.07);border:1px solid rgba(${pos?'34,197,94':'239,68,68'},0.2);border-radius:10px;padding:16px;margin-bottom:14px">
+      <div style="font-weight:700;margin-bottom:12px">${scenario.icon} ${esc(scenario.label)} <span style="font-weight:400;color:var(--muted);font-size:0.8rem">(${scenario.period})</span></div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+        <div><div class="section-title">Capital investi</div><div style="font-size:1.25rem;font-weight:700;margin-top:3px">${fc(last.totalDeposited)}</div></div>
+        <div><div class="section-title">Valeur finale</div><div style="font-size:1.25rem;font-weight:700;color:${c};margin-top:3px">${fc(last.portfolioValue)}</div></div>
+        <div><div class="section-title">Plus-value</div><div style="font-size:1.25rem;font-weight:700;color:${c};margin-top:3px">${fc(pnl)}<div style="font-size:0.82rem">${pnlPct>=0?'+':''}${pnlPct.toFixed(1)}%</div></div></div>
+        <div><div class="section-title">CAGR réel</div><div style="font-size:1.25rem;font-weight:700;color:${c};margin-top:3px">${cagr.toFixed(1)}%/an</div></div>
+      </div>
+    </div>
+    <div style="height:240px;position:relative"><canvas id="chart-backtest"></canvas></div>
+    <div style="font-size:0.72rem;color:var(--muted);margin-top:8px">💡 Simulation DCA pur — achat mensuel régulier selon votre plan, aux prix réels de marché.</div>
+  `;
+  requestAnimationFrame(() => makeBacktestChart(scenario, snapshots, pos));
+}
+
+function makeBacktestChart(scenario, snapshots, isPositive) {
+  destroyChart('backtest');
+  const ctx = document.getElementById('chart-backtest');
+  if (!ctx) return;
+  const stride = Math.max(1, Math.ceil(snapshots.length / 60));
+  const data   = snapshots.filter((s, i) => i % stride === 0 || i === snapshots.length - 1);
+  S.charts['backtest'] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: data.map(s => s.label || `M+${s.month}`),
+      datasets: [
+        { label: 'Valeur PEA (historique réel)',
+          data: data.map(s => +s.portfolioValue.toFixed(2)),
+          borderColor: isPositive ? '#22c55e' : '#ef4444',
+          backgroundColor: isPositive ? 'rgba(34,197,94,0.07)' : 'rgba(239,68,68,0.07)',
+          borderWidth: 2.5, pointRadius: data.length > 40 ? 0 : 3, tension: 0.3, fill: true },
+        { label: 'Capital investi',
+          data: data.map(s => +s.totalDeposited.toFixed(2)),
+          borderColor: '#94a3b8', backgroundColor: 'transparent',
+          borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, tension: 0.1 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 14, padding: 12 } },
+        tooltip: { callbacks: { label: c => ` ${c.dataset.label} : ${fc(c.raw)}` } }
+      },
+      scales: {
+        x: { ticks: { color: '#94a3b8', maxTicksLimit: 12, maxRotation: 0 }, grid: { color: '#1e293b' } },
+        y: { ticks: { color: '#94a3b8', callback: v => fc(v, 0) }, grid: { color: '#334155' } }
+      }
+    }
+  });
+}
+
+// ======================================================
+// OPTIMISATION IA — MULTI-PLANS
+// ======================================================
+async function aiGeneratePlans() {
+  if (!S.data.settings.claudeApiKey) {
+    toast('🔑 Clé API Anthropic requise — configurez-la dans ⚙️ Paramètres', 'error', 5000);
+    return;
+  }
+  const btn = document.getElementById('btn-ai-plans');
+  const el  = document.getElementById('ai-plans-results');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Analyse en cours…'; }
+  if (el)  { el.innerHTML = `<div style="text-align:center;padding:32px 0"><div class="spinner" style="width:24px;height:24px;border-width:3px;margin:0 auto 14px"></div><div style="color:var(--muted)">Claude analyse votre portefeuille et le contexte marché…<br><span style="font-size:0.78rem">Génération de 3 plans alternatifs en cours</span></div></div>`; }
+
+  // Contexte portefeuille
+  const portCtx  = buildPortfolioContext();
+  const simParam = S.sim || {};
+  const budget   = simParam.budget ?? S.data.settings.monthlyBudget;
+  const months   = simParam.months ?? 36;
+  const etfItems  = S.data.planItems.filter(p => p.active && p.isEtf !== false);
+  const stockItems = S.data.planItems.filter(p => p.active && p.isEtf === false);
+  const totalEtfPct = etfItems.reduce((s, p) => s + (p.allocationPct || 0), 0);
+
+  let simCtx = '';
+  if (S._lastSimSnapshots) {
+    const last = S._lastSimSnapshots[S._lastSimSnapshots.length - 1];
+    const pnl  = last.portfolioValue - last.totalDeposited;
+    simCtx = `\nSimulation actuelle (${months} mois, ${simParam.annualReturn??7}%/an): capital ${fc(last.totalDeposited)}, valeur ${fc(last.portfolioValue)}, P&L ${fc(pnl)} (${last.totalDeposited>0?((pnl/last.totalDeposited)*100).toFixed(1):0}%)`;
+  }
+  let btCtx = '';
+  if (S._backtestResult) {
+    const { scenario, snapshots } = S._backtestResult;
+    const last = snapshots[snapshots.length - 1];
+    const pnl  = last.portfolioValue - last.totalDeposited;
+    const yr   = last.month / 12;
+    const cagr = last.totalDeposited > 0 && yr > 0 ? (Math.pow(last.portfolioValue / Math.max(1, last.totalDeposited), 1/yr) - 1) * 100 : 0;
+    btCtx = `\nBacktest ${scenario.label} (${scenario.period}): capital ${fc(last.totalDeposited)}, valeur ${fc(last.portfolioValue)}, P&L ${fc(pnl)}, CAGR réel ${cagr.toFixed(1)}%/an`;
+  }
+
+  const planCtx = `PLAN MENSUEL ACTUEL — budget ${fc(budget)}/mois:
+ETFs (% du budget ETF, hors actions): ${etfItems.map(e=>`${e.ticker} ${e.allocationPct}% (normalisé: ${totalEtfPct>0?(e.allocationPct/totalEtfPct*100).toFixed(0):0}%)`).join(', ') || 'aucun'}
+Actions fixes: ${stockItems.map(s=>`${s.ticker} ${s.monthlyShares} part(s)/mois`).join(', ') || 'aucune'}${simCtx}${btCtx}`;
+
+  const prompt = `${portCtx}
+
+${planCtx}
+
+MISSION — GÉNÉRATION DE 3 PLANS ALTERNATIFS:
+
+Génère exactement 3 plans d'investissement PEA mensuels pour ce portefeuille :
+1. Plan PRUDENT — risque faible, rendement modéré, protection en cas de crise
+2. Plan ÉQUILIBRÉ — optimisation du plan actuel, meilleur rapport risque/rendement
+3. Plan DYNAMIQUE — risque plus élevé, rendement maximal, exposition à des thèmes porteurs
+
+Chaque plan doit :
+- Tenir compte du contexte macro actuel (taux, géopolitique, valorisations)
+- Inclure des suggestions concrètes d'ETFs éligibles PEA (pas uniquement ceux déjà détenus)
+- Identifier des thèmes porteurs ou des zones de risque pour les 12-24 prochains mois
+- Proposer des noms et tickers Yahoo Finance précis (.PA pour Euronext Paris)
+- Pour les ETFs : allocationPct dans le bucket ETF (total doit faire 100%)
+- Pour les actions : monthlyShares (nombre de parts à acheter par mois)
+
+RÉPONDS UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après :
+{
+  "plans": [
+    {
+      "id": "prudent",
+      "name": "Plan Prudent",
+      "risk": 2,
+      "riskLabel": "Faible",
+      "color": "#22c55e",
+      "summary": "résumé en 1 phrase",
+      "context": "justification macro 2-3 phrases",
+      "items": [
+        { "ticker": "WPEA.PA", "name": "iShares MSCI World Swap PEA", "isEtf": true, "allocationPct": 70, "monthlyShares": 0, "isNew": false },
+        { "ticker": "AI.PA", "name": "Air Liquide", "isEtf": false, "allocationPct": 0, "monthlyShares": 1, "isNew": true }
+      ],
+      "expectedCagrRange": "4–6%",
+      "strengths": ["Point fort 1", "Point fort 2"],
+      "risks": ["Risque 1"]
+    },
+    { "id": "equilibre", "name": "Plan Équilibré", "risk": 3, "riskLabel": "Modéré", "color": "#3b82f6", ... },
+    { "id": "dynamique", "name": "Plan Dynamique", "risk": 4, "riskLabel": "Élevé", "color": "#f59e0b", ... }
+  ]
+}`;
+
+  try {
+    const raw = await callClaude([{ role: 'user', content: prompt }]);
+    // Extraire le JSON de la réponse (réutilise la fonction existante extractFirstJson)
+    function extractFirstJson(str) {
+      const arrIdx = str.indexOf('['), objIdx = str.indexOf('{');
+      let start, open, close;
+      if (objIdx === -1 && arrIdx === -1) return null;
+      if (objIdx === -1 || (arrIdx !== -1 && arrIdx < objIdx)) { start = arrIdx; open = '['; close = ']'; }
+      else { start = objIdx; open = '{'; close = '}'; }
+      let depth = 0, inStr = false, esc2 = false;
+      for (let i = start; i < str.length; i++) {
+        const c = str[i];
+        if (esc2) { esc2 = false; continue; }
+        if (c === '\\' && inStr) { esc2 = true; continue; }
+        if (c === '"') { inStr = !inStr; continue; }
+        if (inStr) continue;
+        if (c === open) depth++;
+        else if (c === close) { depth--; if (depth === 0) return str.slice(start, i + 1); }
+      }
+      return null;
+    }
+    const jsonStr = extractFirstJson(raw);
+    if (!jsonStr) throw new Error('Réponse JSON invalide de Claude');
+    const parsed = JSON.parse(jsonStr);
+    const plans  = parsed.plans || [];
+    if (!plans.length) throw new Error('Aucun plan généré');
+
+    // Fetch les prix des nouveaux tickers non encore dans le cache
+    const newTickers = [...new Set(plans.flatMap(p => p.items).filter(i => !S.data.priceCache[i.ticker]).map(i => i.ticker))];
+    if (newTickers.length) {
+      await Promise.all(newTickers.map(t => fetchPrice(t)));
+    }
+
+    // Lancer simulation pour chaque plan
+    const simResults = plans.map(plan => {
+      const mockEtf   = plan.items.filter(i => i.isEtf);
+      const mockStock = plan.items.filter(i => !i.isEtf);
+      const totalPct  = mockEtf.reduce((s, i) => s + (i.allocationPct || 0), 0);
+      const mockPlan  = {
+        planItems: plan.items.map(i => ({
+          id: 'mock_'+i.ticker, ticker: i.ticker, name: i.name,
+          isEtf: i.isEtf, allocationPct: i.allocationPct || 0,
+          monthlyShares: i.monthlyShares || 0, feePct: 0.5, active: true
+        }))
+      };
+      // Simuler avec une version temporaire du planItems
+      const savedPlan = S.data.planItems;
+      S.data.planItems = mockPlan.planItems;
+      const snaps = runSimulation({ months: months, annualReturn: simParam.annualReturn ?? 7, budget, startFromCurrent: false });
+      S.data.planItems = savedPlan;
+      return snaps;
+    });
+
+    renderAiPlans(plans, simResults, months, budget);
+  } catch(e) {
+    if (el) el.innerHTML = `<div class="info-box info-danger">❌ ${esc(e.message)}<br><span style="font-size:0.75rem;color:var(--muted)">Vérifiez votre clé API dans Paramètres et réessayez.</span></div>`;
+    toast(e.message, 'error', 6000);
+  }
+  if (btn) { btn.disabled = false; btn.innerHTML = '✨ Ré-analyser'; }
+}
+
+function renderAiPlans(plans, simResults, months, budget) {
+  const el = document.getElementById('ai-plans-results');
+  if (!el) return;
+
+  const riskColors = { 1:'#22c55e', 2:'#22c55e', 3:'#3b82f6', 4:'#f59e0b', 5:'#ef4444' };
+  const riskBg    = { 1:'rgba(34,197,94,0.12)', 2:'rgba(34,197,94,0.12)', 3:'rgba(59,130,246,0.12)', 4:'rgba(245,158,11,0.12)', 5:'rgba(239,68,68,0.12)' };
+
+  // Comparison chart
+  el.innerHTML = `
+    <div class="card" style="background:var(--surface2);border:1px solid var(--border);margin-bottom:16px;padding:16px">
+      <div class="section-title" style="margin-bottom:12px">Comparaison des 3 plans sur ${months} mois</div>
+      <div style="height:280px;position:relative"><canvas id="chart-ai-compare"></canvas></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
+      ${plans.map((plan, i) => {
+        const snaps = simResults[i];
+        const last  = snaps ? snaps[snaps.length - 1] : null;
+        const finalVal = last?.portfolioValue ?? 0;
+        const capital  = last?.totalDeposited ?? 0;
+        const pnl      = finalVal - capital;
+        const pnlPct   = capital > 0 ? (pnl / capital) * 100 : 0;
+        const yr       = months / 12;
+        const cagr     = capital > 0 && yr > 0 ? (Math.pow(finalVal / Math.max(1,capital), 1/yr) - 1) * 100 : 0;
+        const col      = riskColors[plan.risk] || plan.color || '#3b82f6';
+        const bg       = riskBg[plan.risk]     || 'rgba(59,130,246,0.1)';
+        return `
+        <div style="background:var(--surface);border:1px solid var(--border);border-top:3px solid ${col};border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div style="font-weight:700;font-size:0.95rem">${esc(plan.name)}</div>
+            <span style="background:${bg};color:${col};border-radius:9999px;padding:2px 9px;font-size:0.72rem;font-weight:700">Risque ${plan.riskLabel || plan.risk+'/5'}</span>
+          </div>
+          <div style="font-size:0.8rem;color:var(--muted);line-height:1.5">${esc(plan.summary || '')}</div>
+          ${last ? `
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px;background:var(--surface2);border-radius:7px">
+            <div><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Valeur finale</div><div style="font-weight:700;color:${col}">${fc(finalVal)}</div></div>
+            <div><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">CAGR simulé</div><div style="font-weight:700;color:${col}">${cagr.toFixed(1)}%/an</div></div>
+            <div><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Plus-value</div><div style="font-weight:700;color:${pnl>=0?'var(--success)':'var(--danger)'}">${fc(pnl)}</div></div>
+            <div><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">CAGR attendu</div><div style="font-weight:700;color:${col}">${esc(plan.expectedCagrRange||'?')}</div></div>
+          </div>` : ''}
+          <div>
+            <div style="font-size:0.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Composition</div>
+            ${plan.items.map(item => `
+              <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:0.78rem">
+                <div style="display:flex;align-items:center;gap:6px">
+                  <span class="chip" style="font-size:0.68rem">${esc(item.ticker)}</span>
+                  <span style="color:var(--muted);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.name)}</span>
+                  ${item.isNew ? `<span style="background:rgba(245,158,11,0.15);color:var(--warning);border-radius:4px;padding:1px 5px;font-size:0.65rem;font-weight:700">NEW</span>` : ''}
+                </div>
+                <span style="color:${col};font-weight:600;flex-shrink:0;margin-left:6px">${item.isEtf ? item.allocationPct+'%' : item.monthlyShares+' part/mois'}</span>
+              </div>`).join('')}
+          </div>
+          <div>
+            <div style="font-size:0.72rem;font-weight:700;color:var(--success);margin-bottom:3px">✅ ${plan.strengths?.slice(0,2).map(s=>esc(s)).join(' · ') || ''}</div>
+            <div style="font-size:0.72rem;color:var(--danger)">⚠ ${plan.risks?.slice(0,1).map(s=>esc(s)).join('') || ''}</div>
+          </div>
+          <div style="font-size:0.74rem;color:var(--muted);font-style:italic;border-top:1px solid var(--border);padding-top:8px;line-height:1.4">${esc(plan.context || '')}</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="margin-top:10px;font-size:0.72rem;color:var(--muted)">💡 Simulations sur ${months} mois au même rendement supposé · <strong>NEW</strong> = ETF/titre non encore dans votre portefeuille · Les cours des nouveaux tickers sont récupérés en temps réel.</div>
+  `;
+  requestAnimationFrame(() => makeComparisonChart(plans, simResults, months));
+}
+
+function makeComparisonChart(plans, simResults, months) {
+  destroyChart('aicompare');
+  const ctx = document.getElementById('chart-ai-compare');
+  if (!ctx) return;
+  const maxLen = Math.max(...simResults.filter(Boolean).map(s => s.length));
+  const stride = Math.max(1, Math.ceil(maxLen / 60));
+  const colors = ['#22c55e','#3b82f6','#f59e0b'];
+
+  const allSnaps = simResults[0] || [];
+  const labels   = allSnaps.filter((_, i) => i % stride === 0 || i === allSnaps.length - 1).map(s => {
+    if (s.month === 0) return 'Départ';
+    const y = Math.floor(s.month / 12), mo = s.month % 12;
+    return mo === 0 ? `${y}a` : `M+${s.month}`;
+  });
+
+  const datasets = plans.map((plan, i) => {
+    const snaps = simResults[i];
+    if (!snaps) return null;
+    const data = snaps.filter((_, j) => j % stride === 0 || j === snaps.length - 1);
+    return {
+      label: plan.name,
+      data: data.map(s => +s.portfolioValue.toFixed(2)),
+      borderColor: colors[i] || COLORS[i],
+      backgroundColor: 'transparent',
+      borderWidth: 2.5, pointRadius: data.length > 50 ? 0 : 3, tension: 0.3
+    };
+  }).filter(Boolean);
+
+  // Ajouter la ligne capital investi (identique pour tous)
+  if (allSnaps.length) {
+    const capData = allSnaps.filter((_, i) => i % stride === 0 || i === allSnaps.length - 1);
+    datasets.push({
+      label: 'Capital investi',
+      data: capData.map(s => +s.totalDeposited.toFixed(2)),
+      borderColor: '#94a3b8', backgroundColor: 'transparent',
+      borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, tension: 0.1
+    });
+  }
+
+  S.charts['aicompare'] = new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 14, padding: 10 } },
+        tooltip: { callbacks: { label: c => ` ${c.dataset.label} : ${fc(c.raw)}` } }
+      },
+      scales: {
+        x: { ticks: { color: '#94a3b8', maxTicksLimit: 10, maxRotation: 0 }, grid: { color: '#1e293b' } },
+        y: { ticks: { color: '#94a3b8', callback: v => fc(v, 0) }, grid: { color: '#334155' } }
+      }
+    }
+  });
+}
+
+// ======================================================
 // PAGE — SIMULATION
 // ======================================================
 function renderSimulation() {
   if (!S.sim) S.sim = { months: 36, annualReturn: 7, startFromCurrent: true, budget: null };
+  if (!S.sim.aiLoyalty) S.sim.aiLoyalty = { nominatifYear: 2026, dividendPerShare: 3.70, enabled: true };
   const sim = S.sim;
+  const nom = sim.aiLoyalty;
   const budget = sim.budget ?? S.data.settings.monthlyBudget;
   const etfItems  = S.data.planItems.filter(p => p.active && p.isEtf !== false);
   const stockItems = S.data.planItems.filter(p => p.active && p.isEtf === false);
   const hasPlan = etfItems.length > 0 || stockItems.length > 0;
   const totalEtfPct = etfItems.reduce((s, p) => s + (p.allocationPct || 0), 0);
+  const hasAirLiquide = [...etfItems, ...stockItems].some(i => i.ticker === 'AI.PA');
+  const eligibleYear = nom.nominatifYear + 2;
+  const alAlreadyEligible = new Date().getFullYear() >= eligibleYear;
 
   document.getElementById('page-simulation').innerHTML = `
     <div class="page-header">
@@ -2893,6 +3383,46 @@ function renderSimulation() {
     </div>
     ` : ''}
 
+    ${hasPlan && hasAirLiquide ? `
+    <!-- AIR LIQUIDE FIDÉLITÉ -->
+    <div class="card mb16" id="section-al-loyalty">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        <div class="section-title" style="margin:0">🏭 Air Liquide — Avantages Nominatif</div>
+        <span style="background:${alAlreadyEligible ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)'};color:${alAlreadyEligible ? '#22c55e' : '#f59e0b'};padding:3px 10px;border-radius:20px;font-size:0.75rem;font-weight:600">${alAlreadyEligible ? '✅ Éligible' : '⏳ Éligible dès le 1er jan. ' + eligibleYear}</span>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:220px;display:flex;flex-direction:column;gap:8px">
+          <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;font-size:0.8rem">
+            <div style="font-weight:600;color:var(--accent);margin-bottom:4px">💰 Dividende annuel (+10% nominatif)</div>
+            <div>Prochain : <strong>18 mai 2026</strong> — <strong>${nom.dividendPerShare.toFixed(2)} €/action</strong></div>
+            <div style="color:var(--muted);font-size:0.76rem;margin-top:3px">Bonus +10% actif à partir du dividende de mai ${eligibleYear}</div>
+          </div>
+          <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;font-size:0.8rem">
+            <div style="font-weight:600;color:#a855f7;margin-bottom:4px">🎁 Actions Gratuites (1 pour 10, tous les 2 ans)</div>
+            <div style="color:var(--muted);font-size:0.76rem;margin-bottom:5px">Dernière attribution : juin 2024</div>
+            ${[2026,2028,2030].map(y => `<div style="font-size:0.76rem">📍 Juin ${y} <span style="color:${y >= eligibleYear ? '#22c55e' : '#f59e0b'}">${y >= eligibleYear ? '— éligible ✓' : '— pas encore éligible'}</span></div>`).join('')}
+          </div>
+          <div style="font-size:0.74rem;color:var(--muted);background:rgba(59,130,246,0.07);border-left:2.5px solid #3b82f6;padding:6px 10px;border-radius:0 5px 5px 0">
+            Condition : <strong>2 années civiles pleines</strong> en nominatif. Inscription en <strong>${nom.nominatifYear}</strong> → avantages actifs dès le <strong>1er jan. ${eligibleYear}</strong>. Dividendes &amp; actions gratuites inclus automatiquement dans la simulation ci-dessous.
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;min-width:155px">
+          <div>
+            <label style="font-size:0.74rem;color:var(--muted);display:block;margin-bottom:4px">Année nominatif</label>
+            <input type="number" id="sim-nom-year" value="${nom.nominatifYear}" min="2020" max="2035" step="1" style="width:88px" oninput="S.sim.aiLoyalty.nominatifYear=parseInt(this.value)||2026">
+          </div>
+          <div>
+            <label style="font-size:0.74rem;color:var(--muted);display:block;margin-bottom:4px">Dividende/action (€)</label>
+            <input type="number" id="sim-nom-div" value="${nom.dividendPerShare.toFixed(2)}" min="0" max="50" step="0.01" style="width:88px" oninput="S.sim.aiLoyalty.dividendPerShare=parseFloat(this.value)||3.70">
+          </div>
+          <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;cursor:pointer">
+            <input type="checkbox" ${nom.enabled !== false ? 'checked' : ''} onchange="S.sim.aiLoyalty.enabled=this.checked"> Inclure dans simulation
+          </label>
+        </div>
+      </div>
+    </div>
+    ` : ''}
+
     <!-- RESULTS -->
     <div id="sim-results" style="display:none">
       <div class="grid-4 mb16" id="sim-cards"></div>
@@ -2908,6 +3438,7 @@ function renderSimulation() {
         <div class="section-title mb16">Allocation finale simulée</div>
         <div id="sim-alloc-table"></div>
       </div>
+      <div id="sim-al-events"></div>
     </div>
 
     <!-- EMPTY STATE -->
@@ -2918,6 +3449,26 @@ function renderSimulation() {
         <p style="font-size:0.75rem;margin-top:6px;color:var(--muted)">Utilise les cours actuels et le plan défini dans <a href="#" onclick="navigate('planning')">📅 Planning Mensuel</a>.<br>Les ETFs reçoivent leur % sur le budget restant après les achats d'actions fixes.</p>
       </div>
     </div>
+
+    ${hasPlan ? `
+    <!-- BACKTESTING HISTORIQUE -->
+    <div class="card mb16 mt16" id="section-backtest">
+      <div class="section-title">📅 Backtesting Historique — Données Réelles</div>
+      <p style="color:var(--muted);font-size:0.82rem;margin:6px 0 12px">Rejouez votre plan mensuel sur des périodes historiques réelles. Les ETFs sans données utilisent automatiquement un proxy (ex&nbsp;: IWDA.L pour les fonds MSCI World).</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        ${HISTORICAL_SCENARIOS.map(sc => `<button onclick="runBacktest('${sc.id}')" style="border:1.5px solid ${sc.color};color:${sc.color};background:${sc.color}18;padding:7px 12px;border-radius:8px;cursor:pointer;font-size:0.8rem;line-height:1.4;transition:background 0.2s;text-align:left" title="${esc(sc.desc)}">${sc.icon} <strong>${esc(sc.label)}</strong><br><span style="font-size:0.72rem;opacity:0.8">${esc(sc.period)}</span></button>`).join('')}
+      </div>
+      <div id="backtest-results"><div style="text-align:center;color:var(--muted);font-size:0.85rem;padding:24px">↑ Sélectionnez une période ci-dessus pour lancer le backtesting</div></div>
+    </div>
+
+    <!-- PLANS ALTERNATIFS IA -->
+    <div class="card" id="section-ai-plans">
+      <div class="section-title">🤖 Plans Alternatifs IA</div>
+      <p style="color:var(--muted);font-size:0.82rem;margin:6px 0 14px">Claude analyse votre portefeuille et la conjoncture actuelle, puis génère 3 plans optimisés (Prudent / Équilibré / Dynamique) avec simulations automatiques et comparaison visuelle.</p>
+      <button class="btn btn-primary" onclick="aiGeneratePlans()" id="btn-ai-plans">✨ Générer les plans alternatifs</button>
+      <div id="ai-plans-results" style="margin-top:16px"></div>
+    </div>
+    ` : ''}
   `;
 }
 
@@ -2950,6 +3501,7 @@ function launchSimulation() {
   }
 
   const snapshots = runSimulation(S.sim);
+  S._lastSimSnapshots = snapshots;
   if (!snapshots || snapshots.length < 2) {
     toast('Erreur lors du calcul de la simulation.', 'error');
     return;
@@ -2966,7 +3518,7 @@ function launchSimulation() {
   renderSimResults(snapshots);
 }
 
-function runSimulation({ months, annualReturn, budget, startFromCurrent }) {
+function runSimulation({ months, annualReturn, budget, startFromCurrent, aiLoyalty }) {
   const monthlyGrowth = Math.pow(1 + (annualReturn || 7) / 100, 1 / 12);
   const etfItems   = S.data.planItems.filter(p => p.active && p.isEtf !== false);
   const stockItems = S.data.planItems.filter(p => p.active && p.isEtf === false);
@@ -2995,10 +3547,39 @@ function runSimulation({ months, annualReturn, budget, startFromCurrent }) {
   const getVal = () => Object.values(positions).reduce((s, p) => s + p.quantity * p.price, 0);
   const snapshots = [{ month: 0, portfolioValue: getVal(), totalDeposited, positions: simCopyPos(positions) }];
 
+  // Air Liquide loyalty setup
+  const AL_NOM = aiLoyalty?.enabled !== false && aiLoyalty ? aiLoyalty : null;
+  const _now = new Date();
+  const SIM_ABS_START = _now.getFullYear() * 12 + _now.getMonth(); // 0-indexed absolute month
+
   for (let m = 1; m <= months; m++) {
-    // 1. Versement mensuel (limité au plafond PEA)
-    const depositAmount = Math.min(budget, Math.max(0, PEA_MAX - totalDeposited));
-    totalDeposited += depositAmount;
+    const absMonth = SIM_ABS_START + m;
+    const simYear  = Math.floor(absMonth / 12);
+    const simMonth = (absMonth % 12) + 1; // 1=Jan … 12=Dec
+
+    // Air Liquide loyalty events (dividende en mai, actions gratuites en juin des années paires)
+    let bonusCash = 0;
+    const aiEvents = [];
+    if (AL_NOM && positions['AI.PA'] && positions['AI.PA'].quantity > 0) {
+      const alPos    = positions['AI.PA'];
+      const qualified = simYear >= AL_NOM.nominatifYear + 2;
+      if (simMonth === 5) {  // Mai : dividende
+        const base  = alPos.quantity * (AL_NOM.dividendPerShare || 3.70);
+        const total = qualified ? base * 1.1 : base;
+        bonusCash += total;
+        aiEvents.push({ type:'dividend', year:simYear, qty:alPos.quantity, perShare:AL_NOM.dividendPerShare||3.70, bonus:qualified, amount:total });
+      }
+      if (simMonth === 6 && simYear % 2 === 0) {  // Juin années paires : actions gratuites
+        const added = qualified ? Math.floor(alPos.quantity / 10) : 0;
+        aiEvents.push({ type:'freeShares', year:simYear, before:alPos.quantity, eligible:qualified, added });
+        alPos.quantity += added;
+      }
+    }
+
+    // 1. Versement mensuel (limité au plafond PEA) — dividendes ne comptent pas dans le plafond
+    const actualDeposit = Math.min(budget, Math.max(0, PEA_MAX - totalDeposited));
+    totalDeposited += actualDeposit;
+    const availableCash = actualDeposit + bonusCash;
 
     // 2. Achats actions fixes (en parts fixes/mois)
     let stockCost = 0;
@@ -3010,15 +3591,14 @@ function runSimulation({ months, annualReturn, budget, startFromCurrent }) {
       stockCost  += item.monthlyShares * p.price * feeMul;
     });
 
-    // 3. Budget ETF = ce qui reste après les actions fixes
-    const etfBudget = Math.max(0, depositAmount - stockCost);
+    // 3. Budget ETF = ce qui reste après les actions fixes (dividendes réinvestis inclus)
+    const etfBudget = Math.max(0, availableCash - stockCost);
     if (totalEtfPct > 0 && etfBudget > 0) {
       etfItems.forEach(item => {
         const p = positions[item.ticker];
         if (!p || !(item.allocationPct > 0)) return;
-        const frac   = item.allocationPct / totalEtfPct;          // proportion normalisée dans le bucket ETF
+        const frac   = item.allocationPct / totalEtfPct;
         const feeMul = 1 + (p.feePct || 0) / 100;
-        // parts fractionnaires pour la simulation (précision long terme)
         p.quantity += (etfBudget * frac) / (feeMul * p.price);
       });
     }
@@ -3026,7 +3606,9 @@ function runSimulation({ months, annualReturn, budget, startFromCurrent }) {
     // 4. Croissance des prix (rendement mensuel composé)
     Object.values(positions).forEach(p => { p.price *= monthlyGrowth; });
 
-    snapshots.push({ month: m, portfolioValue: getVal(), totalDeposited, positions: simCopyPos(positions) });
+    const snap = { month: m, portfolioValue: getVal(), totalDeposited, positions: simCopyPos(positions) };
+    if (aiEvents.length) snap.aiEvents = aiEvents;
+    snapshots.push(snap);
   }
   return snapshots;
 }
@@ -3074,6 +3656,7 @@ function renderSimResults(snapshots) {
   makeSimChart(snapshots);
   renderSimYearTable(snapshots);
   renderSimAllocTable(last.positions, last.portfolioValue);
+  renderAiLoyaltyEvents(snapshots);
 }
 
 function makeSimChart(snapshots) {
@@ -3204,6 +3787,71 @@ function renderSimAllocTable(finalPositions, totalPortfolioValue) {
       💡 <strong>% Bucket ETF</strong> = part dans le sous-ensemble ETF uniquement (hors actions) ·
       <strong>% Total PEA</strong> = part dans l'ensemble du portefeuille (ETFs + actions) ·
       Parts ETF en fractions pour la précision de la simulation long terme.
+    </div>
+  `;
+}
+
+function renderAiLoyaltyEvents(snapshots) {
+  const el = document.getElementById('sim-al-events');
+  if (!el) return;
+  const allEvents = snapshots.flatMap(s => s.aiEvents || []);
+  if (!allEvents.length) { el.innerHTML = ''; return; }
+
+  const dividends  = allEvents.filter(e => e.type === 'dividend');
+  const freeShares = allEvents.filter(e => e.type === 'freeShares');
+  const totalDividend   = dividends.reduce((s, e) => s + e.amount, 0);
+  const totalBonusAmt   = dividends.filter(e => e.bonus).reduce((s, e) => s + (e.amount - e.qty * e.perShare), 0);
+  const totalFreeShares = freeShares.reduce((s, e) => s + e.added, 0);
+
+  const MONTHS_FR = ['jan.','fév.','mars','avr.','mai','juin','juil.','août','sep.','oct.','nov.','déc.'];
+  el.innerHTML = `
+    <div class="card" style="margin-top:16px">
+      <div class="section-title mb12">🏭 Bénéfices Air Liquide reçus — simulation</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">
+        <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;text-align:center">
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:3px">Dividendes totaux</div>
+          <div style="font-size:1.1rem;font-weight:700;color:var(--accent)">${fc(totalDividend)}</div>
+        </div>
+        <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;text-align:center">
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:3px">Bonus nominatif (+10%)</div>
+          <div style="font-size:1.1rem;font-weight:700;color:#22c55e">${totalBonusAmt > 0 ? fc(totalBonusAmt) : '—'}</div>
+        </div>
+        <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;text-align:center">
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:3px">Actions gratuites reçues</div>
+          <div style="font-size:1.1rem;font-weight:700;color:#a855f7">${totalFreeShares > 0 ? '+' + totalFreeShares + ' action' + (totalFreeShares > 1 ? 's' : '') : '0'}</div>
+        </div>
+        <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;text-align:center">
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:3px">Attributions gratuites</div>
+          <div style="font-size:1.1rem;font-weight:700">${freeShares.filter(e => e.eligible).length} / ${freeShares.length}</div>
+        </div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Date</th><th>Événement</th><th>Détail</th><th>Montant / Qté</th><th>Bonus nominatif</th>
+        </tr></thead>
+        <tbody>${allEvents.map(e => {
+          if (e.type === 'dividend') {
+            const base = e.qty * e.perShare;
+            return `<tr>
+              <td>Mai ${e.year}</td>
+              <td>💰 Dividende AI.PA</td>
+              <td>${Math.round(e.qty)} actions × ${e.perShare.toFixed(2)} €</td>
+              <td class="positive">${fc(e.amount)}</td>
+              <td>${e.bonus
+                ? `<span style="color:#22c55e">+10% ✓ (+${fc(e.amount - base)})</span>`
+                : '<span style="color:var(--muted)">— (pas encore éligible)</span>'}</td>
+            </tr>`;
+          } else {
+            return `<tr>
+              <td>Juin ${e.year}</td>
+              <td>🎁 Actions gratuites</td>
+              <td>${e.eligible ? `${Math.round(e.before)} → ${Math.round(e.before + e.added)} actions (+${e.added})` : 'Pas encore éligible'}</td>
+              <td>${e.added > 0 ? `<span style="color:#a855f7;font-weight:600">+${e.added} action${e.added > 1 ? 's' : ''}</span>` : '—'}</td>
+              <td>${e.eligible ? '<span style="color:#22c55e">✓</span>' : '<span style="color:#f59e0b">⏳ 2 ans civils requis</span>'}</td>
+            </tr>`;
+          }
+        }).join('')}</tbody>
+      </table></div>
     </div>
   `;
 }

@@ -3,6 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#2d7ef7">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="PEA Manager">
+  <link rel="manifest" href="manifest.json">
   <title>PEA Manager 2026</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
@@ -483,6 +488,37 @@
   </div>
 </div>
 
+<!-- ===== MODAL: ALERTE DE COURS ===== -->
+<div id="modal-alert" class="modal-overlay">
+  <div class="modal" style="max-width:380px">
+    <div class="modal-header">
+      <span class="modal-title">🔔 Alerte de cours — <span id="alert-ticker"></span></span>
+      <button class="modal-close" onclick="closeModal('modal-alert')">×</button>
+    </div>
+    <form onsubmit="saveAlert(event)">
+      <div class="modal-body">
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:12px">Cours actuel : <strong id="alert-cur"></strong></div>
+        <input type="hidden" id="alert-ticker-hidden">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Seuil haut 📈 (alerte si ≥)</label>
+            <input type="number" id="alert-high" step="0.01" min="0" placeholder="Ex: 350.00">
+          </div>
+          <div class="form-group">
+            <label>Seuil bas 📉 (alerte si ≤)</label>
+            <input type="number" id="alert-low" step="0.01" min="0" placeholder="Ex: 280.00">
+          </div>
+        </div>
+        <div style="font-size:0.74rem;color:var(--muted)">Les alertes se déclenchent lors de la prochaine actualisation des cours. Laissez vide pour supprimer.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-alert')">Annuler</button>
+        <button type="submit" class="btn btn-primary">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- ===== TOASTS ===== -->
 <div id="toasts"></div>
 
@@ -548,7 +584,9 @@ function defData() {
     savedPlans: [],
     snapshots: [],
     priceCache: {},
-    pruOverrides: {}
+    pruOverrides: {},
+    alerts: {},
+    aiMemory: []
   };
 }
 
@@ -994,6 +1032,7 @@ async function fetchPrice(ticker, attempt = 1) {
     if (!m) throw new Error('No data');
     const result = { price: m.regularMarketPrice ?? m.previousClose, changePercent: m.regularMarketChangePercent ?? 0, name: m.longName || m.shortName || ticker, currency: m.currency || 'EUR', timestamp: Date.now() };
     S.data.priceCache[ticker] = result;
+    checkPriceAlerts(ticker, result.price);
     saveData();
     return result;
   } catch(e) {
@@ -1064,6 +1103,21 @@ NOTE : Analyse à titre informatif — l'investisseur garde la responsabilité f
       messages: Array.isArray(messages) ? messages : [{ role: 'user', content: messages }]
     })
   });
+  if (resp.status === 529 || resp.status === 503) {
+    // Overloaded — retry once after 5 seconds
+    await new Promise(r => setTimeout(r, 5000));
+    const resp2 = await fetch(CLAUDE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
+      body: JSON.stringify({ model:CLAUDE_MODEL, max_tokens:opts.maxTokens??4096, system:opts.system??defaultSystem, messages:Array.isArray(messages)?messages:[{role:'user',content:messages}] })
+    });
+    if (!resp2.ok) {
+      const e = await resp2.json().catch(()=>({}));
+      throw new Error((e.error?.message || 'Erreur API '+resp2.status) + ' — Réessayez dans quelques instants.');
+    }
+    const j2 = await resp2.json();
+    return j2.content[0].text;
+  }
   if (!resp.ok) {
     const e = await resp.json().catch(()=>({}));
     throw new Error(e.error?.message || 'Erreur API ' + resp.status);
@@ -1217,6 +1271,7 @@ function renderPortfolio() {
               </td>
               <td style="white-space:nowrap">
                 <button class="btn-icon" id="refresh-${esc(p.ticker)}" onclick="doRefreshOne('${esc(p.ticker)}')" title="Actualiser le cours">⟳</button>
+                <button class="btn-icon" onclick="openAlertModal('${esc(p.ticker)}')" title="Configurer une alerte de cours" style="color:${(S.data.alerts||{})[p.ticker]?.high||(S.data.alerts||{})[p.ticker]?.low?'var(--warning)':'var(--muted)'}">🔔</button>
                 <button class="btn-icon" onclick="editPosition('${esc(p.ticker)}')" title="Voir/modifier les transactions">✏️</button>
                 <button class="btn-icon" onclick="delPosition('${esc(p.ticker)}')" title="Supprimer la position">🗑</button>
               </td>
@@ -1232,6 +1287,8 @@ function renderPortfolio() {
         <button class="btn btn-primary" onclick="openTxModal()">+ Transaction</button>
       </div></div>
     `}
+    ${positions.length ? renderOverlapCard(positions) : ''}
+    ${positions.length ? renderDividendCard(positions) : ''}
   `;
 }
 
@@ -1998,6 +2055,20 @@ function renderAI() {
         <button class="btn btn-secondary btn-sm" onclick="clearAI()" style="margin-left:auto">🗑 Effacer</button>
       </div>
     </div>
+    ${(S.data.aiMemory||[]).length ? `
+    <div class="card mb16" style="padding:12px 16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div class="section-title" style="margin:0">📝 Mémoire des analyses (${(S.data.aiMemory||[]).length})</div>
+        <button class="btn btn-secondary btn-sm" onclick="S.data.aiMemory=[];saveData();renderAI()">Effacer mémoire</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto">
+        ${(S.data.aiMemory||[]).slice(0,5).map(m=>`
+          <div style="padding:6px 10px;background:var(--surface2);border-radius:5px;font-size:0.78rem">
+            <span style="color:var(--muted);margin-right:8px">${m.date}</span>${esc(m.summary)}…
+          </div>`).join('')}
+      </div>
+      <div style="font-size:0.72rem;color:var(--muted);margin-top:6px">Ces résumés sont automatiquement injectés dans le contexte des prochaines analyses.</div>
+    </div>` : ''}
     <div class="card mb16" style="padding:14px 16px">
       <div class="flex gap8">
         <textarea id="ai-q" placeholder="Posez une question sur votre portefeuille…" style="flex:1;height:70px;resize:none" ${!hasKey?'disabled':''} onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();aiSend()}"></textarea>
@@ -2012,7 +2083,7 @@ function renderAI() {
         : S.ai.map(m=>`
         <div class="ai-msg ${m.role}">
           <div class="ai-msg-role">${m.role==='user'?'👤 Vous':'🤖 Claude'} · ${m.time}</div>
-          <div>${m.role==='assistant'?mdToHtml(m.content):esc(m.content)}</div>
+          <div>${m.role==='assistant'&&m.isStructured?renderAnalysisCard(m.structuredData,m.structuredType):m.role==='assistant'?mdToHtml(m.content):esc(m.content)}</div>
         </div>
       `).join('')}
     </div>
@@ -2031,6 +2102,7 @@ async function aiRun(prompt) {
     const messages = S.ai.map(m => ({ role: m.role, content: m.content }));
     const res = await callClaude(messages);
     S.ai.push({ role:'assistant', content:res, time:new Date().toLocaleTimeString('fr-FR') });
+    saveAIMemory(res);
   } catch(e) {
     S.ai.push({ role:'assistant', content:`❌ Erreur: ${e.message}`, time:new Date().toLocaleTimeString('fr-FR') });
     toast(e.message, 'error', 6000);
@@ -2045,6 +2117,110 @@ async function aiSend() {
 }
 
 function clearAI() { S.ai = []; renderAI(); }
+
+// ===== VISUAL AI CARD RENDERING =====
+function parseAIJSON(text) {
+  let s = text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```\s*$/,'');
+  const start = s.indexOf('{'), end = s.lastIndexOf('}');
+  if (start===-1||end===-1) throw new Error('no JSON');
+  return JSON.parse(s.slice(start,end+1));
+}
+
+function verdictBadge(v) {
+  const cfg = {
+    'renforcer':['#22c55e','✅ Renforcer'],'continuer':['#22c55e','✅ Continuer'],
+    'maintenir':['#f59e0b','⏸ Maintenir'],'pause':['#f59e0b','⏸ Pause'],
+    'surveiller':['#f97316','⚠️ Surveiller'],'alléger':['#ef4444','🔴 Alléger'],
+    'sortie':['#ef4444','🔴 Sortie'],'augmenter':['#22c55e','📈 Augmenter'],
+    'réduire':['#f97316','📉 Réduire'],'attendre':['#ef4444','⏳ Attendre'],'neutre':['#f59e0b','⚡ Neutre']
+  };
+  const [c,l] = cfg[(v||'').toLowerCase()] || ['var(--muted)',esc(v||'—')];
+  return `<span style="background:${c}22;color:${c};border:1px solid ${c}55;border-radius:4px;padding:2px 9px;font-size:0.73rem;font-weight:700;white-space:nowrap">${l}</span>`;
+}
+
+function aiScoreBar(score,max=10) {
+  const pct=Math.min(100,(score/max)*100);
+  const c=pct>=70?'#22c55e':pct>=40?'#f59e0b':'#ef4444';
+  return `<div style="display:flex;align-items:center;gap:8px"><div style="flex:1;height:5px;background:var(--surface2);border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${c};border-radius:3px"></div></div><span style="font-size:0.78rem;color:${c};font-weight:700;min-width:32px;text-align:right">${score}/10</span></div>`;
+}
+
+function renderAnalysisCard(data, type) {
+  if (!data) return '<em style="color:var(--muted)">Données indisponibles</em>';
+  try {
+    if (type==='analyze') return renderAnalyzeCard(data);
+    if (type==='monthly') return renderMonthlyCard(data);
+    if (type==='risk')    return renderRiskCard(data);
+  } catch(e) { return `<em style="color:var(--muted)">Erreur rendu: ${esc(e.message)}</em>`; }
+  return '';
+}
+
+function renderAnalyzeCard(d) {
+  const sc=d.score>=7?'#22c55e':d.score>=5?'#f59e0b':'#ef4444';
+  return `<div style="display:flex;flex-direction:column;gap:10px">
+    <div style="background:var(--surface2);border-radius:10px;padding:14px;display:flex;align-items:center;gap:14px">
+      <div style="width:58px;height:58px;border-radius:50%;border:3px solid ${sc};display:flex;align-items:center;justify-content:center;flex-shrink:0"><span style="font-size:1.5rem;font-weight:800;color:${sc}">${d.score??'?'}</span></div>
+      <div><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Score global /10</div><div style="font-size:0.88rem;font-weight:600">${esc(d.verdict||'')}</div></div>
+    </div>
+    ${d.etfs?.length?`<div><div class="section-title" style="margin-bottom:6px">📊 ETFs</div>${d.etfs.map(e=>`<div style="background:var(--surface2);border-radius:8px;padding:11px 13px;margin-bottom:5px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px"><span style="font-weight:700">${esc(e.ticker)}</span>${verdictBadge(e.verdict)}</div>${e.note!==undefined?`<div style="margin-bottom:5px">${aiScoreBar(e.note)}</div>`:''}${e.ecart?`<div style="font-size:0.75rem;color:var(--muted)">Écart: <b style="color:var(--text)">${esc(e.ecart)}</b></div>`:''}${e.action?`<div style="font-size:0.8rem;color:var(--accent);margin-top:3px">${esc(e.action)}</div>`:''}${e.raison?`<div style="font-size:0.75rem;color:var(--muted);margin-top:2px">${esc(e.raison)}</div>`:''}</div>`).join('')}</div>`:''}
+    ${d.titres?.length?`<div><div class="section-title" style="margin-bottom:6px">🏢 Titres directs</div>${d.titres.map(t=>`<div style="background:var(--surface2);border-radius:8px;padding:11px 13px;margin-bottom:5px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px"><span style="font-weight:700">${esc(t.ticker)}</span>${verdictBadge(t.verdict)}</div>${t.note!==undefined?`<div style="margin-bottom:5px">${aiScoreBar(t.note)}</div>`:''}${t.utilite?`<div style="font-size:0.75rem;color:var(--muted)">Utilité: ${esc(t.utilite)}</div>`:''}${t.risque?`<div style="font-size:0.75rem;color:#f97316;margin-top:2px">⚠️ ${esc(t.risque)}</div>`:''}${t.rythme?`<div style="font-size:0.8rem;color:var(--accent);margin-top:3px">→ ${esc(t.rythme)}</div>`:''}</div>`).join('')}</div>`:''}
+    ${d.macro?.length?`<div><div class="section-title" style="margin-bottom:6px">🌍 Macro</div>${d.macro.map(m=>`<div style="background:var(--surface2);border-radius:7px;padding:8px 12px;margin-bottom:4px;display:flex;gap:8px;align-items:flex-start"><span>${m.force==='pour'?'🟢':'🔴'}</span><div><span style="font-size:0.82rem;font-weight:600">${esc(m.facteur)}</span><span style="font-size:0.76rem;color:var(--muted)"> — ${esc(m.impact)}</span></div></div>`).join('')}</div>`:''}
+    ${d.manque?.length?`<div><div class="section-title" style="margin-bottom:6px">🔍 Ce qui manque</div>${d.manque.map(m=>`<div style="background:var(--surface2);border-radius:7px;padding:8px 12px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center"><div><span style="font-weight:700;color:var(--accent)">${esc(m.ticker)}</span><span style="font-size:0.78rem;color:var(--muted);margin-left:8px">${esc(m.raison)}</span></div>${m.urgence?`<span style="font-size:0.7rem;color:${m.urgence==='haute'?'#ef4444':m.urgence==='modérée'?'#f59e0b':'var(--muted)'}">${esc(m.urgence)}</span>`:''}</div>`).join('')}</div>`:''}
+    ${d.actions?.length?`<div><div class="section-title" style="margin-bottom:6px">🎯 Plan d'action</div>${d.actions.map((a,i)=>`<div style="background:var(--surface2);border-radius:7px;padding:8px 12px;margin-bottom:4px;display:flex;gap:10px;align-items:flex-start"><span style="width:20px;height:20px;border-radius:50%;background:var(--accent);color:#fff;font-size:0.7rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${a.priorite||i+1}</span><div><div style="font-size:0.83rem;font-weight:600">${esc(a.action)}</div>${a.montant?`<span style="font-size:0.76rem;color:#22c55e;margin-right:6px">${esc(a.montant)}</span>`:''}${a.timing?`<span style="font-size:0.76rem;color:var(--muted)">${esc(a.timing)}</span>`:''}</div></div>`).join('')}</div>`:''}
+  </div>`;
+}
+
+function renderMonthlyCard(d) {
+  const tc=d.timing==='bon'?'#22c55e':d.timing==='attendre'?'#ef4444':'#f59e0b';
+  const tl=d.timing==='bon'?'✅ Bon moment':d.timing==='attendre'?'⏳ Attendre':'⚡ Neutre';
+  return `<div style="display:flex;flex-direction:column;gap:10px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center"><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:3px">Budget mensuel</div><div style="font-size:1.3rem;font-weight:800;color:var(--accent)">${d.budget_total?fc(d.budget_total):'—'}</div></div>
+      <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center"><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:3px">Timing marché</div><div style="font-size:0.95rem;font-weight:700;color:${tc}">${tl}</div>${d.timing_detail?`<div style="font-size:0.7rem;color:var(--muted);margin-top:3px">${esc(d.timing_detail)}</div>`:''}</div>
+    </div>
+    ${d.etfs?.length?`<div><div class="section-title" style="margin-bottom:6px">📊 Répartition ETFs</div><div style="overflow-x:auto"><table style="width:100%;font-size:0.78rem;border-collapse:collapse"><thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px 8px">ETF</th><th style="text-align:right;padding:4px 8px">Cours</th><th style="text-align:right;padding:4px 8px">Cible</th><th style="text-align:right;padding:4px 8px">Actuel</th><th style="text-align:right;padding:4px 8px">Montant</th><th style="text-align:right;padding:4px 8px">Parts</th></tr></thead><tbody>${d.etfs.map(e=>`<tr style="border-bottom:1px solid rgba(255,255,255,0.04)"><td style="padding:6px 8px;font-weight:700">${esc(e.ticker)}</td><td style="padding:6px 8px;text-align:right;color:var(--muted)">${esc(e.cours||'—')}</td><td style="padding:6px 8px;text-align:right">${e.cible_pct!==undefined?e.cible_pct+'%':'—'}</td><td style="padding:6px 8px;text-align:right">${e.actuel_pct!==undefined?e.actuel_pct+'%':'—'}</td><td style="padding:6px 8px;text-align:right;color:#22c55e;font-weight:600">${esc(e.montant||'—')}</td><td style="padding:6px 8px;text-align:right">${e.parts!==undefined?e.parts:'—'}</td></tr>${e.raison?`<tr><td colspan="6" style="padding:2px 8px 6px;font-size:0.72rem;color:var(--muted)">${esc(e.raison)}</td></tr>`:''}`).join('')}</tbody></table></div></div>`:''}
+    ${d.titres?.length?`<div><div class="section-title" style="margin-bottom:6px">🏢 Titres directs</div>${d.titres.map(t=>`<div style="background:var(--surface2);border-radius:8px;padding:10px 13px;margin-bottom:5px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div><span style="font-weight:700">${esc(t.ticker)}</span>${t.cours?`<span style="font-size:0.76rem;color:var(--muted);margin-left:8px">${esc(t.cours)}</span>`:''}${t.plan?`<div style="font-size:0.73rem;color:var(--muted)">Plan: ${esc(t.plan)}</div>`:''}${t.raison?`<div style="font-size:0.73rem;color:var(--muted)">${esc(t.raison)}</div>`:''}</div>${verdictBadge(t.recommandation)}</div>`).join('')}</div>`:''}
+    ${d.actualites_impact?`<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:5px">📰 Impact actualités</div><div style="font-size:0.81rem">${esc(d.actualites_impact)}</div></div>`:''}
+    ${d.actions?.length?`<div><div class="section-title" style="margin-bottom:6px">🎯 Instructions</div>${d.actions.map((a,i)=>`<div style="background:var(--surface2);border-radius:7px;padding:8px 12px;margin-bottom:4px;display:flex;gap:10px;align-items:flex-start"><span style="width:20px;height:20px;border-radius:50%;background:var(--accent);color:#fff;font-size:0.7rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${a.priorite||i+1}</span><div><div style="font-size:0.83rem;font-weight:600">${esc(a.action)}</div>${a.montant?`<span style="font-size:0.76rem;color:#22c55e;margin-right:6px">${esc(a.montant)}</span>`:''}${a.condition?`<span style="font-size:0.76rem;color:var(--muted)">${esc(a.condition)}</span>`:''}</div></div>`).join('')}</div>`:''}
+  </div>`;
+}
+
+function renderRiskCard(d) {
+  const sc=d.score_diversification>=7?'#22c55e':d.score_diversification>=5?'#f59e0b':'#ef4444';
+  const nC=n=>n==='élevé'?'#ef4444':n==='modéré'?'#f97316':'#f59e0b';
+  const nI=n=>n==='élevé'?'🔴':n==='modéré'?'🟠':'🟡';
+  return `<div style="display:flex;flex-direction:column;gap:10px">
+    <div style="background:var(--surface2);border-radius:8px;padding:13px;display:flex;align-items:center;gap:12px">
+      <div style="width:52px;height:52px;border-radius:50%;border:3px solid ${sc};display:flex;align-items:center;justify-content:center;flex-shrink:0"><span style="font-size:1.3rem;font-weight:800;color:${sc}">${d.score_diversification??'?'}</span></div>
+      <div style="flex:1"><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Diversification /10</div><div style="margin-bottom:5px">${aiScoreBar(d.score_diversification||0)}</div>${d.correlations?`<div style="font-size:0.76rem;color:var(--muted)">${esc(d.correlations)}</div>`:''}</div>
+    </div>
+    ${d.risques?.length?`<div><div class="section-title" style="margin-bottom:6px">⚠️ Risques</div>${d.risques.map(r=>`<div style="background:var(--surface2);border-radius:8px;padding:10px 13px;margin-bottom:5px;border-left:3px solid ${nC(r.niveau)}"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin-bottom:3px"><span style="font-size:0.83rem;font-weight:600">${nI(r.niveau)} ${esc(r.type)}</span>${r.horizon?`<span style="font-size:0.7rem;color:var(--muted);flex-shrink:0">${esc(r.horizon)}</span>`:''}</div>${r.detail?`<div style="font-size:0.76rem;color:var(--muted);margin-bottom:2px">${esc(r.detail)}</div>`:''}${r.impact_eur?`<div style="font-size:0.79rem;color:#ef4444;font-weight:600">${esc(r.impact_eur)}</div>`:''}</div>`).join('')}</div>`:''}
+    ${d.stress?.length?`<div><div class="section-title" style="margin-bottom:6px">💥 Stress tests</div><div style="overflow-x:auto"><table style="width:100%;font-size:0.78rem;border-collapse:collapse"><thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px 8px">Scénario</th><th style="text-align:right;padding:4px 8px">Perte €</th><th style="text-align:right;padding:4px 8px">%</th></tr></thead><tbody>${d.stress.map(s=>`<tr style="border-bottom:1px solid rgba(255,255,255,0.04)"><td style="padding:6px 8px">${esc(s.scenario)}</td><td style="padding:6px 8px;text-align:right;color:#ef4444;font-weight:600">${s.perte_eur!==undefined?fc(s.perte_eur):'—'}</td><td style="padding:6px 8px;text-align:right;color:#ef4444">${s.perte_pct!==undefined?s.perte_pct+'%':'—'}</td></tr>${s.detail?`<tr><td colspan="3" style="padding:2px 8px 6px;font-size:0.72rem;color:var(--muted)">${esc(s.detail)}</td></tr>`:''}`).join('')}</tbody></table></div></div>`:''}
+    ${d.recommandations_etf?.length||d.recommandations_titres?.length?`<div><div class="section-title" style="margin-bottom:6px">🛡 Recommandations</div>${d.recommandations_etf?.length?`<div style="margin-bottom:6px"><div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;margin-bottom:4px">ETFs</div>${d.recommandations_etf.map(r=>`<div style="background:var(--surface2);border-radius:6px;padding:6px 11px;font-size:0.8rem;margin-bottom:3px">→ ${esc(r)}</div>`).join('')}</div>`:''}${d.recommandations_titres?.length?`<div><div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Titres directs</div>${d.recommandations_titres.map(r=>`<div style="background:var(--surface2);border-radius:6px;padding:6px 11px;font-size:0.8rem;margin-bottom:3px">→ ${esc(r)}</div>`).join('')}</div>`:''}</div>`:''}
+    ${d.alertes?.length?`<div><div class="section-title" style="margin-bottom:6px">🔔 Déclencheurs</div>${d.alertes.map(a=>`<div style="background:var(--surface2);border-radius:7px;padding:8px 12px;margin-bottom:4px;display:flex;gap:10px;align-items:flex-start"><span style="font-weight:700;color:var(--accent);font-size:0.83rem;flex-shrink:0">${esc(a.ticker)}</span><span style="font-size:0.8rem;color:var(--muted)">${esc(a.declencheur)}</span></div>`).join('')}</div>`:''}
+  </div>`;
+}
+
+async function aiRunStructured(fullPrompt, type) {
+  const labels = { analyze:'📊 Analyse du portefeuille', monthly:'📅 Conseil achat mensuel', risk:'⚡ Analyse des risques' };
+  const now = new Date().toLocaleTimeString('fr-FR');
+  S.ai.push({ role:'user', content:labels[type]||'Analyse IA', time:now, isLabel:true });
+  renderAI();
+  const btn = document.getElementById('btn-ai-send');
+  if (btn) { btn.disabled=true; btn.innerHTML='<span class="spinner"></span>'; }
+  const jsonSystem = `Tu es un gérant de portefeuille senior spécialisé PEA français, niveau CFA, 20 ans d'expérience chez Amundi/BlackRock. Tu analyses avec précision et conviction.
+RÈGLE ABSOLUE: Tu réponds UNIQUEMENT avec un objet JSON valide. Pas de texte avant, pas de texte après, pas de bloc markdown. Juste le JSON brut commençant par { et finissant par }.`;
+  try {
+    const res = await callClaude([{ role:'user', content:fullPrompt }], { system: jsonSystem, maxTokens: 4096 });
+    let data = null;
+    try { data = parseAIJSON(res); } catch(e) { /* fall back to markdown */ }
+    S.ai.push({ role:'assistant', content:res, time:new Date().toLocaleTimeString('fr-FR'), isStructured:!!data, structuredType:type, structuredData:data });
+    saveAIMemory(res);
+  } catch(e) {
+    S.ai.push({ role:'assistant', content:`❌ Erreur: ${e.message}`, time:new Date().toLocaleTimeString('fr-FR') });
+    toast(e.message,'error',6000);
+  }
+  renderAI();
+}
 
 function buildPortfolioContext() {
   const { positions, cash, deposited, portValue, totalCost, pnl, pnlP } = computeSummary();
@@ -2105,107 +2281,52 @@ ${recent.map(tx=>`• ${fd(tx.date)}: ${txLbl(tx.type)} ${fn(tx.quantity,4)} x $
 
 ACTUALITÉS RÉCENTES (${news.length} titres chargés):
 ${news.length ? news.map((n,i)=>`${i+1}. ${n}`).join('\n') : '⚠️ Aucune actualité chargée — va dans l\'onglet 📰 Actualités pour enrichir l\'analyse'}
-=== FIN DES DONNÉES ===`;
+${getAIMemoryContext()}=== FIN DES DONNÉES ===`;
 }
 
 async function aiAnalyze() {
   const ctx = buildPortfolioContext();
-  await aiRun(`${ctx}
+  await aiRunStructured(`${ctx}
 
-MISSION — ANALYSE DE PORTEFEUILLE NIVEAU INSTITUTIONNEL:
+MISSION — ANALYSE DE PORTEFEUILLE NIVEAU INSTITUTIONNEL.
 
-RAPPEL STRUCTUREL OBLIGATOIRE: Ce portefeuille comporte deux catégories distinctes à traiter différemment.
-- ETFs : gérés par allocation cible en %. Analyser l'écart entre pondération actuelle et cible, et la pertinence des cibles elles-mêmes.
-- Titres directs : achetés en nombre de parts fixe par conviction, SANS cible %. Ne JAMAIS les évaluer à l'aune d'un % "idéal" du portefeuille. Les analyser sous l'angle de leur utilité propre (dividendes, thème, secteur), de leur risque intrinsèque, et de la question : faut-il continuer à acheter, faire une pause, ou sortir ?
+RÈGLES OBLIGATOIRES:
+- ETFs : analyser l'écart entre pondération actuelle et cible %, la pertinence macro des cibles.
+- Titres directs : analyser utilité propre, risque intrinsèque, rythme d'achat mensuel. JAMAIS de cible % pour eux.
 
-## 1. VERDICT GLOBAL (note /10 + justification en 3 lignes max)
-Dis clairement si ce portefeuille est bien construit ou s'il faut le revoir en profondeur. Pas de diplomatie inutile.
-
-## 2. ANALYSE ETF PAR ETF
-Pour chaque ETF, donne :
-- Verdict : ✅ Renforcer / ⏸ Maintenir / ⚠️ Surveiller / 🔴 Alléger
-- Écart cible vs réel, justification macro, action recommandée avec montant précis
-
-## 3. ANALYSE TITRE PAR TITRE (titres directs)
-Pour chaque titre direct, donne :
-- Verdict : ✅ Continuer les achats mensuels / ⏸ Pause / ⚠️ Surveiller / 🔴 Envisager la sortie
-- Utilité dans le portefeuille : que fait ce titre que les ETFs ne font pas ?
-- Risque spécifique à surveiller
-- Recommandation sur le rythme d'achat mensuel (maintenir, augmenter, réduire)
-
-## 4. CONTEXTE MACRO ACTUELLEMENT FAVORABLE OU NON ?
-Quelles forces macro (taux BCE/Fed, dollar/euro, croissance US/EU, inflation) jouent POUR ou CONTRE chaque position en ce moment ? Utilise les news disponibles pour contextualiser.
-
-## 5. CE QUI MANQUE À CE PORTEFEUILLE
-Y a-t-il des expositions absentes qui devraient y être ? Des ETF éligibles PEA qui amélioreraient le profil rendement/risque ? Donne des noms précis (ticker) et explique pourquoi maintenant.
-
-## 6. PLAN D'ACTION — PRIORITÉS CE MOIS
-Liste ordonnée d'actions concrètes à réaliser, avec montants, prix cibles si pertinents, et raison du timing.`);
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
+Schéma exact (tous les champs requis):
+{"score":<integer 0-10>,"verdict":"<2-3 phrases directes>","etfs":[{"ticker":"","verdict":"renforcer|maintenir|surveiller|alléger","note":<0-10>,"ecart":"","action":"","raison":""}],"titres":[{"ticker":"","verdict":"continuer|pause|surveiller|sortie","note":<0-10>,"utilite":"","risque":"","rythme":""}],"macro":[{"force":"pour|contre","facteur":"","impact":""}],"manque":[{"ticker":"","raison":"","urgence":"haute|modérée|faible"}],"actions":[{"priorite":<1-5>,"action":"","montant":"","timing":""}]}`, 'analyze');
 }
 
 async function aiMonthly() {
   const ctx = buildPortfolioContext();
-  await aiRun(`${ctx}
+  await aiRunStructured(`${ctx}
 
-MISSION — PLAN D'INVESTISSEMENT MENSUEL PROFESSIONNEL (budget: ${fc(S.data.settings.monthlyBudget)}):
+MISSION — PLAN D'INVESTISSEMENT MENSUEL (budget: ${fc(S.data.settings.monthlyBudget)}).
 
-RAPPEL STRUCTUREL OBLIGATOIRE: Deux logiques coexistent dans ce portefeuille.
-- ETFs : budget alloué en % — raisonner en montants et en réequilibrage vers les cibles.
-- Titres directs : achetés en nombre de parts fixe par mois, SANS cible %. Pour eux, la question du mois est : continuer le plan ? Ajuster le nombre de parts ? Passer son tour ce mois-ci ? Ne JAMAIS suggérer un % cible pour un titre direct.
+RÈGLES OBLIGATOIRES:
+- ETFs : montants selon % cibles, raisonner en réequilibrage.
+- Titres directs : décision sur le plan fixe (continuer/pause/ajuster). JAMAIS de cible % pour eux.
 
-## 1. TABLEAU DE DÉCISION DU MOIS
-Construis deux tableaux distincts :
-
-**ETFs** (répartition du budget ETF par cibles %) :
-| ETF | Cours actuel | Cible % | Poids actuel % | Montant conseillé | Nb parts | Priorité | Raison |
-
-**Titres directs** (décision sur le rythme d'achat fixe) :
-| Titre | Cours actuel | Plan habituel | Recommandation ce mois | Raison |
-
-## 2. EST-CE LE BON MOMENT D'ACHETER ?
-Analyse le timing : les marchés sont-ils sur des niveaux d'entrée corrects ou faut-il attendre un repli ? Sur quels ETF/titres spécifiquement ? Donne des niveaux de cours concrets pour déclencher l'achat si tu conseilles d'attendre.
-
-## 3. IMPACT DES ACTUALITÉS SUR LES CHOIX DU MOIS
-Comment les news récentes chargées modifient-elles les priorités d'achat de ce mois ? Y a-t-il un secteur ou une zone géographique à favoriser ou éviter en ce moment ? Pour les titres directs, y a-t-il une actualité spécifique qui change la conviction ?
-
-## 4. RÉPARTITION ETF — ÉCART À COMBLER
-Compare l'allocation actuelle des ETFs à leurs cibles. Quel écart combler en priorité avec le budget ETF disponible ?
-
-## 5. INSTRUCTIONS FINALES — CE QU'IL FAUT FAIRE CETTE SEMAINE
-Actions classées par ordre de priorité, avec montant exact pour les ETFs et nombre de parts pour les titres directs, prix d'entrée cible, et conditions d'exécution.`);
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
+Schéma exact:
+{"budget_total":${S.data.settings.monthlyBudget},"timing":"bon|neutre|attendre","timing_detail":"<1 phrase>","etfs":[{"ticker":"","cours":"","cible_pct":<number>,"actuel_pct":<number>,"montant":"","parts":<number>,"priorite":<1-5>,"raison":""}],"titres":[{"ticker":"","cours":"","plan":"","recommandation":"maintenir|pause|augmenter|réduire","raison":""}],"actualites_impact":"<2-3 phrases>","actions":[{"priorite":<1-5>,"action":"","montant":"","condition":""}]}`, 'monthly');
 }
 
 async function aiRisk() {
   const ctx = buildPortfolioContext();
-  await aiRun(`${ctx}
+  await aiRunStructured(`${ctx}
 
-MISSION — ANALYSE DES RISQUES NIVEAU PROFESSIONNEL:
+MISSION — ANALYSE DES RISQUES NIVEAU PROFESSIONNEL.
 
-RAPPEL STRUCTUREL OBLIGATOIRE: Ce portefeuille combine deux types d'instruments aux profils de risque fondamentalement différents.
-- ETFs : risque de marché systémique, corrélation inter-ETF, risque de concentration géographique/sectorielle. Évaluer en termes d'allocation et de rééquilibrage.
-- Titres directs : risque idiosyncratique (propre à l'entreprise), pas de cible % donc pas de "sur-pondération" à corriger — mais évaluer si le risque spécifique est acceptable et si les achats mensuels doivent être maintenus en cas de détérioration du dossier.
+RÈGLES OBLIGATOIRES:
+- ETFs : risques systémiques, corrélation, concentration géographique/sectorielle.
+- Titres directs : risques idiosyncratiques uniquement. JAMAIS de notion de sur/sous-pondération %.
 
-## 1. RISQUES CRITIQUES IDENTIFIÉS
-Pour chaque risque : niveau (🔴 Élevé / 🟠 Modéré / 🟡 Faible), impact potentiel estimé en € sur le portefeuille, horizon temporel probable.
-Distinguer les risques systémiques (qui touchent les ETFs) des risques spécifiques (propres à chaque titre direct).
-
-## 2. TESTS DE RÉSISTANCE (STRESS TESTS)
-- Scénario Krach -30% (type 2022 ou 2008) : perte estimée en € et en %, positions les plus touchées
-- Scénario Récession US+EU : impact sur chaque ETF du portefeuille
-- Scénario Remontée rapide des taux (+200bp) : quel impact sur les valorisations ?
-- Scénario Dollar fort (+15%) : impact sur les ETF exposés aux marchés US
-- Pour chaque titre direct : quel scénario propre à l'entreprise (profit warning, scandale, disruption sectorielle) changerait la conviction ?
-
-## 3. CORRÉLATION RÉELLE & DIVERSIFICATION EFFECTIVE
-Ces positions sont-elles vraiment diversifiées ou corrélées à 90% ? Donne un score de diversification réelle (1-10) et explique pourquoi. Les titres directs apportent-ils une vraie décorrélation ou amplifient-ils les risques déjà présents dans les ETFs ?
-
-## 4. RECOMMANDATIONS POUR RÉDUIRE LES RISQUES
-Pour les ETFs : actions concrètes et chiffrées sur les % à réallouer, vers quels actifs moins corrélés éligibles PEA.
-Pour les titres directs : faut-il suspendre les achats mensuels sur l'un d'eux ? Y a-t-il un dossier qui se détériore et mérite une sortie progressive ?
-
-## 5. NIVEAUX D'ALERTE & DÉCLENCHEURS D'ACTION
-Pour chaque ETF : quel cours ou événement macro déclencherait un rééquilibrage ?
-Pour chaque titre direct : quel événement spécifique (résultats, guidance, actualité sectorielle) justifierait de stopper les achats ou de solder la position ?`);
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
+Schéma exact:
+{"score_diversification":<integer 0-10>,"correlations":"<1-2 phrases>","risques":[{"niveau":"élevé|modéré|faible","type":"","detail":"","impact_eur":"<ex: -6700€ sur krach -30%>","horizon":"Court|Moyen|Long terme"}],"stress":[{"scenario":"","perte_eur":<number négatif>,"perte_pct":<number négatif>,"detail":""}],"recommandations_etf":[""],"recommandations_titres":[""],"alertes":[{"ticker":"","declencheur":""}]}`, 'risk');
 }
 
 // ======================================================
@@ -3501,7 +3622,8 @@ function renderSimulation() {
             </label>
           </div>
         </div>
-        <button class="btn btn-primary" onclick="launchSimulation()">▶ Lancer la simulation</button>
+        <button class="btn btn-primary" onclick="launchSimulation()">▶ Simuler</button>
+        <button class="btn btn-secondary" onclick="launchMonteCarlo()" title="500 scénarios aléatoires — voir la plage de résultats possibles">🎲 Monte Carlo</button>
       </div>
     </div>
 
@@ -3589,6 +3711,20 @@ function renderSimulation() {
         <div id="sim-alloc-table"></div>
       </div>
       <div id="sim-al-events"></div>
+    </div>
+
+    <!-- MONTE CARLO RESULTS -->
+    <div id="mc-results" style="display:none;margin-top:20px">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div>
+            <div class="section-title" style="margin:0">Simulation Monte Carlo — 500 scénarios</div>
+            <div style="font-size:0.75rem;color:var(--muted);margin-top:3px">Distribution des rendements annuels suivant N(μ, σ=15%) — zones de confiance 10/25/50/75/90e centile</div>
+          </div>
+        </div>
+        <div style="height:300px;position:relative"><canvas id="chart-mc"></canvas></div>
+        <div id="mc-stats" style="margin-top:16px"></div>
+      </div>
     </div>
 
     <!-- EMPTY STATE -->
@@ -4280,7 +4416,7 @@ async function renderPerformance() {
 
     <!-- PERFORMANCES ANNUELLES -->
     ${yearlyReturns.length ? `
-    <div class="card">
+    <div class="card mb16">
       <div class="section-title mb16">Performances Annuelles</div>
       <div class="table-wrap"><table>
         <thead><tr><th>Année</th><th>Valeur début</th><th>Valeur fin</th><th>Performance</th><th>Capital total versé</th></tr></thead>
@@ -4293,12 +4429,241 @@ async function renderPerformance() {
         </tr>`).join('')}</tbody>
       </table></div>
     </div>` : `
-    <div class="card">
+    <div class="card mb16">
       <div class="section-title">Performances annuelles</div>
       <div style="color:var(--muted);font-size:0.83rem;padding:10px 0">Aucun historique de snapshots disponible. Les données s'accumuleront automatiquement chaque jour.</div>
     </div>`}
+
+    <!-- SIMULATEUR FISCAL -->
+    ${(() => {
+      const openDate = allDeps[0]?.date;
+      if (!openDate) return `<div class="card"><div class="section-title">Simulateur Fiscal PEA</div><div style="color:var(--muted);font-size:0.83rem;padding:10px 0">Aucun versement enregistré.</div></div>`;
+      const msOpen = new Date(openDate).getTime();
+      const yearsOpen = (Date.now() - msOpen) / (365.25 * 24 * 3600 * 1000);
+      const after5y = yearsOpen >= 5;
+      const d5y = new Date(msOpen + 5 * 365.25 * 24 * 3600 * 1000);
+      const daysTo5y = Math.max(0, Math.ceil((d5y - new Date()) / 86400000));
+      const halfTotal = Math.round(total * 0.5 / 100) * 100;
+      return `
+      <div class="card">
+        <div class="section-title mb16">Simulateur Fiscal — Impact d'un retrait PEA</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px">
+          <div style="padding:10px 14px;background:var(--surface2);border-radius:6px">
+            <div style="font-size:0.7rem;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em">Date ouverture (estimée)</div>
+            <div style="font-weight:600">${fd(openDate)}</div>
+            <div style="font-size:0.75rem;color:var(--muted);margin-top:3px">${fn(yearsOpen, 1)} ans · ${Math.round(yearsOpen * 365.25)} jours</div>
+          </div>
+          <div style="padding:10px 14px;background:var(--surface2);border-radius:6px">
+            <div style="font-size:0.7rem;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em">Valeur totale liquidable</div>
+            <div style="font-weight:600">${fc(total)}</div>
+            <div style="font-size:0.75rem;color:var(--muted);margin-top:3px">P&L latente: ${fc(pnl)} (${fp(pnlP)})</div>
+          </div>
+          <div style="padding:10px 14px;background:${after5y ? 'rgba(22,201,93,0.08)' : 'rgba(245,158,11,0.08)'};border-radius:6px;border:1px solid ${after5y ? 'rgba(22,201,93,0.2)' : 'rgba(245,158,11,0.2)'}">
+            <div style="font-size:0.7rem;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em">Régime fiscal actuel</div>
+            <div style="font-weight:600;color:${after5y ? 'var(--success)' : 'var(--warning)'}">${after5y ? '✅ 17,2 % PS uniquement' : '⚠️ Flat tax 30 %'}</div>
+            ${!after5y ? `<div style="font-size:0.73rem;color:var(--muted);margin-top:3px">Régime PS seul dans ${daysTo5y} j (${fd(d5y.toISOString().slice(0,10))})</div>` : `<div style="font-size:0.73rem;color:var(--muted);margin-top:3px">Retraits partiels autorisés sans clôture</div>`}
+          </div>
+        </div>
+        <div style="margin-bottom:14px">
+          <label style="font-size:0.8rem;color:var(--muted);display:block;margin-bottom:7px">Montant du retrait simulé</label>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="number" id="fiscal-amount" min="0" max="${total.toFixed(0)}" step="100" value="${halfTotal}"
+              style="width:140px;padding:7px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.9rem"
+              oninput="document.getElementById('fiscal-slider').value=this.value;updateFiscalCalc(this.value)">
+            <input type="range" id="fiscal-slider" min="0" max="${total.toFixed(0)}" step="100" value="${halfTotal}"
+              style="flex:1;min-width:120px;accent-color:var(--accent)"
+              oninput="document.getElementById('fiscal-amount').value=this.value;updateFiscalCalc(this.value)">
+            <button class="btn btn-secondary btn-sm" onclick="(function(){const v=${total.toFixed(0)};document.getElementById('fiscal-amount').value=v;document.getElementById('fiscal-slider').value=v;updateFiscalCalc(v)})()">Tout retirer</button>
+          </div>
+        </div>
+        <div id="fiscal-result"></div>
+      </div>`;
+    })()}
   `;
-  requestAnimationFrame(() => makePerfCompareChart(snaps, bench));
+  requestAnimationFrame(() => { makePerfCompareChart(snaps, bench); updateFiscalCalc(document.getElementById('fiscal-amount')?.value); });
+}
+
+// ======================================================
+// MONTE CARLO
+// ======================================================
+function randNormal(mean, std) {
+  // Box-Muller transform
+  const u = 1 - Math.random(), v = Math.random();
+  return mean + std * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function launchMonteCarlo() {
+  const etfItems  = S.data.planItems.filter(p => p.active && p.isEtf !== false);
+  const stockItems = S.data.planItems.filter(p => p.active && p.isEtf === false);
+  if (!etfItems.length && !stockItems.length) {
+    toast('Configurez d\'abord votre Planning Mensuel', 'error'); return;
+  }
+  S.sim = S.sim || {};
+  S.sim.months   = parseInt(document.getElementById('sim-months')?.value) || 36;
+  S.sim.annualReturn = parseFloat(document.getElementById('sim-return')?.value) ?? 7;
+  S.sim.budget   = parseFloat(document.getElementById('sim-budget')?.value) || S.data.settings.monthlyBudget;
+  S.sim.startFromCurrent = document.querySelector('[name=sim-start]:checked')?.value !== 'zero';
+
+  const N = 500;
+  const months = S.sim.months;
+  const mu  = (S.sim.annualReturn ?? 7) / 100;
+  const sigma = 0.15; // volatilité annuelle supposée 15%
+  const budget = S.sim.budget;
+
+  // Trajectoires : chaque sim retourne la valeur finale par mois
+  const allPaths = [];
+  for (let s = 0; s < N; s++) {
+    const monthlyReturn = randNormal(Math.pow(1 + mu, 1/12) - 1, sigma / Math.sqrt(12));
+    const savedPlan = S.data.planItems;
+    // Simulation rapide (valeur seule, pas détail positions)
+    let val = S.sim.startFromCurrent
+      ? computePositions().reduce((acc, p) => acc + p.marketValue, 0)
+      : 0;
+    const path = [val];
+    for (let m = 0; m < months; m++) {
+      const r = randNormal(Math.pow(1 + mu, 1/12) - 1, sigma / Math.sqrt(12));
+      val = val * (1 + r) + budget;
+      path.push(Math.max(0, val));
+    }
+    allPaths.push(path);
+  }
+
+  // Calculer les centiles à chaque mois
+  const pctLabels = [10, 25, 50, 75, 90];
+  const pctiles = pctLabels.map(() => []);
+  for (let m = 0; m <= months; m++) {
+    const vals = allPaths.map(p => p[m]).sort((a, b) => a - b);
+    pctLabels.forEach((p, i) => {
+      const idx = Math.floor(p / 100 * N);
+      pctiles[i].push(vals[Math.min(idx, N - 1)]);
+    });
+  }
+
+  const labels = Array.from({ length: months + 1 }, (_, i) => `M+${i}`);
+  const invested = Array.from({ length: months + 1 }, (_, i) => {
+    const start = S.sim.startFromCurrent ? computePositions().reduce((acc, p) => acc + p.marketValue, 0) : 0;
+    return start + budget * i;
+  });
+
+  // Affichage
+  document.getElementById('sim-results').style.display = 'none';
+  document.getElementById('sim-empty').style.display   = 'none';
+  document.getElementById('mc-results').style.display  = 'block';
+
+  const last50  = pctiles[2][months];
+  const last10  = pctiles[0][months];
+  const last90  = pctiles[4][months];
+  const lastInv = invested[months];
+  document.getElementById('mc-stats').innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">
+      ${[['10e centile (pessimiste)',pctiles[0][months],'var(--danger)'],
+         ['25e centile',pctiles[1][months],'var(--warning)'],
+         ['50e centile (médiane)',pctiles[2][months],'var(--accent)'],
+         ['75e centile',pctiles[3][months],'var(--success)'],
+         ['90e centile (optimiste)',pctiles[4][months],'#22c55e']
+        ].map(([lbl,val,col]) => `
+        <div style="padding:10px;background:var(--surface2);border-radius:6px;text-align:center">
+          <div style="font-size:0.7rem;color:var(--muted);margin-bottom:4px">${lbl}</div>
+          <div style="font-weight:700;color:${col}">${fc(val)}</div>
+        </div>`).join('')}
+    </div>
+    <div style="margin-top:10px;padding:10px 14px;background:var(--surface2);border-radius:6px;font-size:0.82rem">
+      Capital versé total: <strong>${fc(lastInv)}</strong> ·
+      Médiane: <strong style="color:var(--accent)">${fc(last50)}</strong> (+${fp((last50-lastInv)/lastInv*100)}) ·
+      Fourchette 80%: ${fc(last10)} — ${fc(last90)}
+    </div>
+  `;
+
+  requestAnimationFrame(() => makeMCChart(labels, pctiles, invested));
+}
+
+function makeMCChart(labels, pctiles, invested) {
+  destroyChart('mc');
+  const ctx = document.getElementById('chart-mc');
+  if (!ctx) return;
+  const stride = Math.max(1, Math.ceil(labels.length / 60));
+  const idx = labels.map((_, i) => i).filter(i => i % stride === 0 || i === labels.length - 1);
+  const lbl = idx.map(i => labels[i]);
+  const colors = ['#ef4444','#f59e0b','#3b82f6','#22c55e','#16c95d'];
+  const names  = ['10e centile','25e centile','Médiane (50e)','75e centile','90e centile'];
+  S.charts['mc'] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: lbl,
+      datasets: [
+        ...pctiles.map((p, i) => ({
+          label: names[i], data: idx.map(j => p[j]),
+          borderColor: colors[i], backgroundColor: 'transparent',
+          borderWidth: i === 2 ? 2.5 : 1.5,
+          borderDash: i === 2 ? [] : [4, 3],
+          pointRadius: 0, tension: 0.3
+        })),
+        { label: 'Capital versé', data: idx.map(j => invested[j]),
+          borderColor: '#94a3b8', backgroundColor: 'transparent',
+          borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0, tension: 0.3 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 14, padding: 10 } },
+        tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${fc(c.raw)}` } }
+      },
+      scales: {
+        x: { grid: { color: '#182a42' }, ticks: { color: '#6b7e96', maxTicksLimit: 8, font: { size: 10 } } },
+        y: { grid: { color: '#182a42' }, ticks: { color: '#6b7e96', font: { size: 10 }, callback: v => fc(v) } }
+      }
+    }
+  });
+}
+
+function updateFiscalCalc(amountStr) {
+  const el = document.getElementById('fiscal-result');
+  if (!el) return;
+  const amount = parseFloat(amountStr) || 0;
+  if (amount <= 0) { el.innerHTML = ''; return; }
+  const { portValue, cash, totalCost, pnl } = computeSummary();
+  const total = portValue + Math.max(0, cash);
+  if (total <= 0) return;
+  const openDate = (S.data.deposits || []).filter(d => d.type === 'deposit').sort((a,b) => a.date.localeCompare(b.date))[0]?.date;
+  if (!openDate) return;
+  const yearsOpen = (Date.now() - new Date(openDate).getTime()) / (365.25 * 24 * 3600 * 1000);
+  const after5y = yearsOpen >= 5;
+  const ratio = Math.min(1, amount / total);
+  const costBasis = totalCost * ratio;
+  const gain = amount - costBasis;
+  const taxRate = after5y ? 0.172 : 0.30;
+  const tax = Math.max(0, gain * taxRate);
+  const net = amount - tax;
+  const isAll = amount >= total * 0.999;
+  const saving5y = (!after5y && gain > 0) ? gain * (0.30 - 0.172) : 0;
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:${saving5y > 0 || (isAll && !after5y) ? '10px' : '0'}">
+      <div style="padding:10px;background:var(--surface2);border-radius:6px;text-align:center">
+        <div style="font-size:0.7rem;color:var(--muted);margin-bottom:4px;text-transform:uppercase">Retrait brut</div>
+        <div style="font-weight:700;font-size:1.05rem">${fc(amount)}</div>
+        <div style="font-size:0.72rem;color:var(--muted);margin-top:2px">${(ratio * 100).toFixed(1)}% du PEA</div>
+      </div>
+      <div style="padding:10px;background:var(--surface2);border-radius:6px;text-align:center">
+        <div style="font-size:0.7rem;color:var(--muted);margin-bottom:4px;text-transform:uppercase">Plus-value taxable</div>
+        <div style="font-weight:700;font-size:1.05rem;color:${gain > 0 ? 'var(--success)' : 'var(--muted)'}">${fc(gain)}</div>
+        <div style="font-size:0.72rem;color:var(--muted);margin-top:2px">PRU retiré: ${fc(costBasis)}</div>
+      </div>
+      <div style="padding:10px;background:var(--surface2);border-radius:6px;text-align:center">
+        <div style="font-size:0.7rem;color:var(--muted);margin-bottom:4px;text-transform:uppercase">Impôt (${(taxRate * 100).toFixed(1)}%)</div>
+        <div style="font-weight:700;font-size:1.05rem;color:var(--danger)">${fc(tax)}</div>
+        <div style="font-size:0.72rem;color:var(--muted);margin-top:2px">${after5y ? 'PS uniquement' : '12,8% IR + 17,2% PS'}</div>
+      </div>
+      <div style="padding:10px;background:rgba(22,201,93,0.08);border:1px solid rgba(22,201,93,0.2);border-radius:6px;text-align:center">
+        <div style="font-size:0.7rem;color:var(--muted);margin-bottom:4px;text-transform:uppercase">Net reçu</div>
+        <div style="font-weight:700;font-size:1.05rem;color:var(--success)">${fc(net)}</div>
+        <div style="font-size:0.72rem;color:var(--muted);margin-top:2px">${gain > 0 ? 'Taux eff. ' + ((tax / amount) * 100).toFixed(1) + '%' : 'Aucune imposition'}</div>
+      </div>
+    </div>
+    ${saving5y > 0 ? `<div style="padding:9px 14px;background:rgba(245,158,11,0.08);border-radius:6px;border:1px solid rgba(245,158,11,0.15);font-size:0.82rem;color:var(--warning);margin-bottom:8px">⏳ En attendant les 5 ans du PEA, vous économiseriez <strong>${fc(saving5y)}</strong> d'impôt sur ce retrait (suppression des 12,8 % d'IR).</div>` : ''}
+    ${isAll && !after5y ? `<div style="padding:9px 14px;background:rgba(240,58,58,0.08);border-radius:6px;font-size:0.82rem;color:var(--danger)">⚠️ Un retrait total avant 5 ans entraîne la <strong>clôture définitive du PEA</strong>. Le compte ne peut pas être rouvert.</div>` : ''}
+  `;
 }
 
 function renderPage(page) {
@@ -4325,6 +4690,217 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+// ======================================================
+// P8 — ALERTES DE COURS
+// ======================================================
+function checkPriceAlerts(ticker, price) {
+  const alerts = S.data.alerts || {};
+  const a = alerts[ticker];
+  if (!a) return;
+  if (a.high && price >= a.high) {
+    toast(`🔔 ${ticker} : cours ${fc(price)} ≥ seuil haut ${fc(a.high)}`, 'success', 10000);
+  }
+  if (a.low && price <= a.low) {
+    toast(`🔔 ${ticker} : cours ${fc(price)} ≤ seuil bas ${fc(a.low)}`, 'warning', 10000);
+  }
+}
+
+function openAlertModal(ticker) {
+  const a = (S.data.alerts || {})[ticker] || {};
+  const cur = S.data.priceCache[ticker]?.price;
+  document.getElementById('alert-ticker').textContent = ticker;
+  document.getElementById('alert-cur').textContent = cur ? fc(cur) : '—';
+  document.getElementById('alert-high').value = a.high || '';
+  document.getElementById('alert-low').value  = a.low  || '';
+  document.getElementById('alert-ticker-hidden').value = ticker;
+  openModal('modal-alert');
+}
+
+function saveAlert(e) {
+  e.preventDefault();
+  const ticker = document.getElementById('alert-ticker-hidden').value;
+  const high = parseFloat(document.getElementById('alert-high').value) || null;
+  const low  = parseFloat(document.getElementById('alert-low').value)  || null;
+  if (!S.data.alerts) S.data.alerts = {};
+  if (!high && !low) {
+    delete S.data.alerts[ticker];
+    toast('Alerte supprimée', 'success');
+  } else {
+    S.data.alerts[ticker] = { high, low };
+    toast(`Alerte enregistrée pour ${ticker}`, 'success');
+  }
+  saveData();
+  closeModal('modal-alert');
+  if (S.page === 'portfolio') renderPortfolio();
+}
+
+// ======================================================
+// P7 — CALENDRIER DIVIDENDES (base statique)
+// ======================================================
+const DIV_DB = {
+  'AI.PA':   { months:[5],      perShare:3.80,  freq:'annuel' },
+  'TTE.PA':  { months:[3,6,9,12], perShare:0.79, freq:'trimestriel' },
+  'BNP.PA':  { months:[5],      perShare:4.60,  freq:'annuel' },
+  'SAN.PA':  { months:[5],      perShare:3.76,  freq:'annuel' },
+  'OR.PA':   { months:[5],      perShare:6.60,  freq:'annuel' },
+  'SU.PA':   { months:[5],      perShare:3.50,  freq:'annuel' },
+  'AXA.PA':  { months:[5],      perShare:1.98,  freq:'annuel' },
+  'VIE.PA':  { months:[5],      perShare:1.21,  freq:'annuel' },
+  'ENGI.PA': { months:[5],      perShare:0.85,  freq:'annuel' },
+  'MC.PA':   { months:[4,12],   perShare:6.50,  freq:'semestriel' },
+  'KER.PA':  { months:[5],      perShare:6.00,  freq:'annuel' },
+  'RNO.PA':  { months:[5],      perShare:1.85,  freq:'annuel' },
+  'CAP.PA':  { months:[5],      perShare:3.50,  freq:'annuel' },
+  'PUB.PA':  { months:[7],      perShare:3.40,  freq:'annuel' },
+  'DSY.PA':  { months:[6],      perShare:0.23,  freq:'annuel' },
+  'STM.PA':  { months:[3],      perShare:0.30,  freq:'annuel' },
+  'EN.PA':   { months:[5],      perShare:1.80,  freq:'annuel' },
+  'SAF.PA':  { months:[5],      perShare:3.12,  freq:'annuel' },
+  'HO.PA':   { months:[5],      perShare:3.85,  freq:'annuel' },
+  'BN.PA':   { months:[5],      perShare:1.94,  freq:'annuel' },
+};
+
+function buildDividendCalendar(positions) {
+  const now = new Date();
+  const curMonth = now.getMonth() + 1;
+  const curYear  = now.getFullYear();
+  const events = [];
+  for (const p of positions) {
+    const d = DIV_DB[p.ticker];
+    if (!d) continue;
+    const annualPerShare = d.freq === 'trimestriel' ? d.perShare * 4 : d.freq === 'semestriel' ? d.perShare * 2 : d.perShare;
+    for (const m of d.months) {
+      let year = curYear;
+      if (m < curMonth) year = curYear + 1;
+      const date = `${year}-${String(m).padStart(2,'0')}`;
+      events.push({
+        ticker: p.ticker, name: p.name, qty: p.quantity,
+        month: m, year, date,
+        perShare: d.perShare, amount: d.perShare * p.quantity,
+        annual: annualPerShare * p.quantity, freq: d.freq
+      });
+    }
+  }
+  return events.sort((a,b) => a.date.localeCompare(b.date));
+}
+
+// ======================================================
+// P6 — OVERLAP ETF
+// ======================================================
+const ETF_GEO = {
+  'CW8.PA':   {US:65,EU:15,JP:6,UK:4,CA:3,AU:2,OTHER:5},
+  'WPEA.PA':  {US:65,EU:15,JP:6,UK:4,CA:3,AU:2,OTHER:5},
+  'EWLD.PA':  {US:65,EU:15,JP:6,UK:4,CA:3,AU:2,OTHER:5},
+  'MWRD.PA':  {US:65,EU:15,JP:6,UK:4,CA:3,AU:2,OTHER:5},
+  'IWEA.PA':  {US:65,EU:15,JP:6,UK:4,CA:3,AU:2,OTHER:5},
+  'WPAE.PA':  {US:65,EU:15,JP:6,UK:4,CA:3,AU:2,OTHER:5},
+  'IWDA.L':   {US:65,EU:15,JP:6,UK:4,CA:3,AU:2,OTHER:5},
+  'SP500.PA': {US:100},
+  'CS500.PA': {US:100},
+  'ESE.PA':   {US:100},
+  'PANX.PA':  {US:88,EU:6,OTHER:6},
+  'NASD.PA':  {US:88,EU:6,OTHER:6},
+  'PAEEM.PA': {CN:27,IN:18,TW:17,KR:12,BR:5,ZA:4,OTHER:17},
+  'AEEM.PA':  {CN:27,IN:18,TW:17,KR:12,BR:5,ZA:4,OTHER:17},
+  'PE600.PA': {UK:22,FR:15,CH:14,DE:13,NL:6,SE:5,OTHER:25},
+  'C6E.PA':   {FR:16,DE:13,NL:10,IT:9,ES:8,FI:5,OTHER:39},
+};
+
+function computeETFOverlap(tickerA, tickerB) {
+  const a = ETF_GEO[tickerA], b = ETF_GEO[tickerB];
+  if (!a || !b) return null;
+  const regions = new Set([...Object.keys(a), ...Object.keys(b)]);
+  return [...regions].reduce((s, r) => s + Math.min(a[r] || 0, b[r] || 0), 0);
+}
+
+function renderDividendCard(positions) {
+  const events = buildDividendCalendar(positions);
+  const totalAnnual = events.reduce((s,e) => {
+    // avoid double counting quarterly payments
+    const key = e.ticker;
+    return s;
+  }, 0);
+  // Compute unique annual total per ticker
+  const annualByTicker = {};
+  for (const p of positions) {
+    const d = DIV_DB[p.ticker];
+    if (!d) continue;
+    const ann = (d.freq==='trimestriel'?d.perShare*4:d.freq==='semestriel'?d.perShare*2:d.perShare)*p.quantity;
+    annualByTicker[p.ticker] = ann;
+  }
+  const annualTotal = Object.values(annualByTicker).reduce((s,v)=>s+v,0);
+
+  if (!events.length) return '';
+  const now = new Date();
+  const upcoming = events.slice(0, 6);
+  return `
+  <div class="card mb16">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div class="section-title" style="margin:0">Calendrier Dividendes</div>
+      <div style="font-size:0.82rem;color:var(--success);font-weight:600">~${fc(annualTotal)}/an estimé</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${upcoming.map(ev => {
+        const isPast = ev.date < now.toISOString().slice(0,7);
+        const isSoon = !isPast && ev.month === now.getMonth()+1 || ev.month === now.getMonth()+2;
+        return `<div style="padding:8px 12px;background:${isSoon?'rgba(22,201,93,0.08)':'var(--surface2)'};border:1px solid ${isSoon?'rgba(22,201,93,0.2)':'var(--border)'};border-radius:7px;min-width:140px">
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:3px">${ev.year}-${String(ev.month).padStart(2,'0')} · ${ev.freq}</div>
+          <div style="font-weight:600;font-size:0.83rem">${esc(ev.ticker)}</div>
+          <div style="color:var(--success);font-weight:700;margin-top:2px">${fc(ev.amount)}</div>
+          <div style="font-size:0.72rem;color:var(--muted)">${fn(ev.qty,4)} × ${fc(ev.perShare)}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+function renderOverlapCard(positions) {
+  const etfs = positions.filter(p => ETF_GEO[p.ticker]);
+  if (etfs.length < 2) return '';
+  const pairs = [];
+  for (let i = 0; i < etfs.length; i++)
+    for (let j = i+1; j < etfs.length; j++) {
+      const ov = computeETFOverlap(etfs[i].ticker, etfs[j].ticker);
+      if (ov !== null) pairs.push({ a: etfs[i].ticker, b: etfs[j].ticker, overlap: ov });
+    }
+  if (!pairs.length) return '';
+  return `
+  <div class="card mb16">
+    <div class="section-title mb16">Chevauchement entre ETFs</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${pairs.map(p => {
+        const col = p.overlap > 70 ? 'var(--danger)' : p.overlap > 40 ? 'var(--warning)' : 'var(--success)';
+        const lbl = p.overlap > 70 ? 'Très élevé ⚠️' : p.overlap > 40 ? 'Modéré' : 'Faible ✅';
+        return `<div style="padding:10px 14px;background:var(--surface2);border-radius:8px;min-width:180px">
+          <div style="font-size:0.75rem;color:var(--muted);margin-bottom:6px">${esc(p.a)} ∩ ${esc(p.b)}</div>
+          <div style="font-size:1.3rem;font-weight:700;color:${col}">${p.overlap.toFixed(0)} %</div>
+          <div style="font-size:0.75rem;color:${col};margin-top:2px">${lbl} overlap géographique</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="font-size:0.73rem;color:var(--muted);margin-top:10px">Chevauchement estimé par exposition géographique (données statiques principales ETFs PEA).</div>
+  </div>`;
+}
+
+// ======================================================
+// P10 — MÉMOIRE IA PERSISTANTE
+// ======================================================
+function saveAIMemory(content) {
+  if (!content || content.length < 80) return;
+  if (!S.data.aiMemory) S.data.aiMemory = [];
+  // Extract a short summary (first 200 chars of assistant response)
+  const summary = content.replace(/#{1,3} /g,'').slice(0, 240).trim();
+  S.data.aiMemory.unshift({ date: today(), time: new Date().toLocaleTimeString('fr-FR'), summary });
+  S.data.aiMemory = S.data.aiMemory.slice(0, 20); // garder 20 dernières
+  saveData();
+}
+
+function getAIMemoryContext() {
+  const mem = (S.data.aiMemory || []).slice(0, 5);
+  if (!mem.length) return '';
+  return `\nMÉMOIRE DES ANALYSES PRÉCÉDENTES (5 dernières):\n${mem.map(m => `• ${m.date}: ${m.summary}…`).join('\n')}\n`;
+}
 </script>
 </body>
 </html>

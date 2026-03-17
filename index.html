@@ -200,6 +200,7 @@
     <div class="mob-tab" data-page="treasury"><span class="mico">💰</span>Cash</div>
     <div class="mob-tab" data-page="planning"><span class="mico">📅</span>Plan</div>
     <div class="mob-tab" data-page="simulation"><span class="mico">🔮</span>Sim</div>
+    <div class="mob-tab" data-page="performance"><span class="mico">📈</span>Perf</div>
     <div class="mob-tab" data-page="news"><span class="mico">📰</span>News</div>
     <div class="mob-tab" data-page="ai"><span class="mico">🤖</span>IA</div>
     <div class="mob-tab" data-page="settings"><span class="mico">⚙️</span>Config</div>
@@ -220,6 +221,7 @@
   <div class="nav-section">Outils</div>
   <div class="nav-item" data-page="planning"><span class="icon">📅</span>Planning Mensuel</div>
   <div class="nav-item" data-page="simulation"><span class="icon">🔮</span>Simulation</div>
+  <div class="nav-item" data-page="performance"><span class="icon">📈</span>Performance</div>
   <div class="nav-item" data-page="news"><span class="icon">📰</span>Actualités</div>
   <div class="nav-item" data-page="ai"><span class="icon">🤖</span>Analyse IA</div>
   <div class="nav-section">Compte</div>
@@ -241,6 +243,7 @@
   <div id="page-treasury" class="page"></div>
   <div id="page-planning" class="page"></div>
   <div id="page-simulation" class="page"></div>
+  <div id="page-performance" class="page"></div>
   <div id="page-news" class="page"></div>
   <div id="page-ai" class="page"></div>
   <div id="page-settings" class="page"></div>
@@ -2058,12 +2061,24 @@ function buildPortfolioContext() {
     return `• ${p.ticker} (${p.name})\n  Parts: ${fn(p.quantity,4)} | PRU: ${fc(p.avgPrice)} | Cours actuel: ${prix} (${var1j} aujourd'hui) | Valeur: ${fc(p.marketValue)} (${poids}% du PF) | P&L: ${p.pnl!==null?fc(p.pnl):'N/A'} (${p.pnlPct!==null?fp(p.pnlPct):'N/A'})`;
   }).join('\n') || '• Aucune position';
 
-  const planLines = plan.map(p => {
+  const etfPlan = plan.filter(p => p.isEtf !== false);
+  const stockPlan = plan.filter(p => p.isEtf === false);
+  const totalEtfPct = etfPlan.reduce((s, p) => s + (p.allocationPct || 0), 0);
+
+  const etfPlanLines = etfPlan.map(p => {
     const cache = S.data.priceCache[p.ticker];
     const prix = cache?.price ? fc(cache.price) : 'N/A';
-    const budget = fc(S.data.settings.monthlyBudget * p.allocationPct / 100);
-    return `• ${p.ticker} (${p.name}): cible ${p.allocationPct}% → ${budget}/mois | Cours: ${prix}`;
-  }).join('\n') || '• Aucun planning';
+    const normPct = totalEtfPct > 0 ? (p.allocationPct / totalEtfPct * 100).toFixed(1) : (p.allocationPct||0).toFixed(1);
+    const budgetEtf = fc(S.data.settings.monthlyBudget * (totalEtfPct > 0 ? p.allocationPct / totalEtfPct : 0));
+    return `• ${p.ticker} (${p.name}): cible ${normPct}% du bucket ETF → ~${budgetEtf}/mois | Cours: ${prix}`;
+  }).join('\n') || '• Aucun ETF planifié';
+
+  const stockPlanLines = stockPlan.map(p => {
+    const cache = S.data.priceCache[p.ticker];
+    const prix = cache?.price ? fc(cache.price) : 'N/A';
+    const montant = cache?.price ? fc(cache.price * (p.monthlyShares || 1)) : 'N/A';
+    return `• ${p.ticker} (${p.name}): achat fixe ${p.monthlyShares || 1} part(s)/mois (~${montant}) — aucune cible % | Cours: ${prix}`;
+  }).join('\n') || '• Aucun titre direct planifié';
 
   return `=== DONNÉES PORTEFEUILLE PEA — ${today} ===
 
@@ -2076,8 +2091,14 @@ RÉSUMÉ FINANCIER:
 POSITIONS EN PORTEFEUILLE (${positions.length}):
 ${posLines}
 
-STRATÉGIE D'ALLOCATION CIBLE:
-${planLines}
+STRATÉGIE D'INVESTISSEMENT MENSUEL:
+
+[ETFs — allocation pilotée par % cible du bucket ETF]
+${etfPlanLines}
+
+[Titres directs — achats en nombre de parts fixe, SANS cible de pourcentage]
+⚠️ RÈGLE D'ANALYSE IMPÉRATIVE: Les titres directs ci-dessous sont achetés en quantité fixe par conviction ou stratégie spécifique (dividendes, thème, couverture sectorielle…). Ils N'ont PAS de cible d'allocation en pourcentage du portefeuille. Ne JAMAIS les comparer à une cible % ni les juger "sous-pondérés" ou "sur-pondérés" au sens allocation. Les analyser uniquement sous l'angle: utilité réelle dans le portefeuille, risque propre, contribution à la diversification, et pertinence de continuer ou stopper les achats.
+${stockPlanLines}
 
 HISTORIQUE RÉCENT (10 dernières opérations):
 ${recent.map(tx=>`• ${fd(tx.date)}: ${txLbl(tx.type)} ${fn(tx.quantity,4)} x ${tx.ticker} @ ${fc(tx.price)} (frais: ${fc(tx.fees||0)})`).join('\n') || '• Aucune'}
@@ -2093,22 +2114,32 @@ async function aiAnalyze() {
 
 MISSION — ANALYSE DE PORTEFEUILLE NIVEAU INSTITUTIONNEL:
 
+RAPPEL STRUCTUREL OBLIGATOIRE: Ce portefeuille comporte deux catégories distinctes à traiter différemment.
+- ETFs : gérés par allocation cible en %. Analyser l'écart entre pondération actuelle et cible, et la pertinence des cibles elles-mêmes.
+- Titres directs : achetés en nombre de parts fixe par conviction, SANS cible %. Ne JAMAIS les évaluer à l'aune d'un % "idéal" du portefeuille. Les analyser sous l'angle de leur utilité propre (dividendes, thème, secteur), de leur risque intrinsèque, et de la question : faut-il continuer à acheter, faire une pause, ou sortir ?
+
 ## 1. VERDICT GLOBAL (note /10 + justification en 3 lignes max)
 Dis clairement si ce portefeuille est bien construit ou s'il faut le revoir en profondeur. Pas de diplomatie inutile.
 
-## 2. ANALYSE POSITION PAR POSITION
-Pour chaque ligne du portefeuille, donne :
+## 2. ANALYSE ETF PAR ETF
+Pour chaque ETF, donne :
 - Verdict : ✅ Renforcer / ⏸ Maintenir / ⚠️ Surveiller / 🔴 Alléger
-- Justification : performance récente, tendance, valorisation actuelle vs historique
-- Action recommandée : montant précis à investir ou % à réduire
+- Écart cible vs réel, justification macro, action recommandée avec montant précis
 
-## 3. CONTEXTE MACRO ACTUELLEMENT FAVORABLE OU NON ?
+## 3. ANALYSE TITRE PAR TITRE (titres directs)
+Pour chaque titre direct, donne :
+- Verdict : ✅ Continuer les achats mensuels / ⏸ Pause / ⚠️ Surveiller / 🔴 Envisager la sortie
+- Utilité dans le portefeuille : que fait ce titre que les ETFs ne font pas ?
+- Risque spécifique à surveiller
+- Recommandation sur le rythme d'achat mensuel (maintenir, augmenter, réduire)
+
+## 4. CONTEXTE MACRO ACTUELLEMENT FAVORABLE OU NON ?
 Quelles forces macro (taux BCE/Fed, dollar/euro, croissance US/EU, inflation) jouent POUR ou CONTRE chaque position en ce moment ? Utilise les news disponibles pour contextualiser.
 
-## 4. CE QUI MANQUE À CE PORTEFEUILLE
+## 5. CE QUI MANQUE À CE PORTEFEUILLE
 Y a-t-il des expositions absentes qui devraient y être ? Des ETF éligibles PEA qui amélioreraient le profil rendement/risque ? Donne des noms précis (ticker) et explique pourquoi maintenant.
 
-## 5. PLAN D'ACTION — PRIORITÉS CE MOIS
+## 6. PLAN D'ACTION — PRIORITÉS CE MOIS
 Liste ordonnée d'actions concrètes à réaliser, avec montants, prix cibles si pertinents, et raison du timing.`);
 }
 
@@ -2118,22 +2149,30 @@ async function aiMonthly() {
 
 MISSION — PLAN D'INVESTISSEMENT MENSUEL PROFESSIONNEL (budget: ${fc(S.data.settings.monthlyBudget)}):
 
+RAPPEL STRUCTUREL OBLIGATOIRE: Deux logiques coexistent dans ce portefeuille.
+- ETFs : budget alloué en % — raisonner en montants et en réequilibrage vers les cibles.
+- Titres directs : achetés en nombre de parts fixe par mois, SANS cible %. Pour eux, la question du mois est : continuer le plan ? Ajuster le nombre de parts ? Passer son tour ce mois-ci ? Ne JAMAIS suggérer un % cible pour un titre direct.
+
 ## 1. TABLEAU DE DÉCISION DU MOIS
-Construis un tableau précis :
-| ETF/Titre | Cours actuel | Signal technique | Montant conseillé | Nb parts | Priorité | Raison |
-Justifie chaque ligne avec les données de cours actuels et les actualités disponibles.
+Construis deux tableaux distincts :
+
+**ETFs** (répartition du budget ETF par cibles %) :
+| ETF | Cours actuel | Cible % | Poids actuel % | Montant conseillé | Nb parts | Priorité | Raison |
+
+**Titres directs** (décision sur le rythme d'achat fixe) :
+| Titre | Cours actuel | Plan habituel | Recommandation ce mois | Raison |
 
 ## 2. EST-CE LE BON MOMENT D'ACHETER ?
-Analyse le timing : les marchés sont-ils sur des niveaux d'entrée corrects ou faut-il attendre un repli ? Sur quels ETF spécifiquement ? Donne des niveaux de cours concrets pour déclencher l'achat si tu conseilles d'attendre.
+Analyse le timing : les marchés sont-ils sur des niveaux d'entrée corrects ou faut-il attendre un repli ? Sur quels ETF/titres spécifiquement ? Donne des niveaux de cours concrets pour déclencher l'achat si tu conseilles d'attendre.
 
 ## 3. IMPACT DES ACTUALITÉS SUR LES CHOIX DU MOIS
-Comment les news récentes chargées modifient-elles les priorités d'achat de ce mois ? Y a-t-il un secteur ou une zone géographique à favoriser ou éviter en ce moment ?
+Comment les news récentes chargées modifient-elles les priorités d'achat de ce mois ? Y a-t-il un secteur ou une zone géographique à favoriser ou éviter en ce moment ? Pour les titres directs, y a-t-il une actualité spécifique qui change la conviction ?
 
-## 4. RÉPARTITION OPTIMALE vs RÉPARTITION ACTUELLE
-Compare l'allocation actuelle à l'allocation idéale selon toi. Quel écart combler en priorité avec le budget disponible ?
+## 4. RÉPARTITION ETF — ÉCART À COMBLER
+Compare l'allocation actuelle des ETFs à leurs cibles. Quel écart combler en priorité avec le budget ETF disponible ?
 
 ## 5. INSTRUCTIONS FINALES — CE QU'IL FAUT FAIRE CETTE SEMAINE
-Actions classées par ordre de priorité, avec montant exact, prix d'entrée cible, et conditions d'exécution.`);
+Actions classées par ordre de priorité, avec montant exact pour les ETFs et nombre de parts pour les titres directs, prix d'entrée cible, et conditions d'exécution.`);
 }
 
 async function aiRisk() {
@@ -2142,23 +2181,31 @@ async function aiRisk() {
 
 MISSION — ANALYSE DES RISQUES NIVEAU PROFESSIONNEL:
 
+RAPPEL STRUCTUREL OBLIGATOIRE: Ce portefeuille combine deux types d'instruments aux profils de risque fondamentalement différents.
+- ETFs : risque de marché systémique, corrélation inter-ETF, risque de concentration géographique/sectorielle. Évaluer en termes d'allocation et de rééquilibrage.
+- Titres directs : risque idiosyncratique (propre à l'entreprise), pas de cible % donc pas de "sur-pondération" à corriger — mais évaluer si le risque spécifique est acceptable et si les achats mensuels doivent être maintenus en cas de détérioration du dossier.
+
 ## 1. RISQUES CRITIQUES IDENTIFIÉS
 Pour chaque risque : niveau (🔴 Élevé / 🟠 Modéré / 🟡 Faible), impact potentiel estimé en € sur le portefeuille, horizon temporel probable.
+Distinguer les risques systémiques (qui touchent les ETFs) des risques spécifiques (propres à chaque titre direct).
 
 ## 2. TESTS DE RÉSISTANCE (STRESS TESTS)
 - Scénario Krach -30% (type 2022 ou 2008) : perte estimée en € et en %, positions les plus touchées
 - Scénario Récession US+EU : impact sur chaque ETF du portefeuille
 - Scénario Remontée rapide des taux (+200bp) : quel impact sur les valorisations ?
 - Scénario Dollar fort (+15%) : impact sur les ETF exposés aux marchés US
+- Pour chaque titre direct : quel scénario propre à l'entreprise (profit warning, scandale, disruption sectorielle) changerait la conviction ?
 
 ## 3. CORRÉLATION RÉELLE & DIVERSIFICATION EFFECTIVE
-Ces positions sont-elles vraiment diversifiées ou corrélées à 90% ? Donne un score de diversification réelle (1-10) et explique pourquoi. Quels actifs bougent ensemble ?
+Ces positions sont-elles vraiment diversifiées ou corrélées à 90% ? Donne un score de diversification réelle (1-10) et explique pourquoi. Les titres directs apportent-ils une vraie décorrélation ou amplifient-ils les risques déjà présents dans les ETFs ?
 
 ## 4. RECOMMANDATIONS POUR RÉDUIRE LES RISQUES
-Actions concrètes et chiffrées : quel % réallouer, vers quels actifs moins corrélés éligibles PEA, comment protéger les plus-values latentes sans tout vendre.
+Pour les ETFs : actions concrètes et chiffrées sur les % à réallouer, vers quels actifs moins corrélés éligibles PEA.
+Pour les titres directs : faut-il suspendre les achats mensuels sur l'un d'eux ? Y a-t-il un dossier qui se détériore et mérite une sortie progressive ?
 
 ## 5. NIVEAUX D'ALERTE & DÉCLENCHEURS D'ACTION
-Pour chaque position : quel cours ou quel événement macro déclencherait une révision de la stratégie ? Donne des seuils précis (prix, % de baisse, événements) qui justifieraient une action immédiate.`);
+Pour chaque ETF : quel cours ou événement macro déclencherait un rééquilibrage ?
+Pour chaque titre direct : quel événement spécifique (résultats, guidance, actualité sectorielle) justifierait de stopper les achats ou de solder la position ?`);
 }
 
 // ======================================================
@@ -3973,10 +4020,291 @@ function navigate(page) {
   renderPage(page);
 }
 
+// ======================================================
+// PAGE — PERFORMANCE
+// ======================================================
+
+// XIRR : Taux de Rendement Interne avec dates exactes (Newton-Raphson)
+function computeXIRR(cfs) {
+  if (!cfs || cfs.length < 2) return null;
+  if (!cfs.some(c => c.amount < 0) || !cfs.some(c => c.amount > 0)) return null;
+  const d0 = new Date(cfs[0].date).getTime();
+  const MS_YEAR = 365.25 * 24 * 3600 * 1000;
+  const npv  = r => cfs.reduce((s, c) => { const t = (new Date(c.date).getTime() - d0) / MS_YEAR; return s + c.amount / Math.pow(1 + r, t); }, 0);
+  const dnpv = r => cfs.reduce((s, c) => { const t = (new Date(c.date).getTime() - d0) / MS_YEAR; return s - t * c.amount / Math.pow(1 + r, t + 1); }, 0);
+  let r = 0.1;
+  for (let i = 0; i < 150; i++) {
+    const f = npv(r), fp = dnpv(r);
+    if (!isFinite(f) || Math.abs(fp) < 1e-12) break;
+    const nr = r - f / fp;
+    if (Math.abs(nr - r) < 1e-7) { r = nr; break; }
+    r = Math.max(-0.99, nr);
+  }
+  return isFinite(r) && r > -1 ? r : null;
+}
+
+function buildIRRCashflows() {
+  const cfs = [];
+  for (const d of (S.data.deposits || [])) {
+    cfs.push({ date: d.date, amount: d.type === 'deposit' ? -d.amount : d.amount });
+  }
+  const { portValue, cash } = computeSummary();
+  const total = portValue + Math.max(0, cash);
+  if (total > 0) cfs.push({ date: today(), amount: total });
+  return cfs.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function computeDrawdown(snapshots) {
+  if (!snapshots || snapshots.length < 2) return { maxDrawdown: 0, currentDrawdown: 0, worstStart: null, worstEnd: null };
+  const vals = snapshots.map(s => (s.portValue || 0) + (s.cash || 0));
+  let maxDD = 0, curPeak = vals[0], curPeakDate = snapshots[0].date, worstStart = snapshots[0].date, worstEnd = snapshots[0].date;
+  for (let i = 1; i < vals.length; i++) {
+    if (vals[i] > curPeak) { curPeak = vals[i]; curPeakDate = snapshots[i].date; }
+    const dd = curPeak > 0 ? (vals[i] - curPeak) / curPeak : 0;
+    if (dd < maxDD) { maxDD = dd; worstStart = curPeakDate; worstEnd = snapshots[i].date; }
+  }
+  const lastVal = vals[vals.length - 1], maxVal = Math.max(...vals);
+  return { maxDrawdown: maxDD, currentDrawdown: maxVal > 0 ? (lastVal - maxVal) / maxVal : 0, worstStart, worstEnd };
+}
+
+function computeVolatility(snapshots) {
+  if (!snapshots || snapshots.length < 5) return null;
+  const vals = snapshots.map(s => (s.portValue || 0) + (s.cash || 0)).filter(v => v > 0);
+  if (vals.length < 5) return null;
+  const returns = [];
+  for (let i = 1; i < vals.length; i++) returns.push(Math.log(vals[i] / vals[i - 1]));
+  const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
+  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / Math.max(1, returns.length - 1);
+  const days = (new Date(snapshots[snapshots.length - 1].date) - new Date(snapshots[0].date)) / 86400000;
+  const perDay = days / Math.max(1, snapshots.length - 1);
+  return Math.sqrt(variance * (365 / Math.max(1, perDay))) * 100;
+}
+
+function computeYearlyReturns(snapshots) {
+  if (!snapshots || snapshots.length < 2) return [];
+  const byYear = {};
+  for (const s of snapshots) {
+    const y = s.date.slice(0, 4);
+    if (!byYear[y]) byYear[y] = [];
+    byYear[y].push(s);
+  }
+  return Object.entries(byYear).map(([year, snaps]) => {
+    snaps.sort((a, b) => a.date.localeCompare(b.date));
+    const sv = (s) => (s.portValue || 0) + (s.cash || 0);
+    const startVal = sv(snaps[0]), endVal = sv(snaps[snaps.length - 1]);
+    const perf = startVal > 0 ? (endVal - startVal) / startVal * 100 : 0;
+    return { year, startVal, endVal, perf, deposited: snaps[snaps.length - 1].deposited || 0 };
+  }).sort((a, b) => a.year.localeCompare(b.year));
+}
+
+async function fetchBenchmarkHistory(fromDate) {
+  const ticker = 'IWDA.L';
+  const from = Math.floor(new Date(fromDate).getTime() / 1000) - 86400 * 10;
+  const url = `${YF_CHART}${ticker}?interval=1mo&period1=${from}&period2=${Math.floor(Date.now() / 1000)}`;
+  try {
+    const r = await fetch(`${PROXY}${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(15000) });
+    const j = await r.json();
+    const data = JSON.parse(j.contents);
+    const res = data.chart.result[0];
+    const prices = {};
+    res.timestamp.forEach((t, i) => {
+      const c = res.indicators.quote[0].close[i];
+      if (c != null) prices[new Date(t * 1000).toISOString().slice(0, 7)] = c;
+    });
+    return prices;
+  } catch (e) { return null; }
+}
+
+function simulateDCABenchmark(deposits, prices) {
+  if (!prices || !Object.keys(prices).length) return null;
+  const months = Object.keys(prices).sort();
+  const getP = (dateStr) => {
+    const m = dateStr.slice(0, 7);
+    if (prices[m]) return prices[m];
+    const best = months.reduce((b, cur) => Math.abs(cur.localeCompare(m)) < Math.abs(b.localeCompare(m)) ? cur : b, months[0]);
+    return prices[best];
+  };
+  const sorted = (deposits || []).filter(d => d.type === 'deposit').sort((a, b) => a.date.localeCompare(b.date));
+  if (!sorted.length) return null;
+  let cumulShares = 0;
+  const events = [];
+  const cfs = [];
+  for (const dep of sorted) {
+    const p = getP(dep.date);
+    if (p && p > 0) { cumulShares += dep.amount / p; cfs.push({ date: dep.date, amount: -dep.amount }); }
+    events.push({ date: dep.date, shares: cumulShares });
+  }
+  if (cumulShares === 0) return null;
+  const curP = getP(today());
+  if (!curP) return null;
+  const currentValue = cumulShares * curP;
+  cfs.push({ date: today(), amount: currentValue });
+  const getValueAt = (dateStr) => {
+    const acc = events.filter(e => e.date <= dateStr);
+    if (!acc.length) return 0;
+    const p2 = getP(dateStr);
+    return p2 ? acc[acc.length - 1].shares * p2 : 0;
+  };
+  return { currentValue, shares: cumulShares, currentPrice: curP, cashflows: cfs, getValueAt };
+}
+
+function makePerfCompareChart(snapshots, bench) {
+  destroyChart('perf-compare');
+  const ctx = document.getElementById('chart-perf-compare');
+  if (!ctx || snapshots.length < 2) return;
+  const labels = snapshots.map(s => s.date);
+  const portData = snapshots.map(s => (s.portValue || 0) + (s.cash || 0));
+  const investedData = snapshots.map(s => s.deposited || 0);
+  const datasets = [
+    { label: 'Portefeuille', data: portData, borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.06)', borderWidth: 2, pointRadius: 0, tension: 0.3, fill: true },
+    { label: 'Capital versé', data: investedData, borderColor: '#94a3b8', backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, tension: 0.3 },
+  ];
+  if (bench) {
+    datasets.push({ label: 'Benchmark MSCI World DCA', data: snapshots.map(s => bench.getValueAt(s.date)), borderColor: '#3b82f6', backgroundColor: 'transparent', borderWidth: 2, borderDash: [3, 3], pointRadius: 0, tension: 0.3 });
+  }
+  S.charts['perf-compare'] = new Chart(ctx, {
+    type: 'line', data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 14, padding: 12 } },
+        tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${c.raw != null ? fc(c.raw) : '—'}` } }
+      },
+      scales: {
+        x: { grid: { color: '#182a42' }, ticks: { color: '#6b7e96', maxTicksLimit: 8, font: { size: 10 } } },
+        y: { grid: { color: '#182a42' }, ticks: { color: '#6b7e96', font: { size: 10 }, callback: v => fc(v) } }
+      }
+    }
+  });
+}
+
+async function renderPerformance() {
+  const el = document.getElementById('page-performance');
+  el.innerHTML = `
+    <div class="page-header"><div><h2>Performance</h2><div class="page-sub">Analyse approfondie de votre rendement réel</div></div></div>
+    <div style="text-align:center;padding:50px 0">
+      <div class="spinner" style="width:28px;height:28px;border-width:3px;margin:0 auto 12px"></div>
+      <div style="color:var(--muted);font-size:0.85rem">Calcul TRI · chargement du benchmark MSCI World…</div>
+    </div>`;
+
+  const snaps = S.data.snapshots || [];
+  const { portValue, cash, totalCost, pnl, pnlP } = computeSummary();
+  const total = portValue + Math.max(0, cash);
+
+  // TRI
+  const cfs = buildIRRCashflows();
+  const tri = computeXIRR(cfs);
+
+  // Durée
+  const allDeps = (S.data.deposits || []).filter(d => d.type === 'deposit').sort((a, b) => a.date.localeCompare(b.date));
+  const firstDate = allDeps[0]?.date || snaps[0]?.date;
+  const daysInvested = firstDate ? Math.round((new Date() - new Date(firstDate)) / 86400000) : 0;
+
+  // Métriques de risque
+  const dd = computeDrawdown(snaps);
+  const vol = computeVolatility(snaps);
+  const sharpe = (tri != null && vol != null && vol > 0) ? ((tri - 0.03) / (vol / 100)) : null;
+
+  // Benchmark
+  let bench = null, benchTRI = null;
+  if (firstDate) {
+    const prices = await fetchBenchmarkHistory(firstDate);
+    if (prices) {
+      bench = simulateDCABenchmark(S.data.deposits, prices);
+      if (bench) benchTRI = computeXIRR(bench.cashflows);
+    }
+  }
+
+  const alpha = (tri != null && benchTRI != null) ? tri - benchTRI : null;
+  const yearlyReturns = computeYearlyReturns(snaps);
+
+  const cc = (v, good, bad) => v == null ? 'var(--muted)' : v > 0 ? good : v < 0 ? bad : 'var(--muted)';
+  const kpiCard = (title, value, sub, accent) => `
+    <div class="card" style="border-top:3px solid ${accent}">
+      <div class="section-title">${title}</div>
+      <div class="stat-val" style="color:${accent}">${value}</div>
+      <div class="stat-sub neutral">${sub}</div>
+    </div>`;
+
+  el.innerHTML = `
+    <div class="page-header">
+      <div><h2>Performance</h2><div class="page-sub">Rendement réel, benchmark MSCI World, risques</div></div>
+      <div class="page-actions"><button class="btn btn-secondary btn-sm" onclick="renderPerformance()">⟳ Recalculer</button></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px">
+      ${kpiCard('TRI Annualisé (XIRR)', tri != null ? fp(tri * 100) : '—', `${daysInvested} jours · capital investi ${fc(totalCost)}`, cc(tri, 'var(--success)', 'var(--danger)'))}
+      ${kpiCard('Benchmark MSCI World DCA', benchTRI != null ? fp(benchTRI * 100) : bench === null && firstDate ? '<span style="font-size:0.9rem;color:var(--warning)">Indisponible</span>' : '—', 'IWDA.L — mêmes montants & dates', 'var(--accent)')}
+      ${kpiCard('Alpha vs Benchmark', alpha != null ? (alpha > 0 ? '+' : '') + fp(alpha * 100) : '—', alpha != null ? (alpha > 0 ? 'Surperformance ✅' : 'Sous-performance ⚠️') : 'Benchmark requis', cc(alpha, 'var(--success)', 'var(--danger)'))}
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px">
+      ${kpiCard('Drawdown Maximum', dd.maxDrawdown ? fp(dd.maxDrawdown * 100) : '—', dd.worstStart ? fd(dd.worstStart) + ' → ' + fd(dd.worstEnd) : 'Données insuffisantes', dd.maxDrawdown < -0.1 ? 'var(--danger)' : dd.maxDrawdown < -0.05 ? 'var(--warning)' : 'var(--muted)')}
+      ${kpiCard('Volatilité Annualisée', vol != null ? fn(vol, 1) + ' %' : '—', vol != null ? (vol < 10 ? 'Faible' : vol < 20 ? 'Modérée' : 'Élevée') + ' · calculée sur ' + snaps.length + ' jours' : 'Min 5 snapshots requis', 'var(--muted)')}
+      ${kpiCard('Ratio de Sharpe', sharpe != null ? fn(sharpe, 2) : '—', sharpe != null ? (sharpe > 2 ? 'Excellent' : sharpe > 1 ? 'Bon' : sharpe > 0 ? 'Acceptable' : 'Insuffisant') + ' · taux sans risque 3 %' : 'Données insuffisantes', sharpe != null ? (sharpe > 1 ? 'var(--success)' : sharpe > 0 ? 'var(--muted)' : 'var(--danger)') : 'var(--muted)')}
+    </div>
+
+    <!-- CHART COMPARAISON -->
+    <div class="card mb16">
+      <div class="section-title mb16">Portefeuille vs Benchmark MSCI World (même DCA)</div>
+      ${snaps.length >= 2
+        ? `<div style="height:270px;position:relative"><canvas id="chart-perf-compare"></canvas></div>`
+        : `<div class="empty" style="padding:30px"><p style="color:var(--muted)">Historique insuffisant (${snaps.length} point${snaps.length !== 1 ? 's' : ''})</p></div>`}
+    </div>
+
+    <!-- BENCHMARK RÉSULTAT -->
+    ${bench ? `
+    <div class="card mb16">
+      <div class="section-title mb16">Si vous aviez tout mis dans MSCI World (IWDA)</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:14px">
+        <div style="padding:14px;background:var(--surface2);border-radius:8px">
+          <div style="font-size:0.75rem;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Votre PEA actuel</div>
+          <div style="font-size:1.5rem;font-weight:700;color:var(--success)">${fc(total)}</div>
+          <div style="font-size:0.78rem;color:var(--muted);margin-top:5px">TRI ${tri != null ? fp(tri * 100) : '—'} · P&L ${fc(pnl)} (${fp(pnlP)})</div>
+        </div>
+        <div style="padding:14px;background:var(--surface2);border-radius:8px">
+          <div style="font-size:0.75rem;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Hypothèse MSCI World</div>
+          <div style="font-size:1.5rem;font-weight:700;color:var(--accent)">${fc(bench.currentValue)}</div>
+          <div style="font-size:0.78rem;color:var(--muted);margin-top:5px">TRI ${benchTRI != null ? fp(benchTRI * 100) : '—'} · ${fn(bench.shares, 3)} parts @ ${fc(bench.currentPrice)}</div>
+        </div>
+      </div>
+      <div style="padding:12px 16px;background:${alpha != null && alpha > 0 ? 'rgba(22,201,93,0.08)' : 'rgba(240,58,58,0.08)'};border-radius:6px;font-size:0.85rem;line-height:1.5">
+        ${alpha != null
+          ? alpha > 0
+            ? `✅ Votre portefeuille surperforme de <strong style="color:var(--success)">${fc(total - bench.currentValue)}</strong> et un TRI supérieur de <strong style="color:var(--success)">${fp(alpha * 100)}</strong> par rapport au MSCI World.`
+            : `⚠️ Le MSCI World aurait rapporté <strong style="color:var(--danger)">${fc(bench.currentValue - total)}</strong> de plus, soit un TRI supérieur de <strong style="color:var(--danger)">${fp(-alpha * 100)}</strong>.`
+          : 'Benchmark non disponible pour la comparaison.'}
+      </div>
+    </div>` : ''}
+
+    <!-- PERFORMANCES ANNUELLES -->
+    ${yearlyReturns.length ? `
+    <div class="card">
+      <div class="section-title mb16">Performances Annuelles</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Année</th><th>Valeur début</th><th>Valeur fin</th><th>Performance</th><th>Capital total versé</th></tr></thead>
+        <tbody>${yearlyReturns.map(y => `<tr>
+          <td><strong>${y.year}</strong></td>
+          <td>${fc(y.startVal)}</td>
+          <td>${fc(y.endVal)}</td>
+          <td><span style="color:${y.perf >= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:600">${fp(y.perf)}</span></td>
+          <td>${fc(y.deposited)}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>` : `
+    <div class="card">
+      <div class="section-title">Performances annuelles</div>
+      <div style="color:var(--muted);font-size:0.83rem;padding:10px 0">Aucun historique de snapshots disponible. Les données s'accumuleront automatiquement chaque jour.</div>
+    </div>`}
+  `;
+  requestAnimationFrame(() => makePerfCompareChart(snaps, bench));
+}
+
 function renderPage(page) {
   ({ dashboard:renderDashboard, portfolio:renderPortfolio, transactions:renderTransactions,
      treasury:renderTreasury, planning:renderPlanning, simulation:renderSimulation,
-     news:renderNews, ai:renderAI, settings:renderSettings })[page]?.();
+     performance:renderPerformance, news:renderNews, ai:renderAI, settings:renderSettings })[page]?.();
 }
 
 // ======================================================

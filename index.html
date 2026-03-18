@@ -206,6 +206,7 @@
     <div class="mob-tab" data-page="planning"><span class="mico">📅</span>Plan</div>
     <div class="mob-tab" data-page="simulation"><span class="mico">🔮</span>Sim</div>
     <div class="mob-tab" data-page="performance"><span class="mico">📈</span>Perf</div>
+    <div class="mob-tab" data-page="technical"><span class="mico">📉</span>Tech</div>
     <div class="mob-tab" data-page="news"><span class="mico">📰</span>News</div>
     <div class="mob-tab" data-page="ai"><span class="mico">🤖</span>IA</div>
     <div class="mob-tab" data-page="settings"><span class="mico">⚙️</span>Config</div>
@@ -227,6 +228,7 @@
   <div class="nav-item" data-page="planning"><span class="icon">📅</span>Planning Mensuel</div>
   <div class="nav-item" data-page="simulation"><span class="icon">🔮</span>Simulation</div>
   <div class="nav-item" data-page="performance"><span class="icon">📈</span>Performance</div>
+  <div class="nav-item" data-page="technical"><span class="icon">📉</span>Technique</div>
   <div class="nav-item" data-page="news"><span class="icon">📰</span>Actualités</div>
   <div class="nav-item" data-page="ai"><span class="icon">🤖</span>Analyse IA</div>
   <div class="nav-section">Compte</div>
@@ -251,6 +253,7 @@
   <div id="page-performance" class="page"></div>
   <div id="page-news" class="page"></div>
   <div id="page-ai" class="page"></div>
+  <div id="page-technical" class="page"></div>
   <div id="page-settings" class="page"></div>
 </main>
 
@@ -569,7 +572,8 @@ let S = {
   newsCache: {},
   txFilter: 'all',
   txSearch: '',
-  sim: null
+  sim: null,
+  _valOpen: false
 };
 
 // ======================================================
@@ -2052,9 +2056,45 @@ function renderAI() {
         <button class="btn btn-primary" onclick="aiAnalyze()" ${!hasKey?'disabled':''}>📊 Analyser mon portefeuille</button>
         <button class="btn btn-secondary" onclick="aiMonthly()" ${!hasKey?'disabled':''}>📅 Conseil achat mensuel</button>
         <button class="btn btn-secondary" onclick="aiRisk()" ${!hasKey?'disabled':''}>⚡ Analyse des risques</button>
+        <button class="btn btn-secondary" onclick="toggleValForm()" style="${S._valOpen?'background:var(--accent);color:#fff;border-color:var(--accent)':''}">💰 Valoriser</button>
         <button class="btn btn-secondary btn-sm" onclick="clearAI()" style="margin-left:auto">🗑 Effacer</button>
       </div>
     </div>
+    ${S._valOpen ? (() => {
+      const { positions } = computeSummary();
+      const opts = positions.map(p => {
+        const cache = S.data.priceCache[p.ticker];
+        const prix = cache?.price ? ` — ${fc(cache.price)}` : '';
+        return `<option value="${esc(p.ticker)}|${esc(p.name)}|${cache?.price||''}">${esc(p.ticker)} · ${esc(p.name)}${prix}</option>`;
+      }).join('');
+      return `<div class="card mb16" style="padding:14px 16px;border:1px solid var(--accent)44">
+        <div class="section-title" style="margin-bottom:10px">💰 Valorisation IA — Juste prix d'une action</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <div style="flex:1;min-width:160px">
+              <label style="font-size:0.75rem;color:var(--muted);display:block;margin-bottom:4px">Position en portefeuille</label>
+              <select id="val-pos-select" style="width:100%" onchange="valFillFromPos(this.value)">
+                <option value="">— Sélectionner —</option>
+                ${opts}
+                <option value="custom">✏️ Autre ticker…</option>
+              </select>
+            </div>
+            <div id="val-custom-fields" style="display:none;flex:2;min-width:220px;gap:8px">
+              <div style="flex:1">
+                <label style="font-size:0.75rem;color:var(--muted);display:block;margin-bottom:4px">Ticker Yahoo Finance</label>
+                <input id="val-ticker-in" placeholder="ex: MC.PA, ASML.AS" style="width:100%">
+              </div>
+              <div style="flex:1">
+                <label style="font-size:0.75rem;color:var(--muted);display:block;margin-bottom:4px">Nom de la société</label>
+                <input id="val-name-in" placeholder="ex: LVMH" style="width:100%">
+              </div>
+            </div>
+          </div>
+          <div id="val-selected-info" style="font-size:0.8rem;color:var(--muted)"></div>
+          <button class="btn btn-primary" id="btn-val-run" onclick="aiValuation()" style="align-self:flex-start">✨ Lancer la valorisation</button>
+        </div>
+      </div>`;
+    })() : ''}
     ${(S.data.aiMemory||[]).length ? `
     <div class="card mb16" style="padding:12px 16px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -2118,6 +2158,91 @@ async function aiSend() {
 
 function clearAI() { S.ai = []; renderAI(); }
 
+function toggleValForm() { S._valOpen = !S._valOpen; renderAI(); }
+
+function valFillFromPos(val) {
+  const customFields = document.getElementById('val-custom-fields');
+  const info = document.getElementById('val-selected-info');
+  if (!customFields || !info) return;
+  if (val === 'custom') {
+    customFields.style.display = 'flex';
+    info.textContent = '';
+  } else {
+    customFields.style.display = 'none';
+    if (val) {
+      const [ticker, name, price] = val.split('|');
+      info.innerHTML = `<span style="color:var(--accent);font-weight:700">${esc(ticker)}</span> · ${esc(name)}${price ? ` · Cours: <b style="color:var(--text)">${fc(parseFloat(price))}</b>` : ''}`;
+    } else {
+      info.textContent = '';
+    }
+  }
+}
+
+async function aiValuation() {
+  const sel = document.getElementById('val-pos-select');
+  const selVal = sel?.value || '';
+  let ticker = '', name = '', currentPrice = null;
+
+  if (selVal === 'custom') {
+    ticker = (document.getElementById('val-ticker-in')?.value || '').trim().toUpperCase();
+    name   = (document.getElementById('val-name-in')?.value || '').trim();
+    if (!ticker) { toast('Entrez un ticker', 'error'); return; }
+    if (!name)   { toast('Entrez le nom de la société', 'error'); return; }
+  } else if (selVal) {
+    const [t, n, p] = selVal.split('|');
+    ticker = t; name = n; currentPrice = p ? parseFloat(p) : null;
+  } else {
+    toast('Sélectionnez une action à valoriser', 'error'); return;
+  }
+
+  S._valOpen = false;
+  const { positions } = computeSummary();
+  const pos = positions.find(p => p.ticker === ticker);
+  const cache = S.data.priceCache[ticker];
+  const prix = currentPrice ?? cache?.price ?? null;
+  const prixStr = prix ? fc(prix) : 'non disponible';
+
+  const posContext = pos
+    ? `\nDonnées portefeuille: PRU ${fc(pos.avgPrice)} | ${fn(pos.quantity,4)} parts | P&L ${pos.pnl!==null?fc(pos.pnl):'N/A'} (${pos.pnlPct!==null?fp(pos.pnlPct):'N/A'}) | Poids ${fc(pos.marketValue)}`
+    : '';
+
+  const prompt = `Tu es un analyste actions sell-side senior, niveau CFA, spécialisé marchés européens et PEA français.
+
+ACTION À VALORISER:
+• Ticker: ${ticker}
+• Société: ${name}
+• Cours actuel: ${prixStr}${posContext}
+
+MISSION — VALORISATION FONDAMENTALE NIVEAU INSTITUTIONNEL.
+Estime la juste valeur de ${name} (${ticker}) en combinant plusieurs méthodes de valorisation.
+Utilise tes connaissances fondamentales sur cette société (historique, secteur, concurrents, bilan, marges, croissance).
+Sois direct, chiffré et précis dans tes estimations. Exprime une conviction claire.
+
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
+Schéma exact (tous les champs requis):
+{
+  "ticker":"",
+  "nom":"",
+  "cours_actuel":<number ou null>,
+  "juste_valeur":<number>,
+  "fourchette_basse":<number>,
+  "fourchette_haute":<number>,
+  "upside_pct":<number>,
+  "verdict":"sous-évaluée|surévaluée|juste prix|légèrement sous-évaluée|légèrement surévaluée",
+  "confiance":<integer 1-10>,
+  "horizon":"<ex: 12 mois>",
+  "methodes":[{"nom":"","valeur":<number>,"commentaire":""}],
+  "ratios":{"pe_actuel":<number ou null>,"pe_secteur":<number ou null>,"pb":<number ou null>,"ev_ebitda":<number ou null>,"dividende_yield":"","croissance_ca":"","marge_nette":"","roe":""},
+  "points_forts":[""],
+  "risques":[""],
+  "catalyseurs":[""],
+  "pea_eligible":<true|false>,
+  "synthese":"<2-3 phrases de conviction>"
+}`;
+
+  await aiRunStructured(prompt, 'valuation');
+}
+
 // ===== VISUAL AI CARD RENDERING =====
 function parseAIJSON(text) {
   let s = text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```\s*$/,'');
@@ -2147,9 +2272,10 @@ function aiScoreBar(score,max=10) {
 function renderAnalysisCard(data, type) {
   if (!data) return '<em style="color:var(--muted)">Données indisponibles</em>';
   try {
-    if (type==='analyze') return renderAnalyzeCard(data);
-    if (type==='monthly') return renderMonthlyCard(data);
-    if (type==='risk')    return renderRiskCard(data);
+    if (type==='analyze')    return renderAnalyzeCard(data);
+    if (type==='monthly')    return renderMonthlyCard(data);
+    if (type==='risk')       return renderRiskCard(data);
+    if (type==='valuation')  return renderValuationCard(data);
   } catch(e) { return `<em style="color:var(--muted)">Erreur rendu: ${esc(e.message)}</em>`; }
   return '';
 }
@@ -2200,8 +2326,129 @@ function renderRiskCard(d) {
   </div>`;
 }
 
+function renderValuationCard(d) {
+  const upside = d.upside_pct;
+  const verdictColor = upside > 10 ? '#22c55e' : upside > 0 ? '#f59e0b' : '#ef4444';
+  const verdictIcon  = upside > 10 ? '🟢' : upside > 0 ? '🟡' : '🔴';
+  const confColor = d.confiance >= 7 ? '#22c55e' : d.confiance >= 5 ? '#f59e0b' : '#ef4444';
+  const cours = d.cours_actuel ?? null;
+  const jv = d.juste_valeur;
+
+  // Gauge bar: position du cours dans la fourchette basse/haute
+  let gaugePos = 50;
+  if (cours && d.fourchette_basse && d.fourchette_haute && d.fourchette_haute > d.fourchette_basse) {
+    gaugePos = Math.max(0, Math.min(100, (cours - d.fourchette_basse) / (d.fourchette_haute - d.fourchette_basse) * 100));
+  }
+
+  return `<div style="display:flex;flex-direction:column;gap:10px">
+
+    <!-- Header: verdict + upside -->
+    <div style="background:var(--surface2);border-radius:10px;padding:14px;display:flex;gap:14px;align-items:center">
+      <div style="flex:1">
+        <div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Valorisation · ${esc(d.ticker)} · ${esc(d.nom)}</div>
+        <div style="font-size:1rem;font-weight:700;color:${verdictColor};margin-bottom:2px">${verdictIcon} ${esc(d.verdict||'—')}</div>
+        <div style="font-size:0.76rem;color:var(--muted)">${esc(d.horizon||'')}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:2px">Juste valeur</div>
+        <div style="font-size:1.6rem;font-weight:800;color:var(--accent)">${jv ? fc(jv) : '—'}</div>
+        ${upside !== undefined ? `<div style="font-size:0.85rem;font-weight:700;color:${verdictColor}">${upside > 0 ? '+' : ''}${upside.toFixed(1)}% upside</div>` : ''}
+      </div>
+    </div>
+
+    <!-- Gauge cours vs fourchette -->
+    ${cours && d.fourchette_basse && d.fourchette_haute ? `
+    <div style="background:var(--surface2);border-radius:8px;padding:12px">
+      <div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Positionnement vs juste valeur</div>
+      <div style="position:relative;height:8px;background:linear-gradient(to right,#22c55e,#f59e0b,#ef4444);border-radius:4px;margin-bottom:6px">
+        <div style="position:absolute;top:50%;transform:translate(-50%,-50%);left:${gaugePos}%;width:14px;height:14px;border-radius:50%;background:#fff;border:3px solid var(--accent);box-shadow:0 0 6px rgba(0,0,0,.4)"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:0.72rem;color:var(--muted)">
+        <span>Bas ${fc(d.fourchette_basse)}</span>
+        <span style="color:var(--text);font-weight:600">Cours ${fc(cours)}</span>
+        <span>Haut ${fc(d.fourchette_haute)}</span>
+      </div>
+    </div>` : ''}
+
+    <!-- Méthodes de valorisation -->
+    ${d.methodes?.length ? `<div>
+      <div class="section-title" style="margin-bottom:6px">📐 Méthodes de valorisation</div>
+      ${d.methodes.map(m => {
+        const diff = cours && m.valeur ? ((m.valeur - cours) / cours * 100) : null;
+        const mc = diff === null ? 'var(--muted)' : diff > 0 ? '#22c55e' : '#ef4444';
+        return `<div style="background:var(--surface2);border-radius:8px;padding:10px 13px;margin-bottom:5px;display:flex;align-items:center;gap:10px">
+          <div style="flex:1"><div style="font-size:0.82rem;font-weight:600">${esc(m.nom)}</div>${m.commentaire?`<div style="font-size:0.73rem;color:var(--muted);margin-top:1px">${esc(m.commentaire)}</div>`:''}</div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-size:1rem;font-weight:700;color:var(--accent)">${m.valeur ? fc(m.valeur) : '—'}</div>
+            ${diff !== null ? `<div style="font-size:0.72rem;color:${mc}">${diff > 0 ? '+' : ''}${diff.toFixed(1)}%</div>` : ''}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>` : ''}
+
+    <!-- Ratios clés -->
+    ${d.ratios ? `<div>
+      <div class="section-title" style="margin-bottom:6px">📊 Ratios clés</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px">
+        ${[
+          ['P/E actuel', d.ratios.pe_actuel, 'x'],
+          ['P/E secteur', d.ratios.pe_secteur, 'x'],
+          ['P/B', d.ratios.pb, 'x'],
+          ['EV/EBITDA', d.ratios.ev_ebitda, 'x'],
+          ['Dividende', d.ratios.dividende_yield, ''],
+          ['Croissance CA', d.ratios.croissance_ca, ''],
+          ['Marge nette', d.ratios.marge_nette, ''],
+          ['ROE', d.ratios.roe, ''],
+        ].filter(([,v])=> v !== null && v !== undefined && v !== '').map(([label, val, unit]) =>
+          `<div style="background:var(--surface2);border-radius:7px;padding:8px 10px;text-align:center">
+            <div style="font-size:0.65rem;color:var(--muted);text-transform:uppercase;margin-bottom:3px">${label}</div>
+            <div style="font-size:0.9rem;font-weight:700">${typeof val === 'number' ? val.toFixed(1)+unit : esc(String(val))}</div>
+          </div>`
+        ).join('')}
+      </div>
+    </div>` : ''}
+
+    <!-- Points forts / Risques -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${d.points_forts?.length ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px">
+        <div style="font-size:0.68rem;color:#22c55e;text-transform:uppercase;margin-bottom:6px;font-weight:700">✅ Points forts</div>
+        ${d.points_forts.map(p=>`<div style="font-size:0.78rem;margin-bottom:3px;padding-left:8px;border-left:2px solid #22c55e44">${esc(p)}</div>`).join('')}
+      </div>` : ''}
+      ${d.risques?.length ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px">
+        <div style="font-size:0.68rem;color:#ef4444;text-transform:uppercase;margin-bottom:6px;font-weight:700">⚠️ Risques</div>
+        ${d.risques.map(r=>`<div style="font-size:0.78rem;margin-bottom:3px;padding-left:8px;border-left:2px solid #ef444444">${esc(r)}</div>`).join('')}
+      </div>` : ''}
+    </div>
+
+    <!-- Catalyseurs -->
+    ${d.catalyseurs?.length ? `<div>
+      <div class="section-title" style="margin-bottom:6px">🚀 Catalyseurs</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        ${d.catalyseurs.map(c=>`<span style="background:var(--accent)22;color:var(--accent);border:1px solid var(--accent)44;border-radius:20px;padding:3px 10px;font-size:0.76rem">${esc(c)}</span>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <!-- Confiance + Éligibilité PEA -->
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <div style="background:var(--surface2);border-radius:7px;padding:8px 12px;display:flex;align-items:center;gap:8px">
+        <span style="font-size:0.73rem;color:var(--muted)">Confiance IA</span>
+        ${aiScoreBar(d.confiance || 0)}
+      </div>
+      ${d.pea_eligible !== undefined ? `<div style="background:${d.pea_eligible?'#22c55e22':'#ef444422'};border:1px solid ${d.pea_eligible?'#22c55e44':'#ef444444'};border-radius:7px;padding:8px 12px;font-size:0.78rem;font-weight:700;color:${d.pea_eligible?'#22c55e':'#ef4444'}">
+        ${d.pea_eligible ? '✅ Éligible PEA' : '❌ Non éligible PEA'}
+      </div>` : ''}
+    </div>
+
+    <!-- Synthèse -->
+    ${d.synthese ? `<div style="background:var(--surface2);border-radius:8px;padding:12px 14px;border-left:3px solid var(--accent)">
+      <div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:5px">Synthèse</div>
+      <div style="font-size:0.83rem;line-height:1.5">${esc(d.synthese)}</div>
+    </div>` : ''}
+  </div>`;
+}
+
 async function aiRunStructured(fullPrompt, type) {
-  const labels = { analyze:'📊 Analyse du portefeuille', monthly:'📅 Conseil achat mensuel', risk:'⚡ Analyse des risques' };
+  const labels = { analyze:'📊 Analyse du portefeuille', monthly:'📅 Conseil achat mensuel', risk:'⚡ Analyse des risques', valuation:'💰 Valorisation IA' };
   const now = new Date().toLocaleTimeString('fr-FR');
   S.ai.push({ role:'user', content:labels[type]||'Analyse IA', time:now, isLabel:true });
   renderAI();
@@ -2327,6 +2574,534 @@ RÈGLES OBLIGATOIRES:
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
 Schéma exact:
 {"score_diversification":<integer 0-10>,"correlations":"<1-2 phrases>","risques":[{"niveau":"élevé|modéré|faible","type":"","detail":"","impact_eur":"<ex: -6700€ sur krach -30%>","horizon":"Court|Moyen|Long terme"}],"stress":[{"scenario":"","perte_eur":<number négatif>,"perte_pct":<number négatif>,"detail":""}],"recommandations_etf":[""],"recommandations_titres":[""],"alertes":[{"ticker":"","declencheur":""}]}`, 'risk');
+}
+
+// ======================================================
+// PAGE — ANALYSE TECHNIQUE
+// ======================================================
+let _techState = { ticker: '', name: '', range: '6mo' };
+let _techData  = null;
+
+function renderTechnical() {
+  const { positions } = computeSummary();
+  const opts = positions.map(p => {
+    const c = S.data.priceCache[p.ticker];
+    const prix = c?.price ? ` — ${fc(c.price)}` : '';
+    return `<option value="${esc(p.ticker)}|${esc(p.name)}">${esc(p.ticker)} · ${esc(p.name)}${prix}</option>`;
+  }).join('');
+  document.getElementById('page-technical').innerHTML = `
+    <div class="page-header">
+      <div><h2>Analyse Technique</h2><div class="page-sub">Indicateurs, moyennes mobiles, support &amp; résistance</div></div>
+    </div>
+    <div class="card mb16" style="padding:14px 16px">
+      <div class="section-title" style="margin-bottom:10px">Action à analyser</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+        <div style="flex:1;min-width:160px">
+          <label style="font-size:0.75rem;color:var(--muted);display:block;margin-bottom:4px">Position en portefeuille</label>
+          <select id="tech-pos-sel" style="width:100%" onchange="techFillPos(this.value)">
+            <option value="">— Sélectionner —</option>
+            ${opts}
+            <option value="custom">✏️ Autre ticker…</option>
+          </select>
+        </div>
+        <div id="tech-custom" style="display:none;flex:2;min-width:220px;gap:8px">
+          <div style="flex:1">
+            <label style="font-size:0.75rem;color:var(--muted);display:block;margin-bottom:4px">Ticker Yahoo Finance</label>
+            <input id="tech-ticker-in" placeholder="ex: MC.PA" style="width:100%" value="${esc(_techState.ticker)}">
+          </div>
+          <div style="flex:1">
+            <label style="font-size:0.75rem;color:var(--muted);display:block;margin-bottom:4px">Nom</label>
+            <input id="tech-name-in" placeholder="ex: LVMH" style="width:100%" value="${esc(_techState.name)}">
+          </div>
+        </div>
+        <div style="flex-shrink:0">
+          <label style="font-size:0.75rem;color:var(--muted);display:block;margin-bottom:4px">Période</label>
+          <select id="tech-range-sel" style="min-width:100px">
+            <option value="1mo">1 mois</option>
+            <option value="3mo">3 mois</option>
+            <option value="6mo" ${_techState.range==='6mo'?'selected':''}>6 mois</option>
+            <option value="1y" ${_techState.range==='1y'?'selected':''}>1 an</option>
+            <option value="2y" ${_techState.range==='2y'?'selected':''}>2 ans</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" id="btn-tech-load" onclick="technicalLoad()" style="flex-shrink:0;align-self:flex-end">📊 Analyser</button>
+      </div>
+      <div id="tech-sel-info" style="font-size:0.8rem;color:var(--muted);margin-top:8px">
+        ${_techState.ticker ? `<span style="color:var(--accent);font-weight:700">${esc(_techState.ticker)}</span> · ${esc(_techState.name)}` : ''}
+      </div>
+    </div>
+    <div id="tech-results">
+      <div class="empty"><div class="ico">📉</div><p>Sélectionnez une action et cliquez sur Analyser</p><p style="font-size:0.75rem;margin-top:6px;color:var(--muted)">SMA · Bollinger · RSI · MACD · Support &amp; Résistance</p></div>
+    </div>
+  `;
+  if (_techState.ticker) {
+    const sel = document.getElementById('tech-pos-sel');
+    if (sel) {
+      const opt = [...sel.options].find(o => o.value.startsWith(_techState.ticker + '|'));
+      if (opt) sel.value = opt.value;
+    }
+  }
+}
+
+function techFillPos(val) {
+  const custom = document.getElementById('tech-custom');
+  const info   = document.getElementById('tech-sel-info');
+  if (val === 'custom') {
+    if (custom) custom.style.display = 'flex';
+    _techState.ticker = ''; _techState.name = '';
+    if (info) info.textContent = '';
+  } else if (val) {
+    if (custom) custom.style.display = 'none';
+    const [ticker, name] = val.split('|');
+    _techState.ticker = ticker; _techState.name = name;
+    if (info) info.innerHTML = `<span style="color:var(--accent);font-weight:700">${esc(ticker)}</span> · ${esc(name)}`;
+  } else {
+    if (custom) custom.style.display = 'none';
+    _techState.ticker = ''; _techState.name = '';
+    if (info) info.textContent = '';
+  }
+}
+
+// ---- Indicator math ----
+function techSMA(arr, n) {
+  return arr.map((_, i) => {
+    if (i < n - 1) return null;
+    let s = 0; for (let j = i - n + 1; j <= i; j++) s += arr[j]; return s / n;
+  });
+}
+function techEMA(arr, n) {
+  const result = new Array(arr.length).fill(null);
+  const k = 2 / (n + 1);
+  let ema = null, count = 0, sum = 0;
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i] === null || arr[i] === undefined) continue;
+    count++; sum += arr[i];
+    if (count === n) { ema = sum / n; result[i] = ema; }
+    else if (count > n) { ema = arr[i] * k + ema * (1 - k); result[i] = ema; }
+  }
+  return result;
+}
+function techBollinger(closes, period = 20, mult = 2) {
+  const sma = techSMA(closes, period);
+  return closes.map((_, i) => {
+    if (sma[i] === null) return { mid: null, upper: null, lower: null };
+    const slice = closes.slice(Math.max(0, i - period + 1), i + 1);
+    const mean  = slice.reduce((a, b) => a + b, 0) / slice.length;
+    const std   = Math.sqrt(slice.reduce((s, v) => s + (v - mean) ** 2, 0) / slice.length);
+    return { mid: sma[i], upper: sma[i] + mult * std, lower: sma[i] - mult * std };
+  });
+}
+function techRSI(closes, period = 14) {
+  const result = new Array(closes.length).fill(null);
+  if (closes.length < period + 1) return result;
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const d = closes[i] - closes[i - 1];
+    if (d > 0) gains += d; else losses -= d;
+  }
+  let avgG = gains / period, avgL = losses / period;
+  result[period] = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL);
+  for (let i = period + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    const g = d > 0 ? d : 0, l = d < 0 ? -d : 0;
+    avgG = (avgG * (period - 1) + g) / period;
+    avgL = (avgL * (period - 1) + l) / period;
+    result[i] = avgL === 0 ? 100 : 100 - 100 / (1 + avgG / avgL);
+  }
+  return result;
+}
+function techMACD(closes, fast = 12, slow = 26, sigPeriod = 9) {
+  const emaFast  = techEMA(closes, fast);
+  const emaSlow  = techEMA(closes, slow);
+  const macdLine = closes.map((_, i) =>
+    emaFast[i] !== null && emaSlow[i] !== null ? emaFast[i] - emaSlow[i] : null);
+  const signalLine = techEMA(macdLine, sigPeriod);
+  const histogram  = macdLine.map((v, i) =>
+    v !== null && signalLine[i] !== null ? v - signalLine[i] : null);
+  return { macdLine, signalLine, histogram };
+}
+function detectSR(highs, lows, closes, tolerance = 0.015) {
+  const n = closes.length, lb = 3, raw = [];
+  for (let i = lb; i < n - lb; i++) {
+    let isMax = true;
+    for (let j = 1; j <= lb; j++) if (highs[i] <= highs[i-j] || highs[i] <= highs[i+j]) { isMax = false; break; }
+    if (isMax) raw.push({ price: highs[i], type: 'R' });
+  }
+  for (let i = lb; i < n - lb; i++) {
+    let isMin = true;
+    for (let j = 1; j <= lb; j++) if (lows[i] >= lows[i-j] || lows[i] >= lows[i+j]) { isMin = false; break; }
+    if (isMin) raw.push({ price: lows[i], type: 'S' });
+  }
+  const clusters = [];
+  for (const pt of raw) {
+    const c = clusters.find(cl => Math.abs(cl.price - pt.price) / pt.price < tolerance);
+    if (c) { c.prices.push(pt.price); c.price = c.prices.reduce((a,b)=>a+b,0)/c.prices.length; if (pt.type==='R') c.r++; else c.s++; }
+    else clusters.push({ price: pt.price, prices: [pt.price], r: pt.type==='R'?1:0, s: pt.type==='S'?1:0 });
+  }
+  const cur = closes[closes.length - 1];
+  return clusters
+    .filter(c => c.r + c.s >= 2)
+    .sort((a, b) => (b.r + b.s) - (a.r + a.s))
+    .slice(0, 8)
+    .map(c => ({
+      price: c.price,
+      type: Math.abs(c.price - cur) / cur < tolerance ? 'pivot' : c.price > cur ? 'resistance' : 'support',
+      touches: c.r + c.s
+    }));
+}
+
+function techSignals(closes, sma20, sma50, sma200, rsi14, macd, boll) {
+  const last = closes[closes.length - 1];
+  const lastRSI    = rsi14.filter(v => v !== null).at(-1);
+  const lastSMA20  = sma20.filter(v => v !== null).at(-1);
+  const lastSMA50  = sma50.filter(v => v !== null).at(-1);
+  const lastSMA200 = sma200.filter(v => v !== null).at(-1);
+  const lastMACD   = macd.macdLine.filter(v => v !== null).at(-1);
+  const lastSig    = macd.signalLine.filter(v => v !== null).at(-1);
+  const prevMACD   = macd.macdLine.filter(v => v !== null).at(-2);
+  const prevSig    = macd.signalLine.filter(v => v !== null).at(-2);
+  const lastBoll   = boll.filter(v => v.upper !== null).at(-1);
+  const signals = [];
+  if (lastSMA200 !== undefined) {
+    const above = last > lastSMA200;
+    const pct = ((last - lastSMA200) / lastSMA200 * 100).toFixed(1);
+    signals.push({ label:'Tendance long terme', indicator:'SMA 200', value: above ? `+${pct}% au-dessus` : `${pct}% en-dessous`, verdict: above?'bullish':'bearish',
+      detail: above ? 'Prix au-dessus de la SMA 200 — tendance haussière de fond confirmée' : 'Prix sous la SMA 200 — tendance baissière de fond, prudence recommandée' });
+  }
+  if (lastSMA50 !== undefined && lastSMA200 !== undefined) {
+    const gc = lastSMA50 > lastSMA200;
+    signals.push({ label:'Croisement SMA 50/200', indicator: gc?'Golden Cross':'Death Cross', value: gc?'🌟 Golden Cross':'💀 Death Cross', verdict: gc?'bullish':'bearish',
+      detail: gc ? 'SMA 50 au-dessus de SMA 200 (Golden Cross) — signal haussier fort sur le long terme' : 'SMA 50 sous la SMA 200 (Death Cross) — signal baissier majeur, tendance à surveiller' });
+  }
+  if (lastSMA20 !== undefined && lastSMA50 !== undefined) {
+    const above = last > lastSMA20 && last > lastSMA50;
+    const below = last < lastSMA20 && last < lastSMA50;
+    signals.push({ label:'Tendance court/moyen terme', indicator:'SMA 20 & 50', value: above?'Prix au-dessus des deux':below?'Prix sous les deux':'Prix entre les deux SMA', verdict: above?'bullish':below?'bearish':'neutral',
+      detail: above ? 'Prix au-dessus de SMA20 et SMA50 — momentum haussier court et moyen terme' : below ? 'Prix sous SMA20 et SMA50 — momentum baissier, pas de signal d\'achat' : 'Prix entre les SMAs — phase de consolidation ou retournement possible' });
+  }
+  if (lastRSI !== undefined) {
+    const v = lastRSI > 70 ? 'bearish' : lastRSI < 30 ? 'bullish' : 'neutral';
+    const txt = lastRSI > 70 ? `Suracheté (${lastRSI.toFixed(1)})` : lastRSI < 30 ? `Survendu (${lastRSI.toFixed(1)})` : `Neutre (${lastRSI.toFixed(1)})`;
+    signals.push({ label:'Momentum RSI', indicator:'RSI 14', value: txt, verdict: v,
+      detail: lastRSI > 70 ? 'RSI > 70 : action suracheté à court terme, risque de correction' : lastRSI < 30 ? 'RSI < 30 : action survendue, possible rebond technique' : 'RSI en zone neutre (30-70) — pas de signal extrême' });
+  }
+  if (lastMACD !== undefined && lastSig !== undefined && prevMACD !== undefined && prevSig !== undefined) {
+    const crossUp   = prevMACD < prevSig && lastMACD > lastSig;
+    const crossDown = prevMACD > prevSig && lastMACD < lastSig;
+    const aboveZero = lastMACD > 0;
+    const verdict   = crossUp ? 'bullish' : crossDown ? 'bearish' : aboveZero ? 'bullish' : 'neutral';
+    const value     = crossUp ? '↑ Croisement haussier' : crossDown ? '↓ Croisement baissier' : aboveZero ? 'MACD > 0' : 'MACD < 0';
+    signals.push({ label:'MACD', indicator:'(12,26,9)', value, verdict,
+      detail: crossUp ? 'Croisement MACD/Signal vers le haut — signal d\'achat potentiel' : crossDown ? 'Croisement MACD/Signal vers le bas — signal de vente potentiel' : aboveZero ? 'MACD positif, momentum haussier dominant' : 'MACD négatif, momentum baissier dominant' });
+  }
+  if (lastBoll) {
+    const pct = (last - lastBoll.lower) / (lastBoll.upper - lastBoll.lower);
+    const verdict = pct > 0.85 ? 'bearish' : pct < 0.15 ? 'bullish' : 'neutral';
+    const value   = pct > 0.85 ? 'Bande supérieure' : pct < 0.15 ? 'Bande inférieure' : 'Zone centrale';
+    signals.push({ label:'Volatilité Bollinger', indicator:'(20, ±2σ)', value, verdict,
+      detail: pct > 0.85 ? 'Prix proche de la bande supérieure — possible surchauffe à court terme' : pct < 0.15 ? 'Prix proche de la bande inférieure — possible rebond depuis un support' : 'Prix dans la zone médiane des bandes — volatilité normale' });
+  }
+  return signals;
+}
+
+async function technicalLoad() {
+  const selVal = document.getElementById('tech-pos-sel')?.value || '';
+  const range  = document.getElementById('tech-range-sel')?.value || '6mo';
+  let ticker = _techState.ticker, name = _techState.name;
+  if (selVal === 'custom') {
+    ticker = (document.getElementById('tech-ticker-in')?.value || '').trim().toUpperCase();
+    name   = (document.getElementById('tech-name-in')?.value  || '').trim();
+    if (!ticker) { toast('Entrez un ticker Yahoo Finance (ex: MC.PA)', 'error'); return; }
+  } else if (selVal) {
+    [ticker, name] = selVal.split('|');
+  }
+  if (!ticker) { toast('Sélectionnez une action à analyser', 'error'); return; }
+  _techState.ticker = ticker; _techState.name = name; _techState.range = range;
+  const resultsEl = document.getElementById('tech-results');
+  if (resultsEl) resultsEl.innerHTML = `<div style="text-align:center;padding:40px 0"><div class="spinner" style="width:28px;height:28px;border-width:3px;margin:0 auto 14px"></div><div style="color:var(--muted)">Chargement des données historiques…<br><span style="font-size:0.75rem">Yahoo Finance · ${esc(ticker)} · ${range}</span></div></div>`;
+  const btn = document.getElementById('btn-tech-load');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'; }
+  try {
+    // Use period1/period2 timestamps + query1 (more permissive than query2+range)
+    const now = Math.floor(Date.now() / 1000);
+    const days = ({ '1mo':33, '3mo':95, '6mo':185, '1y':370, '2y':740 })[range] || 185;
+    const period1 = now - days * 86400;
+    const url  = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${period1}&period2=${now}&includePrePost=false`;
+    const url2 = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${period1}&period2=${now}&includePrePost=false`;
+    let json = null;
+    const proxies = [
+      async () => { const r = await fetch(`${PROXY}${encodeURIComponent(url)}`,  { signal: AbortSignal.timeout(20000) }); if (!r.ok) throw new Error('HTTP '+r.status); const d = await r.json(); return JSON.parse(d.contents); },
+      async () => { const r = await fetch(`${PROXY}${encodeURIComponent(url2)}`, { signal: AbortSignal.timeout(20000) }); if (!r.ok) throw new Error('HTTP '+r.status); const d = await r.json(); return JSON.parse(d.contents); },
+      async () => { const r = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,  { signal: AbortSignal.timeout(20000) }); if (!r.ok) throw new Error('HTTP '+r.status); return await r.json(); },
+      async () => { const r = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(20000) }); if (!r.ok) throw new Error('HTTP '+r.status); return await r.json(); },
+    ];
+    for (const tryProxy of proxies) {
+      try { json = await tryProxy(); if (json?.chart?.result?.[0]) break; else json = null; } catch(e) { json = null; }
+    }
+    if (!json) throw new Error('Yahoo Finance inaccessible — réessayez dans quelques secondes ou changez de réseau');
+    const result = json?.chart?.result?.[0];
+    if (!result) throw new Error('Données indisponibles — vérifiez le ticker Yahoo Finance (ex: AIR.PA, MC.PA)');
+    const timestamps = result.timestamp || [];
+    const quote = result.indicators?.quote?.[0] || {};
+    const rawCloses  = quote.close  || [];
+    const rawHighs   = quote.high   || [];
+    const rawLows    = quote.low    || [];
+    if (rawCloses.length < 20) throw new Error('Pas assez de données (minimum 20 séances)');
+    // Filter nulls
+    const validIdx = rawCloses.map((v, i) => (v !== null && v !== undefined) ? i : -1).filter(i => i >= 0);
+    const closes = validIdx.map(i => rawCloses[i]);
+    const highs  = validIdx.map(i => rawHighs[i]  || rawCloses[i]);
+    const lows   = validIdx.map(i => rawLows[i]   || rawCloses[i]);
+    const labels = validIdx.map(i => new Date(timestamps[i] * 1000).toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit'}));
+    _techData = { labels, closes, highs, lows };
+    // Compute
+    const sma20  = techSMA(closes, 20);
+    const sma50  = techSMA(closes, 50);
+    const sma200 = techSMA(closes, 200);
+    const boll   = techBollinger(closes, 20, 2);
+    const rsi    = techRSI(closes, 14);
+    const macd   = techMACD(closes);
+    const sr     = detectSR(highs, lows, closes);
+    const signals = techSignals(closes, sma20, sma50, sma200, rsi, macd, boll);
+    techRenderResults(ticker, name, labels, closes, sma20, sma50, sma200, boll, rsi, macd, sr, signals);
+  } catch(e) {
+    if (resultsEl) resultsEl.innerHTML = `<div class="info-box info-danger">❌ ${esc(e.message)}<br><span style="font-size:0.75rem;color:var(--muted)">Vérifiez le ticker (format Yahoo Finance: MC.PA, AIR.PA, ASML.AS…)</span></div>`;
+    toast(e.message, 'error', 6000);
+  }
+  if (btn) { btn.disabled = false; btn.innerHTML = '📊 Analyser'; }
+}
+
+function techRenderResults(ticker, name, labels, closes, sma20, sma50, sma200, boll, rsi, macd, sr, signals) {
+  const last      = closes[closes.length - 1];
+  const first     = closes[0];
+  const perfPct   = (last - first) / first * 100;
+  const perfColor = perfPct >= 0 ? '#22c55e' : '#ef4444';
+  const sColors   = { bullish:'#22c55e', bearish:'#ef4444', neutral:'#f59e0b' };
+  const sIcons    = { bullish:'🟢', bearish:'🔴', neutral:'🟡' };
+  const bull = signals.filter(s => s.verdict === 'bullish').length;
+  const bear = signals.filter(s => s.verdict === 'bearish').length;
+  const ovVerdict = bull > bear ? 'HAUSSIER' : bear > bull ? 'BAISSIER' : 'NEUTRE';
+  const ovColor   = bull > bear ? '#22c55e' : bear > bull ? '#ef4444' : '#f59e0b';
+  const resultsEl = document.getElementById('tech-results');
+  if (!resultsEl) return;
+  resultsEl.innerHTML = `
+    <div class="card mb16" style="padding:14px 16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-size:1.05rem;font-weight:700">${esc(name)} <span style="color:var(--muted);font-size:0.82rem">${esc(ticker)}</span></div>
+          <div style="font-size:0.73rem;color:var(--muted)">Analyse technique · ${labels.length} séances · ${labels[0]} → ${labels[labels.length-1]}</div>
+        </div>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <div style="text-align:right">
+            <div style="font-size:0.65rem;color:var(--muted);text-transform:uppercase">Dernier cours</div>
+            <div style="font-size:1.2rem;font-weight:800">${fc(last)}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:0.65rem;color:var(--muted);text-transform:uppercase">Perf. période</div>
+            <div style="font-size:1rem;font-weight:700;color:${perfColor}">${perfPct >= 0 ? '+' : ''}${perfPct.toFixed(2)}%</div>
+          </div>
+          <div style="background:${ovColor}22;border:1px solid ${ovColor}44;border-radius:8px;padding:10px 14px;text-align:center">
+            <div style="font-size:0.65rem;color:var(--muted);text-transform:uppercase;margin-bottom:2px">Signal global</div>
+            <div style="font-size:0.95rem;font-weight:800;color:${ovColor}">${ovVerdict}</div>
+            <div style="font-size:0.68rem;color:var(--muted)">${bull}🟢 ${bear}🔴 ${signals.length-bull-bear}🟡</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card mb16" style="padding:14px 16px">
+      <div class="section-title" style="margin-bottom:10px">Signaux techniques</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${signals.map(s => `
+          <div style="background:var(--surface2);border-radius:8px;padding:10px 13px;border-left:3px solid ${sColors[s.verdict]}">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+              <div><span style="font-weight:600;font-size:0.84rem">${sIcons[s.verdict]} ${esc(s.label)}</span><span style="font-size:0.72rem;color:var(--muted);margin-left:8px">${esc(s.indicator)}</span></div>
+              <span style="background:${sColors[s.verdict]}22;color:${sColors[s.verdict]};border:1px solid ${sColors[s.verdict]}55;border-radius:4px;padding:2px 9px;font-size:0.72rem;font-weight:700;white-space:nowrap">${esc(s.value)}</span>
+            </div>
+            <div style="font-size:0.75rem;color:var(--muted);margin-top:3px">${esc(s.detail)}</div>
+          </div>`).join('')}
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-secondary" onclick="technicalLoad()">🔄 Actualiser</button>
+        <button class="btn btn-primary" onclick="aiTechnicalAnalysis()">🤖 Interpréter avec IA</button>
+      </div>
+    </div>
+    ${sr.length ? `<div class="card mb16" style="padding:14px 16px">
+      <div class="section-title" style="margin-bottom:8px">🎯 Zones Support &amp; Résistance</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        ${sr.map(z => {
+          const dist = ((z.price - last) / last * 100);
+          const c = z.type === 'resistance' ? '#ef4444' : z.type === 'support' ? '#22c55e' : '#f59e0b';
+          const icon = z.type === 'resistance' ? '🔴' : z.type === 'support' ? '🟢' : '⚡';
+          return `<div style="background:${c}11;border:1px solid ${c}33;border-radius:7px;padding:8px 12px;text-align:center;min-width:100px">
+            <div style="font-size:0.65rem;color:${c};text-transform:uppercase;font-weight:700;margin-bottom:2px">${icon} ${esc(z.type)}</div>
+            <div style="font-size:0.95rem;font-weight:700">${fc(z.price)}</div>
+            <div style="font-size:0.68rem;color:var(--muted)">${dist >= 0 ? '+' : ''}${dist.toFixed(1)}% · ${z.touches} contacts</div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div style="font-size:0.72rem;color:var(--muted);margin-top:8px">Les zones avec le plus de contacts sont les niveaux les plus significatifs.</div>
+    </div>` : ''}
+    <div class="card mb16" style="padding:14px 16px">
+      <div class="section-title" style="margin-bottom:6px">📈 Cours · SMA · Bollinger</div>
+      <div style="font-size:0.72rem;color:var(--muted);margin-bottom:10px">
+        <span style="color:#e2e8f0">━</span> Cours &nbsp;
+        <span style="color:#60a5fa">╌</span> SMA 20 &nbsp;
+        <span style="color:#f97316">╌</span> SMA 50 &nbsp;
+        <span style="color:#ef4444">━</span> SMA 200 &nbsp;
+        <span style="color:#94a3b8">▒</span> Bollinger &nbsp;
+        <span style="color:#22c55e">╌</span> Support &nbsp;
+        <span style="color:#ef4444">╌</span> Résistance
+      </div>
+      <div style="position:relative;height:300px"><canvas id="tech-chart-price"></canvas></div>
+    </div>
+    <div class="card mb16" style="padding:14px 16px">
+      <div class="section-title" style="margin-bottom:2px">RSI 14 <span style="font-size:0.72rem;color:var(--muted);font-weight:400">— Suracheté &gt; 70 (rouge) · Survendu &lt; 30 (vert)</span></div>
+      <div style="position:relative;height:130px;margin-top:8px"><canvas id="tech-chart-rsi"></canvas></div>
+    </div>
+    <div class="card mb16" style="padding:14px 16px">
+      <div class="section-title" style="margin-bottom:2px">MACD (12,26,9) <span style="font-size:0.72rem;color:var(--muted);font-weight:400">— Histo vert = momentum haussier · rouge = baissier</span></div>
+      <div style="position:relative;height:130px;margin-top:8px"><canvas id="tech-chart-macd"></canvas></div>
+    </div>`;
+  setTimeout(() => {
+    techDrawPriceChart(labels, closes, sma20, sma50, sma200, boll, sr);
+    techDrawRSIChart(labels, rsi);
+    techDrawMACDChart(labels, macd);
+  }, 60);
+}
+
+function techDrawPriceChart(labels, closes, sma20, sma50, sma200, boll, sr) {
+  const ctx = document.getElementById('tech-chart-price')?.getContext('2d');
+  if (!ctx) return;
+  if (S.charts.techPrice) { S.charts.techPrice.destroy(); S.charts.techPrice = null; }
+  const datasets = [
+    { label:'Boll. Upper', data:boll.map(b=>b.upper), borderColor:'rgba(148,163,184,0.25)', backgroundColor:'rgba(148,163,184,0.07)', borderWidth:1, pointRadius:0, fill:'+1', tension:0.3 },
+    { label:'Boll. Lower', data:boll.map(b=>b.lower), borderColor:'rgba(148,163,184,0.25)', backgroundColor:'rgba(148,163,184,0.07)', borderWidth:1, pointRadius:0, fill:false, tension:0.3 },
+    { label:'Cours', data:closes, borderColor:'#e2e8f0', backgroundColor:'rgba(226,232,240,0.04)', borderWidth:2, pointRadius:0, tension:0.1, fill:false, order:1 },
+    { label:'SMA 20', data:sma20, borderColor:'#60a5fa', backgroundColor:'transparent', borderWidth:1.5, pointRadius:0, tension:0.3, fill:false, borderDash:[3,3] },
+    { label:'SMA 50', data:sma50, borderColor:'#f97316', backgroundColor:'transparent', borderWidth:1.5, pointRadius:0, tension:0.3, fill:false, borderDash:[5,3] },
+    { label:'SMA 200', data:sma200, borderColor:'#ef4444', backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3, fill:false },
+  ];
+  for (const z of sr) {
+    const c = z.type==='resistance'?'rgba(239,68,68,0.45)':z.type==='support'?'rgba(34,197,94,0.45)':'rgba(245,158,11,0.45)';
+    datasets.push({ label:`${z.type==='resistance'?'R':'S'} ${fc(z.price)}`, data:labels.map(()=>z.price), borderColor:c, backgroundColor:'transparent', borderWidth:1, borderDash:[4,4], pointRadius:0, fill:false });
+  }
+  S.charts.techPrice = new Chart(ctx, {
+    type:'line', data:{ labels, datasets },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{
+        legend:{ display:true, labels:{ color:'#94a3b8', font:{size:10}, boxWidth:20, padding:8,
+          filter:item=>!['Boll. Upper','Boll. Lower'].includes(item.text)&&!item.text.startsWith('R ')&&!item.text.startsWith('S ') }},
+        tooltip:{ backgroundColor:'#1e293b', titleColor:'#e2e8f0', bodyColor:'#94a3b8',
+          callbacks:{ label:ctx => `${ctx.dataset.label}: ${ctx.parsed.y!==null?fc(ctx.parsed.y):'—'}` }}
+      },
+      scales:{
+        x:{ grid:{color:'rgba(255,255,255,0.04)'}, ticks:{color:'#64748b',font:{size:10},maxTicksLimit:10} },
+        y:{ grid:{color:'rgba(255,255,255,0.05)'}, ticks:{color:'#64748b',font:{size:10},callback:v=>fc(v)}, position:'right' }
+      }
+    }
+  });
+}
+
+function techDrawRSIChart(labels, rsi) {
+  const ctx = document.getElementById('tech-chart-rsi')?.getContext('2d');
+  if (!ctx) return;
+  if (S.charts.techRSI) { S.charts.techRSI.destroy(); S.charts.techRSI = null; }
+  const lastRSI = rsi.filter(v=>v!==null).at(-1) || 50;
+  const rsiColor = lastRSI > 70 ? '#ef4444' : lastRSI < 30 ? '#22c55e' : '#60a5fa';
+  S.charts.techRSI = new Chart(ctx, {
+    type:'line',
+    data:{ labels, datasets:[
+      { label:'Suracheté (70)', data:labels.map(()=>70), borderColor:'rgba(239,68,68,0.35)', borderWidth:1, borderDash:[4,3], pointRadius:0, fill:false },
+      { label:'Survendu (30)',  data:labels.map(()=>30), borderColor:'rgba(34,197,94,0.35)',  borderWidth:1, borderDash:[4,3], pointRadius:0, fill:false },
+      { label:'RSI 14', data:rsi, borderColor:rsiColor, backgroundColor:rsiColor+'18', borderWidth:1.5, pointRadius:0, fill:true, tension:0.3 },
+    ]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{backgroundColor:'#1e293b',titleColor:'#e2e8f0',bodyColor:'#94a3b8',
+        callbacks:{label:ctx=>`RSI: ${ctx.parsed.y!==null?ctx.parsed.y.toFixed(1):'—'}`}} },
+      scales:{
+        x:{ grid:{color:'rgba(255,255,255,0.03)'}, ticks:{color:'#64748b',font:{size:9},maxTicksLimit:8} },
+        y:{ min:0, max:100, grid:{color:'rgba(255,255,255,0.04)'}, ticks:{color:'#64748b',font:{size:9},stepSize:25}, position:'right' }
+      }
+    }
+  });
+}
+
+function techDrawMACDChart(labels, macd) {
+  const ctx = document.getElementById('tech-chart-macd')?.getContext('2d');
+  if (!ctx) return;
+  if (S.charts.techMACD) { S.charts.techMACD.destroy(); S.charts.techMACD = null; }
+  S.charts.techMACD = new Chart(ctx, {
+    type:'bar',
+    data:{ labels, datasets:[
+      { type:'bar',  label:'Histogramme', data:macd.histogram,
+        backgroundColor:macd.histogram.map(v=>v===null?'transparent':v>=0?'rgba(34,197,94,0.5)':'rgba(239,68,68,0.5)'),
+        barPercentage:0.8, categoryPercentage:1 },
+      { type:'line', label:'MACD',   data:macd.macdLine,   borderColor:'#60a5fa', borderWidth:1.5, pointRadius:0, fill:false, tension:0.3 },
+      { type:'line', label:'Signal', data:macd.signalLine, borderColor:'#f97316', borderWidth:1.5, pointRadius:0, fill:false, tension:0.3 },
+    ]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:true, labels:{color:'#94a3b8',font:{size:10},boxWidth:16,padding:8}},
+        tooltip:{backgroundColor:'#1e293b',titleColor:'#e2e8f0',bodyColor:'#94a3b8'} },
+      scales:{
+        x:{ grid:{color:'rgba(255,255,255,0.03)'}, ticks:{color:'#64748b',font:{size:9},maxTicksLimit:8} },
+        y:{ grid:{color:'rgba(255,255,255,0.04)'}, ticks:{color:'#64748b',font:{size:9}}, position:'right' }
+      }
+    }
+  });
+}
+
+async function aiTechnicalAnalysis() {
+  if (!_techData || !_techState.ticker) { toast('Lancez d\'abord une analyse technique', 'error'); return; }
+  const { closes, highs, lows, labels } = _techData;
+  const sma20  = techSMA(closes, 20);
+  const sma50  = techSMA(closes, 50);
+  const sma200 = techSMA(closes, 200);
+  const boll   = techBollinger(closes, 20, 2);
+  const rsi    = techRSI(closes, 14);
+  const macd   = techMACD(closes);
+  const sr     = detectSR(highs, lows, closes);
+  const signals = techSignals(closes, sma20, sma50, sma200, rsi, macd, boll);
+  const last      = closes[closes.length - 1];
+  const lastRSI   = rsi.filter(v=>v!==null).at(-1);
+  const lastSMA20 = sma20.filter(v=>v!==null).at(-1);
+  const lastSMA50 = sma50.filter(v=>v!==null).at(-1);
+  const lastSMA200= sma200.filter(v=>v!==null).at(-1);
+  const lastMACD  = macd.macdLine.filter(v=>v!==null).at(-1);
+  const lastSig   = macd.signalLine.filter(v=>v!==null).at(-1);
+  const lastBoll  = boll.filter(b=>b.upper!==null).at(-1);
+  const prompt = `Tu es un analyste technique senior avec 15 ans d'expérience sur les marchés européens.
+
+ANALYSE TECHNIQUE — ${_techState.name} (${_techState.ticker})
+Date: ${new Date().toLocaleDateString('fr-FR')} | Période: ${labels[0]} → ${labels[labels.length-1]} (${closes.length} séances)
+
+INDICATEURS CALCULÉS:
+• Cours actuel: ${fc(last)}
+• SMA 20: ${lastSMA20?fc(lastSMA20):'N/A'} (${lastSMA20?(last>lastSMA20?'▲ AU-DESSUS':'▼ EN-DESSOUS'):'N/A'})
+• SMA 50: ${lastSMA50?fc(lastSMA50):'N/A'} (${lastSMA50?(last>lastSMA50?'▲ AU-DESSUS':'▼ EN-DESSOUS'):'N/A'})
+• SMA 200: ${lastSMA200?fc(lastSMA200):'N/A'} (${lastSMA200?(last>lastSMA200?'▲ AU-DESSUS':'▼ EN-DESSOUS'):'N/A'})
+• RSI 14: ${lastRSI?lastRSI.toFixed(1):'N/A'}
+• MACD: ${lastMACD?lastMACD.toFixed(4):'N/A'} | Ligne Signal: ${lastSig?lastSig.toFixed(4):'N/A'}
+• Bollinger: Haut ${lastBoll?fc(lastBoll.upper):'N/A'} | Mid ${lastBoll?fc(lastBoll.mid):'N/A'} | Bas ${lastBoll?fc(lastBoll.lower):'N/A'}
+
+ZONES SUPPORT & RÉSISTANCE DÉTECTÉES:
+${sr.map(z=>`• ${z.type.toUpperCase()} @ ${fc(z.price)} (${z.touches} contacts, ${((z.price-last)/last*100).toFixed(1)}% vs cours)`).join('\n')||'• Aucune zone significative détectée'}
+
+SIGNAUX AUTOMATIQUES CALCULÉS:
+${signals.map(s=>`• [${s.verdict.toUpperCase()}] ${s.label}: ${s.value}`).join('\n')}
+
+MISSION: Analyse technique complète. Donne:
+1. Lecture du contexte technique global (tendance, momentum)
+2. Les niveaux clés à surveiller (prochain support, prochaine résistance)
+3. Un scénario haussier et un scénario baissier avec leurs déclencheurs
+4. Une recommandation précise: acheter / renforcer / conserver / alléger / vendre
+5. Niveaux de stop-loss et objectif de cours si position à prendre
+Sois direct et chiffré. Contexte: portefeuille PEA français, investisseur particulier.`;
+  navigate('ai');
+  await aiRun(prompt);
 }
 
 // ======================================================
@@ -4669,7 +5444,7 @@ function updateFiscalCalc(amountStr) {
 function renderPage(page) {
   ({ dashboard:renderDashboard, portfolio:renderPortfolio, transactions:renderTransactions,
      treasury:renderTreasury, planning:renderPlanning, simulation:renderSimulation,
-     performance:renderPerformance, news:renderNews, ai:renderAI, settings:renderSettings })[page]?.();
+     performance:renderPerformance, technical:renderTechnical, news:renderNews, ai:renderAI, settings:renderSettings })[page]?.();
 }
 
 // ======================================================

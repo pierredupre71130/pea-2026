@@ -2128,7 +2128,9 @@ function renderAI() {
         <button class="btn btn-primary" onclick="aiAnalyze()" ${!hasKey?'disabled':''}>📊 Analyser mon portefeuille</button>
         <button class="btn btn-secondary" onclick="aiMonthly()" ${!hasKey?'disabled':''}>📅 Conseil achat mensuel</button>
         <button class="btn btn-secondary" onclick="aiRisk()" ${!hasKey?'disabled':''}>⚡ Analyse des risques</button>
+        <button class="btn btn-secondary" onclick="aiPlanAnalysis()" ${!hasKey?'disabled':''}>📋 Analyser le plan mensuel</button>
         <button class="btn btn-secondary" onclick="toggleValForm()" style="${S._valOpen?'background:var(--accent);color:#fff;border-color:var(--accent)':''}">💰 Valoriser</button>
+        <button class="btn btn-secondary" onclick="toggleCompareForm()" style="${S._compareOpen?'background:var(--accent);color:#fff;border-color:var(--accent)':''}">🔄 Comparer plans</button>
         <button class="btn btn-secondary btn-sm" onclick="clearAI()" style="margin-left:auto">🗑 Effacer</button>
       </div>
     </div>
@@ -2167,6 +2169,32 @@ function renderAI() {
         </div>
       </div>`;
     })() : ''}
+    ${S._compareOpen ? (() => {
+      const savedPlans = S.data.savedPlans || [];
+      const opts = savedPlans.map(sp => `<option value="${esc(sp.id)}">${esc(sp.name)} — ${esc(sp.date)}${sp.source==='ai'?' 🤖':''}</option>`).join('');
+      const hasSaved = savedPlans.length > 0;
+      return `<div class="card mb16" style="padding:14px 16px;border:1px solid var(--accent)44">
+        <div class="section-title" style="margin-bottom:12px">🔄 Comparer deux plans d'investissement</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div>
+            <label style="font-size:0.75rem;color:var(--muted);display:block;margin-bottom:4px">Plan A</label>
+            <select id="compare-plan-a" style="width:100%">
+              <option value="current">Plan actuel</option>
+              ${opts}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:0.75rem;color:var(--muted);display:block;margin-bottom:4px">Plan B</label>
+            <select id="compare-plan-b" style="width:100%">
+              ${opts}
+              <option value="current">Plan actuel</option>
+            </select>
+          </div>
+        </div>
+        ${!hasSaved ? `<div style="font-size:0.8rem;color:var(--muted);margin-bottom:8px">💡 Sauvegardez des plans dans l'onglet Planning pour les comparer ici.</div>` : ''}
+        <button class="btn btn-primary" onclick="aiComparePlans()" ${!hasKey||!hasSaved?'disabled':''}>✨ Lancer la comparaison</button>
+      </div>`;
+    })() : ''}
     ${(S.data.aiMemory||[]).length ? `
     <div class="card mb16" style="padding:12px 16px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -2200,7 +2228,7 @@ function renderAI() {
       `).join('')}
     </div>
   `;
-  setTimeout(()=>{ const el=document.getElementById('ai-msgs'); if(el) el.scrollTop=el.scrollHeight; }, 80);
+  setTimeout(()=>{ const el=document.getElementById('ai-msgs'); if(el){ const last=el.lastElementChild; if(last) last.scrollIntoView({behavior:'smooth',block:'start'}); } }, 80);
 }
 
 async function aiRun(prompt) {
@@ -2230,7 +2258,7 @@ async function aiSend() {
 
 function clearAI() { S.ai = []; renderAI(); }
 
-function toggleValForm() { S._valOpen = !S._valOpen; renderAI(); }
+function toggleValForm() { S._valOpen = !S._valOpen; S._compareOpen = false; renderAI(); }
 
 function valFillFromPos(val) {
   const customFields = document.getElementById('val-custom-fields');
@@ -2348,6 +2376,8 @@ function renderAnalysisCard(data, type) {
     if (type==='monthly')    return renderMonthlyCard(data);
     if (type==='risk')       return renderRiskCard(data);
     if (type==='valuation')  return renderValuationCard(data);
+    if (type==='plan')       return renderPlanAnalysisCard(data);
+    if (type==='compare')    return renderCompareCard(data);
   } catch(e) { return `<em style="color:var(--muted)">Erreur rendu: ${esc(e.message)}</em>`; }
   return '';
 }
@@ -2520,7 +2550,7 @@ function renderValuationCard(d) {
 }
 
 async function aiRunStructured(fullPrompt, type) {
-  const labels = { analyze:'📊 Analyse du portefeuille', monthly:'📅 Conseil achat mensuel', risk:'⚡ Analyse des risques', valuation:'💰 Valorisation IA' };
+  const labels = { analyze:'📊 Analyse du portefeuille', monthly:'📅 Conseil achat mensuel', risk:'⚡ Analyse des risques', valuation:'💰 Valorisation IA', plan:'📋 Analyse du plan mensuel', compare:'🔄 Comparaison de plans' };
   const now = new Date().toLocaleTimeString('fr-FR');
   S.ai.push({ role:'user', content:labels[type]||'Analyse IA', time:now, isLabel:true });
   renderAI();
@@ -2646,6 +2676,138 @@ RÈGLES OBLIGATOIRES:
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
 Schéma exact:
 {"score_diversification":<integer 0-10>,"correlations":"<1-2 phrases>","risques":[{"niveau":"élevé|modéré|faible","type":"","detail":"","impact_eur":"<ex: -6700€ sur krach -30%>","horizon":"Court|Moyen|Long terme"}],"stress":[{"scenario":"","perte_eur":<number négatif>,"perte_pct":<number négatif>,"detail":""}],"recommandations_etf":[""],"recommandations_titres":[""],"alertes":[{"ticker":"","declencheur":""}]}`, 'risk');
+}
+
+function toggleCompareForm() { S._compareOpen = !S._compareOpen; S._valOpen = false; renderAI(); }
+
+function buildPlanText(planItems, label) {
+  const etfItems   = planItems.filter(p => p.isEtf !== false);
+  const stockItems = planItems.filter(p => p.isEtf === false);
+  const totalEtfPct = etfItems.reduce((s, p) => s + (p.allocationPct || 0), 0);
+  const budget = S.data.settings.monthlyBudget;
+  const etfLines = etfItems.map(p => {
+    const normPct = totalEtfPct > 0 ? (p.allocationPct / totalEtfPct * 100).toFixed(1) : (p.allocationPct||0).toFixed(1);
+    const budgetEtf = budget * (totalEtfPct > 0 ? p.allocationPct / totalEtfPct : 0);
+    const cache = S.data.priceCache[p.ticker];
+    const cours = cache?.price ? fc(cache.price) : 'N/A';
+    const feePct = p.feePct ?? 0.5;
+    return `• ETF ${p.ticker} (${p.name}): ${normPct}% du bucket ETF → ~${fc(budgetEtf)}/mois | Cours: ${cours} | Frais courtage: ${feePct}%`;
+  }).join('\n') || '• Aucun ETF';
+  const stockLines = stockItems.map(p => {
+    const cache = S.data.priceCache[p.ticker];
+    const cours = cache?.price ? fc(cache.price) : 'N/A';
+    const montant = cache?.price ? fc(cache.price * (p.monthlyShares || 1)) : 'N/A';
+    const feePct = p.feePct ?? 0.9;
+    return `• Titre ${p.ticker} (${p.name}): ${p.monthlyShares || 1} part(s)/mois (~${montant}) | Cours: ${cours} | Frais courtage: ${feePct}%`;
+  }).join('\n') || '• Aucun titre direct';
+  return `\n\n=== ${label} ===\nBudget mensuel: ${fc(budget)}\nETFs (${etfItems.length}) — allocation % cible:\n${etfLines}\nTitres directs (${stockItems.length}) — achats fixes en parts:\n${stockLines}\n`;
+}
+
+async function aiPlanAnalysis() {
+  const planItems = S.data.planItems.filter(p => p.active);
+  if (!planItems.length) { toast('Aucun titre dans le plan actuel — ajoutez des titres dans Planning', 'error'); return; }
+  const ctx = buildPortfolioContext();
+  const planTxt = buildPlanText(planItems, 'PLAN MENSUEL ACTUEL À ANALYSER');
+  await aiRunStructured(`${ctx}${planTxt}
+MISSION — ANALYSE COMPLÈTE DU PLAN D'INVESTISSEMENT MENSUEL.
+Analyse en détail : qualité de la diversification, cohérence des allocations ETF, utilité des titres directs, coûts estimés (courtage + TER ETF), potentiel rendement, risques spécifiques au plan, et optimisations concrètes.
+RÈGLES: ETFs → analyser la répartition %, couverture géographique/sectorielle, chevauchements. Titres directs → utilité dans le plan, budget consommé, rythme d'achat. Coûts → estimer frais annuels totaux.
+Réponds UNIQUEMENT avec un objet JSON valide.
+Schéma exact:{"note_globale":<integer 0-10>,"verdict":"<2-3 phrases directes>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<number>,"note":<0-10>,"role":"","commentaire":"","risque":""}],"titres":[{"ticker":"","parts_mois":<number>,"budget_mois_eur":<number>,"commentaire":"","utilite":""}],"diversification":{"score":<0-10>,"detail":"","zones_manquantes":[""],"chevauchements":[""]},"couts":{"total_annuel_eur":<number>,"detail":"","frais_etf_pct_moy":<number>},"points_forts":[""],"risques_plan":[""],"optimisations":[{"priorite":<1-5>,"action":"","impact":"","effort":"facile|moyen|complexe"}],"synthese":""}`, 'plan');
+}
+
+async function aiComparePlans() {
+  const selA = document.getElementById('compare-plan-a')?.value;
+  const selB = document.getElementById('compare-plan-b')?.value;
+  if (!selA || !selB) { toast('Sélectionnez deux plans', 'error'); return; }
+  if (selA === selB) { toast('Sélectionnez deux plans différents', 'error'); return; }
+  function getPlanItems(val) {
+    if (val === 'current') return S.data.planItems.filter(p => p.active);
+    return (S.data.savedPlans || []).find(p => p.id === val)?.items || [];
+  }
+  function getPlanLabel(val) {
+    if (val === 'current') return 'Plan actuel';
+    const sp = (S.data.savedPlans || []).find(p => p.id === val);
+    return sp ? `${sp.name} (${sp.date})` : val;
+  }
+  const itemsA = getPlanItems(selA), itemsB = getPlanItems(selB);
+  if (!itemsA.length || !itemsB.length) { toast('Un des plans est vide', 'error'); return; }
+  const labelA = getPlanLabel(selA), labelB = getPlanLabel(selB);
+  const ctx = buildPortfolioContext();
+  const planA = buildPlanText(itemsA, 'PLAN A — ' + labelA);
+  const planB = buildPlanText(itemsB, 'PLAN B — ' + labelB);
+  await aiRunStructured(`${ctx}${planA}${planB}
+MISSION — COMPARAISON DÉTAILLÉE DE DEUX PLANS D'INVESTISSEMENT MENSUEL.
+Compare ces deux plans sur tous les axes : diversification, coûts annuels estimés, potentiel de rendement, niveau de risque, simplicité de gestion, adéquation avec le portefeuille actuel et les objectifs PEA long terme.
+Réponds UNIQUEMENT avec un objet JSON valide.
+Schéma exact:{"plan_a":"${labelA.replace(/"/g,"'")}","plan_b":"${labelB.replace(/"/g,"'")}","verdict_global":"<2 phrases>","gagnant":"A|B|ex-aequo","axes":[{"nom":"","score_a":<0-10>,"score_b":<0-10>,"detail":""}],"differences_cles":[""],"avantages_a":[""],"avantages_b":[""],"risques_a":[""],"risques_b":[""],"recommandation":"<2-3 phrases directes sur lequel choisir et pourquoi>"}`, 'compare');
+}
+
+function renderPlanAnalysisCard(d) {
+  const sc = d.note_globale >= 7 ? '#22c55e' : d.note_globale >= 5 ? '#f59e0b' : '#ef4444';
+  return `<div style="display:flex;flex-direction:column;gap:10px">
+    <div style="background:var(--surface2);border-radius:10px;padding:14px;display:flex;align-items:center;gap:14px">
+      <div style="width:58px;height:58px;border-radius:50%;border:3px solid ${sc};display:flex;align-items:center;justify-content:center;flex-shrink:0"><span style="font-size:1.5rem;font-weight:800;color:${sc}">${d.note_globale??'?'}</span></div>
+      <div><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Note du plan /10 — Budget ${d.budget_mensuel ? fc(d.budget_mensuel) : ''}/mois</div><div style="font-size:0.88rem;font-weight:600">${esc(d.verdict||'')}</div></div>
+    </div>
+    ${d.diversification ? `<div style="background:var(--surface2);border-radius:8px;padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div class="section-title" style="margin:0">🌍 Diversification</div>${aiScoreBar(d.diversification.score||0)}</div>
+      <div style="font-size:0.8rem;color:var(--muted);margin-bottom:6px">${esc(d.diversification.detail||'')}</div>
+      ${d.diversification.chevauchements?.length ? `<div style="font-size:0.75rem;color:#f59e0b;margin-bottom:4px">⚠️ Chevauchements : ${d.diversification.chevauchements.map(esc).join(' · ')}</div>` : ''}
+      ${d.diversification.zones_manquantes?.length ? `<div style="font-size:0.75rem;color:var(--muted)">Zones manquantes : ${d.diversification.zones_manquantes.map(esc).join(' · ')}</div>` : ''}
+    </div>` : ''}
+    ${d.etfs?.length ? `<div><div class="section-title" style="margin-bottom:6px">📊 ETFs du plan</div>${d.etfs.map(e => `<div style="background:var(--surface2);border-radius:8px;padding:10px 13px;margin-bottom:5px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-weight:700">${esc(e.ticker)}</span>${e.pct_reel !== undefined ? `<span style="font-size:0.75rem;color:var(--muted)">${e.pct_reel.toFixed(1)}% du bucket</span>` : ''}</div>${e.note !== undefined ? `<div style="margin-bottom:4px">${aiScoreBar(e.note)}</div>` : ''}${e.role ? `<div style="font-size:0.76rem;color:var(--accent);margin-bottom:2px">${esc(e.role)}</div>` : ''}${e.commentaire ? `<div style="font-size:0.78rem;color:var(--muted)">${esc(e.commentaire)}</div>` : ''}${e.risque ? `<div style="font-size:0.75rem;color:#f59e0b;margin-top:2px">⚠️ ${esc(e.risque)}</div>` : ''}</div>`).join('')}</div>` : ''}
+    ${d.titres?.length ? `<div><div class="section-title" style="margin-bottom:6px">🏢 Titres directs du plan</div>${d.titres.map(t => `<div style="background:var(--surface2);border-radius:8px;padding:10px 13px;margin-bottom:5px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px"><span style="font-weight:700">${esc(t.ticker)}</span>${t.budget_mois_eur ? `<span style="font-size:0.78rem;color:var(--accent)">${fc(t.budget_mois_eur)}/mois</span>` : ''}</div>${t.utilite ? `<div style="font-size:0.76rem;color:var(--accent);margin-bottom:2px">${esc(t.utilite)}</div>` : ''}${t.commentaire ? `<div style="font-size:0.78rem;color:var(--muted)">${esc(t.commentaire)}</div>` : ''}</div>`).join('')}</div>` : ''}
+    ${d.couts ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div class="section-title" style="margin-bottom:5px">💸 Coûts estimés</div><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="font-size:1.1rem;font-weight:800;color:#f59e0b">${d.couts.total_annuel_eur ? fc(d.couts.total_annuel_eur) : '—'}/an</span>${d.couts.frais_etf_pct_moy ? `<span style="font-size:0.78rem;color:var(--muted)">TER moy.: ${d.couts.frais_etf_pct_moy.toFixed(2)}%</span>` : ''}</div>${d.couts.detail ? `<div style="font-size:0.76rem;color:var(--muted);margin-top:4px">${esc(d.couts.detail)}</div>` : ''}</div>` : ''}
+    ${(d.points_forts?.length || d.risques_plan?.length) ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${d.points_forts?.length ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div style="font-size:0.68rem;color:#22c55e;text-transform:uppercase;margin-bottom:6px;font-weight:700">✅ Points forts</div>${d.points_forts.map(p=>`<div style="font-size:0.78rem;margin-bottom:3px;padding-left:8px;border-left:2px solid #22c55e44">${esc(p)}</div>`).join('')}</div>` : ''}
+      ${d.risques_plan?.length ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div style="font-size:0.68rem;color:#ef4444;text-transform:uppercase;margin-bottom:6px;font-weight:700">⚠️ Risques</div>${d.risques_plan.map(r=>`<div style="font-size:0.78rem;margin-bottom:3px;padding-left:8px;border-left:2px solid #ef444444">${esc(r)}</div>`).join('')}</div>` : ''}
+    </div>` : ''}
+    ${d.optimisations?.length ? `<div><div class="section-title" style="margin-bottom:6px">🎯 Optimisations</div>${d.optimisations.map((o,i) => `<div style="background:var(--surface2);border-radius:7px;padding:9px 12px;margin-bottom:5px;display:flex;gap:10px;align-items:flex-start"><span style="width:20px;height:20px;border-radius:50%;background:var(--accent);color:#fff;font-size:0.7rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${o.priorite||i+1}</span><div><div style="font-size:0.83rem;font-weight:600">${esc(o.action)}</div>${o.impact ? `<div style="font-size:0.75rem;color:#22c55e;margin-top:2px">${esc(o.impact)}</div>` : ''}${o.effort ? `<span style="font-size:0.7rem;color:var(--muted)">${esc(o.effort)}</span>` : ''}</div></div>`).join('')}</div>` : ''}
+    ${d.synthese ? `<div style="background:var(--surface2);border-radius:8px;padding:12px 14px;border-left:3px solid var(--accent)"><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:5px">Synthèse</div><div style="font-size:0.83rem;line-height:1.5">${esc(d.synthese)}</div></div>` : ''}
+  </div>`;
+}
+
+function renderCompareCard(d) {
+  const gC = d.gagnant === 'A' ? '#22c55e' : d.gagnant === 'B' ? '#3b82f6' : '#f59e0b';
+  const gL = d.gagnant === 'A' ? `✅ ${esc(d.plan_a||'Plan A')} recommandé` : d.gagnant === 'B' ? `✅ ${esc(d.plan_b||'Plan B')} recommandé` : '⚖️ Ex-æquo';
+  return `<div style="display:flex;flex-direction:column;gap:10px">
+    <div style="background:var(--surface2);border-radius:10px;padding:14px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+        <div style="font-size:0.75rem;font-weight:700;color:var(--muted)">PLAN A : <span style="color:var(--text)">${esc(d.plan_a||'Plan A')}</span></div>
+        <div style="font-size:0.75rem;font-weight:700;color:var(--muted)">PLAN B : <span style="color:var(--text)">${esc(d.plan_b||'Plan B')}</span></div>
+      </div>
+      <div style="text-align:center;padding:10px 0;border-top:1px solid var(--border)">
+        <span style="font-size:1rem;font-weight:800;color:${gC}">${gL}</span>
+        ${d.verdict_global ? `<div style="font-size:0.82rem;color:var(--muted);margin-top:6px">${esc(d.verdict_global)}</div>` : ''}
+      </div>
+    </div>
+    ${d.axes?.length ? `<div><div class="section-title" style="margin-bottom:8px">📊 Comparaison par axe</div>${d.axes.map(a => {
+      const cA = a.score_a >= a.score_b ? '#22c55e' : '#ef4444';
+      const cB = a.score_b >= a.score_a ? '#22c55e' : '#ef4444';
+      return `<div style="background:var(--surface2);border-radius:8px;padding:10px 13px;margin-bottom:6px">
+        <div style="font-size:0.8rem;font-weight:700;margin-bottom:6px">${esc(a.nom)}</div>
+        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;margin-bottom:4px">
+          <div>${aiScoreBar(a.score_a||0)}</div><div style="font-size:0.68rem;color:var(--muted);text-align:center">vs</div><div>${aiScoreBar(a.score_b||0)}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;text-align:center">
+          <div style="font-size:0.75rem;font-weight:700;color:${cA}">${a.score_a}/10 A</div>
+          <div style="font-size:0.75rem;font-weight:700;color:${cB}">B ${a.score_b}/10</div>
+        </div>
+        ${a.detail ? `<div style="font-size:0.76rem;color:var(--muted);margin-top:4px">${esc(a.detail)}</div>` : ''}
+      </div>`;
+    }).join('')}</div>` : ''}
+    ${(d.avantages_a?.length || d.avantages_b?.length) ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${d.avantages_a?.length ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div style="font-size:0.68rem;color:#22c55e;text-transform:uppercase;margin-bottom:6px;font-weight:700">✅ Avantages Plan A</div>${d.avantages_a.map(v=>`<div style="font-size:0.78rem;margin-bottom:3px;padding-left:8px;border-left:2px solid #22c55e44">${esc(v)}</div>`).join('')}</div>` : ''}
+      ${d.avantages_b?.length ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div style="font-size:0.68rem;color:#3b82f6;text-transform:uppercase;margin-bottom:6px;font-weight:700">✅ Avantages Plan B</div>${d.avantages_b.map(v=>`<div style="font-size:0.78rem;margin-bottom:3px;padding-left:8px;border-left:2px solid #3b82f644">${esc(v)}</div>`).join('')}</div>` : ''}
+    </div>` : ''}
+    ${(d.risques_a?.length || d.risques_b?.length) ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${d.risques_a?.length ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div style="font-size:0.68rem;color:#ef4444;text-transform:uppercase;margin-bottom:6px;font-weight:700">⚠️ Risques Plan A</div>${d.risques_a.map(r=>`<div style="font-size:0.78rem;margin-bottom:3px;padding-left:8px;border-left:2px solid #ef444444">${esc(r)}</div>`).join('')}</div>` : ''}
+      ${d.risques_b?.length ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div style="font-size:0.68rem;color:#f59e0b;text-transform:uppercase;margin-bottom:6px;font-weight:700">⚠️ Risques Plan B</div>${d.risques_b.map(r=>`<div style="font-size:0.78rem;margin-bottom:3px;padding-left:8px;border-left:2px solid #f59e0b44">${esc(r)}</div>`).join('')}</div>` : ''}
+    </div>` : ''}
+    ${d.differences_cles?.length ? `<div style="background:var(--surface2);border-radius:8px;padding:12px 14px"><div class="section-title" style="margin-bottom:6px">🔍 Différences clés</div>${d.differences_cles.map(v=>`<div style="font-size:0.8rem;margin-bottom:4px;padding-left:8px;border-left:2px solid var(--accent)44">→ ${esc(v)}</div>`).join('')}</div>` : ''}
+    ${d.recommandation ? `<div style="background:var(--surface2);border-radius:8px;padding:12px 14px;border-left:3px solid ${gC}"><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:5px">Recommandation</div><div style="font-size:0.85rem;font-weight:600;line-height:1.5">${esc(d.recommandation)}</div></div>` : ''}
+  </div>`;
 }
 
 // ======================================================

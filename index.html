@@ -414,7 +414,7 @@
           <input type="text" name="name" placeholder="Amundi MSCI World" required>
         </div>
         <div class="form-group">
-          <label>Cours actuel (€) <span style="color:var(--muted)" id="plan-price-hint">optionnel — si non trouvé automatiquement</span></label>
+          <label>Cours actuel (€) <span style="color:var(--muted)">optionnel</span></label>
           <input type="number" name="manualPrice" id="plan-manual-price" min="0.01" step="0.01" placeholder="">
         </div>
         <div id="plan-etf-fields">
@@ -776,10 +776,6 @@ function openPlanModal() {
   document.getElementById('plan-etf-fields').style.display = '';
   document.getElementById('plan-stock-fields').style.display = 'none';
   f.querySelector('[name=minAmount]').value = 200;
-  const priceHint = document.getElementById('plan-price-hint');
-  if (priceHint) priceHint.textContent = 'optionnel — si non trouvé automatiquement';
-  const priceEl = document.getElementById('plan-manual-price');
-  if (priceEl) priceEl.placeholder = '';
   openModal('modal-plan');
 }
 
@@ -795,33 +791,31 @@ async function lookupByIsin() {
   if (!isin || isin.length < 10) { toast('Entrez un ISIN valide (12 caractères)', 'error'); return; }
   const btn = document.getElementById('btn-isin-lookup');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:2px"></span>'; }
-  const hint = document.getElementById('plan-price-hint');
   try {
-    const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(isin)}&quotesCount=6&newsCount=0&enableFuzzyQuery=false`;
-    const r = await fetch(`${PROXY}${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(15000) });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const d = await r.json();
-    const j = JSON.parse(d.contents);
-    const quotes = (j?.quotes || []).filter(q => q.symbol && q.quoteType !== 'OPTION');
+    // Essai query1 puis query2 en fallback
+    const urls = [
+      `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false&quotesQueryId=tss_match_phrase_query`,
+      `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false`,
+    ];
+    let quotes = [];
+    for (const url of urls) {
+      try {
+        const r = await fetch(`${PROXY}${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(12000) });
+        if (!r.ok) continue;
+        const d = await r.json();
+        const j = JSON.parse(d.contents);
+        quotes = (j?.quotes || []).filter(q => q.symbol && q.quoteType !== 'OPTION');
+        if (quotes.length) break;
+      } catch(_) { continue; }
+    }
     if (!quotes.length) { toast('Aucun résultat pour cet ISIN', 'error'); return; }
-    // Préférer les tickers .PA (Euronext Paris) ou les ETF
+    // Préférer .PA (Euronext Paris), sinon ETF, sinon premier résultat
     const quote = quotes.find(q => q.symbol.endsWith('.PA')) || quotes.find(q => q.quoteType === 'ETF') || quotes[0];
     document.querySelector('#form-plan [name=ticker]').value = quote.symbol;
     document.querySelector('#form-plan [name=name]').value = quote.longname || quote.shortname || '';
     toast(`Trouvé : ${quote.symbol} — ${quote.longname || quote.shortname || ''}`, 'success', 4000);
-    // Tenter de récupérer le cours automatiquement
-    if (hint) hint.textContent = 'Récupération du cours…';
-    const priceData = await fetchPrice(quote.symbol);
-    if (priceData?.price) {
-      const priceEl = document.getElementById('plan-manual-price');
-      if (priceEl && !priceEl.value) priceEl.placeholder = priceData.price.toFixed(2) + ' (auto-récupéré)';
-      if (hint) hint.textContent = `cours auto : ${priceData.price.toFixed(2)} € — laissez vide pour l'utiliser`;
-    } else {
-      if (hint) hint.textContent = 'cours non trouvé automatiquement — entrez-le manuellement';
-    }
   } catch(e) {
     toast('Erreur recherche ISIN : ' + e.message, 'error');
-    if (hint) hint.textContent = 'optionnel — si non trouvé automatiquement';
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Rechercher'; }
   }

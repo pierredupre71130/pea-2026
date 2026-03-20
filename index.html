@@ -385,8 +385,8 @@
         </div>
         <div class="form-row" style="align-items:flex-end">
           <div class="form-group" style="flex:1">
-            <label>ISIN <span style="color:var(--muted)">(optionnel — recherche automatique)</span></label>
-            <input type="text" name="isin" id="plan-isin-input" placeholder="FR0010315770" style="text-transform:uppercase">
+            <label>ISIN ou Ticker <span style="color:var(--muted)">(recherche automatique)</span></label>
+            <input type="text" name="isin" id="plan-isin-input" placeholder="FR0010315770 ou WPEA.PA" style="text-transform:uppercase">
           </div>
           <div class="form-group" style="flex:0;padding-bottom:1px">
             <button type="button" id="btn-isin-lookup" class="btn btn-secondary" onclick="lookupByIsin()" style="white-space:nowrap">Rechercher</button>
@@ -787,35 +787,59 @@ function fillPlanFromPortfolio(value) {
 }
 
 async function lookupByIsin() {
-  const isin = (document.getElementById('plan-isin-input').value || '').trim().toUpperCase();
-  if (!isin || isin.length < 10) { toast('Entrez un ISIN valide (12 caractères)', 'error'); return; }
+  const query = (document.getElementById('plan-isin-input').value || '').trim().toUpperCase();
+  if (!query) { toast('Entrez un ISIN ou un ticker', 'error'); return; }
   const btn = document.getElementById('btn-isin-lookup');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:2px"></span>'; }
   try {
-    // Essai query1 puis query2 en fallback
-    const urls = [
-      `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false&quotesQueryId=tss_match_phrase_query`,
-      `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(isin)}&quotesCount=10&newsCount=0&enableFuzzyQuery=false`,
+    const isIsin = /^[A-Z]{2}[A-Z0-9]{10}$/.test(query);
+
+    // Recherche par ticker : fetchPrice retourne déjà le nom
+    if (!isIsin) {
+      const result = await fetchPrice(query);
+      if (result?.price || result?.name) {
+        document.querySelector('#form-plan [name=ticker]').value = query;
+        document.querySelector('#form-plan [name=name]').value = result.name || '';
+        toast(`Trouvé : ${query}${result.name ? ' — ' + result.name : ''}`, 'success', 4000);
+      } else {
+        toast('Ticker non trouvé sur Yahoo Finance', 'error');
+      }
+      return;
+    }
+
+    // Recherche par ISIN via autoc puis search API
+    const autocUrl  = `https://autoc.finance.yahoo.com/autoc?query=${encodeURIComponent(query)}&region=1&lang=fr-FR`;
+    const searchUrl = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=10&newsCount=0`;
+    const proxies = [
+      async (u) => { const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, { signal: AbortSignal.timeout(12000) }); if (!r.ok) throw new Error('HTTP '+r.status); const d = await r.json(); return JSON.parse(d.contents); },
+      async (u) => { const r = await fetch(`https://corsproxy.io/?${encodeURIComponent(u)}`, { signal: AbortSignal.timeout(12000) }); if (!r.ok) throw new Error('HTTP '+r.status); return await r.json(); },
+      async (u) => { const r = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, { signal: AbortSignal.timeout(12000) }); if (!r.ok) throw new Error('HTTP '+r.status); return await r.json(); },
     ];
-    let quotes = [];
-    for (const url of urls) {
+    let symbol = null, name = null;
+    for (const proxy of proxies) {
       try {
-        const r = await fetch(`${PROXY}${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(12000) });
-        if (!r.ok) continue;
-        const d = await r.json();
-        const j = JSON.parse(d.contents);
-        quotes = (j?.quotes || []).filter(q => q.symbol && q.quoteType !== 'OPTION');
-        if (quotes.length) break;
+        const j = await proxy(autocUrl);
+        const results = j?.ResultSet?.Result || [];
+        const hit = results.find(r => r.symbol?.endsWith('.PA')) || results.find(r => r.type === 'S' || r.type === 'E') || results[0];
+        if (hit?.symbol) { symbol = hit.symbol; name = hit.name; break; }
       } catch(_) { continue; }
     }
-    if (!quotes.length) { toast('Aucun résultat pour cet ISIN', 'error'); return; }
-    // Préférer .PA (Euronext Paris), sinon ETF, sinon premier résultat
-    const quote = quotes.find(q => q.symbol.endsWith('.PA')) || quotes.find(q => q.quoteType === 'ETF') || quotes[0];
-    document.querySelector('#form-plan [name=ticker]').value = quote.symbol;
-    document.querySelector('#form-plan [name=name]').value = quote.longname || quote.shortname || '';
-    toast(`Trouvé : ${quote.symbol} — ${quote.longname || quote.shortname || ''}`, 'success', 4000);
+    if (!symbol) {
+      for (const proxy of proxies) {
+        try {
+          const j = await proxy(searchUrl);
+          const quotes = (j?.quotes || []).filter(q => q.symbol && q.quoteType !== 'OPTION');
+          const hit = quotes.find(q => q.symbol.endsWith('.PA')) || quotes.find(q => q.quoteType === 'ETF') || quotes[0];
+          if (hit?.symbol) { symbol = hit.symbol; name = hit.longname || hit.shortname; break; }
+        } catch(_) { continue; }
+      }
+    }
+    if (!symbol) { toast('ISIN non trouvé — entrez le ticker manuellement', 'error'); return; }
+    document.querySelector('#form-plan [name=ticker]').value = symbol;
+    document.querySelector('#form-plan [name=name]').value = name || '';
+    toast(`Trouvé : ${symbol}${name ? ' — ' + name : ''}`, 'success', 4000);
   } catch(e) {
-    toast('Erreur recherche ISIN : ' + e.message, 'error');
+    toast('Erreur recherche : ' + e.message, 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Rechercher'; }
   }

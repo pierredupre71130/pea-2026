@@ -549,7 +549,12 @@ const PROXY = 'https://api.allorigins.win/get?url=';
 const YF_CHART = 'https://query2.finance.yahoo.com/v8/finance/chart/';
 const YF_RSS   = 'https://feeds.finance.yahoo.com/rss/2.0/headline?s=';
 const CLAUDE_URL = 'https://api.anthropic.com/v1/messages';
-const CLAUDE_MODEL = 'claude-opus-4-6';
+const CLAUDE_MODELS = {
+  haiku:  'claude-haiku-4-5-20251001',
+  sonnet: 'claude-sonnet-4-6',
+  opus:   'claude-opus-4-6',
+};
+function getClaudeModel() { return CLAUDE_MODELS[S.data.settings.claudeModel ?? 'haiku'] ?? CLAUDE_MODELS.haiku; }
 const PRICE_TTL = 15 * 60 * 1000;
 const PEA_MAX = 150000;
 const COLORS = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6','#a855f7','#0ea5e9'];
@@ -1173,8 +1178,8 @@ NOTE : Analyse à titre informatif — l'investisseur garde la responsabilité f
     method: 'POST',
     headers: { 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
     body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: opts.maxTokens ?? 4096,
+      model: getClaudeModel(),
+      max_tokens: opts.maxTokens ?? 1500,
       system: opts.system ?? defaultSystem,
       messages: Array.isArray(messages) ? messages : [{ role: 'user', content: messages }]
     })
@@ -1185,7 +1190,7 @@ NOTE : Analyse à titre informatif — l'investisseur garde la responsabilité f
     const resp2 = await fetch(CLAUDE_URL, {
       method: 'POST',
       headers: { 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
-      body: JSON.stringify({ model:CLAUDE_MODEL, max_tokens:opts.maxTokens??4096, system:opts.system??defaultSystem, messages:Array.isArray(messages)?messages:[{role:'user',content:messages}] })
+      body: JSON.stringify({ model:getClaudeModel(), max_tokens:opts.maxTokens??1500, system:opts.system??defaultSystem, messages:Array.isArray(messages)?messages:[{role:'user',content:messages}] })
     });
     if (!resp2.ok) {
       const e = await resp2.json().catch(()=>({}));
@@ -2119,7 +2124,7 @@ function renderAI() {
   const hasKey = !!S.data.settings.claudeApiKey;
   document.getElementById('page-ai').innerHTML = `
     <div class="page-header">
-      <div><h2>Analyse IA</h2><div class="page-sub">Conseils personnalisés par Claude ${CLAUDE_MODEL}</div></div>
+      <div><h2>Analyse IA</h2><div class="page-sub">Conseils personnalisés par Claude (${S.data.settings.claudeModel ?? 'haiku'})</div></div>
     </div>
     ${!hasKey?`<div class="info-box info-warning mb16">🔑 Configurez votre clé API Anthropic dans <a href="#" onclick="navigate('settings')">⚙️ Paramètres</a> pour utiliser l'analyse IA.</div>`:''}
     <div class="card mb16" style="padding:14px 16px">
@@ -2238,8 +2243,8 @@ async function aiRun(prompt) {
   const btn = document.getElementById('btn-ai-send');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'; }
   try {
-    // Passer l'historique complet pour que Claude garde le contexte de la conversation
-    const messages = S.ai.map(m => ({ role: m.role, content: m.content }));
+    // Limiter l'historique aux 6 derniers messages pour réduire les coûts API
+    const messages = S.ai.slice(-6).map(m => ({ role: m.role, content: m.content }));
     const res = await callClaude(messages);
     S.ai.push({ role:'assistant', content:res, time:new Date().toLocaleTimeString('fr-FR') });
     saveAIMemory(res);
@@ -2559,7 +2564,7 @@ async function aiRunStructured(fullPrompt, type) {
   const jsonSystem = `Tu es un gérant de portefeuille senior spécialisé PEA français, niveau CFA, 20 ans d'expérience chez Amundi/BlackRock. Tu analyses avec précision et conviction.
 RÈGLE ABSOLUE: Tu réponds UNIQUEMENT avec un objet JSON valide. Pas de texte avant, pas de texte après, pas de bloc markdown. Juste le JSON brut commençant par { et finissant par }.`;
   try {
-    const res = await callClaude([{ role:'user', content:fullPrompt }], { system: jsonSystem, maxTokens: 4096 });
+    const res = await callClaude([{ role:'user', content:fullPrompt }], { system: jsonSystem, maxTokens: 3000 });
     let data = null;
     try { data = parseAIJSON(res); } catch(e) { /* fall back to markdown */ }
     S.ai.push({ role:'assistant', content:res, time:new Date().toLocaleTimeString('fr-FR'), isStructured:!!data, structuredType:type, structuredData:data });
@@ -3367,6 +3372,15 @@ function renderSettings() {
             <label>Clé API (sk-ant-…)</label>
             <input type="password" id="inp-key" value="${esc(s.claudeApiKey)}" placeholder="sk-ant-api03-…" onchange="updSetting('claudeApiKey',this.value)">
           </div>
+          <div class="form-group">
+            <label>Modèle IA</label>
+            <select onchange="updSetting('claudeModel',this.value)">
+              <option value="haiku"  ${(s.claudeModel??'haiku')==='haiku' ?'selected':''}>⚡ Haiku — rapide, économique (recommandé)</option>
+              <option value="sonnet" ${s.claudeModel==='sonnet'?'selected':''}>✦ Sonnet — équilibré</option>
+              <option value="opus"   ${s.claudeModel==='opus'  ?'selected':''}>★ Opus — qualité maximale (coûteux)</option>
+            </select>
+            <div style="font-size:0.72rem;color:var(--muted);margin-top:4px">Haiku coûte ~30× moins cher qu'Opus pour des résultats très proches.</div>
+          </div>
           <button class="btn btn-secondary btn-sm" onclick="testKey()">🔑 Tester la clé</button>
           ${s.claudeApiKey?`<span style="margin-left:10px;font-size:0.75rem;color:var(--success)">✓ Clé enregistrée</span>`:''}
         </div>
@@ -3649,7 +3663,7 @@ async function testKey() {
     const r = await fetch(CLAUDE_URL, {
       method:'POST',
       headers:{ 'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
-      body: JSON.stringify({ model:CLAUDE_MODEL, max_tokens:10, messages:[{role:'user',content:'OK'}] })
+      body: JSON.stringify({ model:getClaudeModel(), max_tokens:10, messages:[{role:'user',content:'OK'}] })
     });
     r.ok ? toast('✓ Clé API valide !', 'success') : toast('Clé invalide: ' + r.status, 'error');
   } catch(e) { toast('Erreur connexion: ' + e.message, 'error'); }
@@ -4011,7 +4025,7 @@ Règles importantes:
       'anthropic-dangerous-direct-browser-access': 'true'
     },
     body: JSON.stringify({
-      model: CLAUDE_MODEL,
+      model: getClaudeModel(),
       max_tokens: 2048,
       messages: [{
         role: 'user',
@@ -4385,7 +4399,7 @@ RÉPONDS UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après 
 
   try {
     const raw = await callClaude([{ role: 'user', content: prompt }], {
-      maxTokens: 6000,
+      maxTokens: 4000,
       system: 'Tu es un expert en gestion de portefeuille PEA. Réponds UNIQUEMENT avec un objet JSON valide et bien formé, sans aucun texte, explication, balise markdown ou bloc de code. Commence directement par { et termine par }. Ne génère rien en dehors du JSON.'
     });
     // Extraire le JSON de la réponse (réutilise la fonction existante extractFirstJson)

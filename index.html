@@ -1173,7 +1173,11 @@ RÈGLES ABSOLUES DE TES RÉPONSES :
 6. TON PROFESSIONNEL — direct, confiant, sans excès de précautions. Tu donnes ton avis d'expert, pas une liste de possibilités.
 
 FORMAT : Markdown structuré avec titres ##, tableaux pour les comparaisons, bullets pour les actions. Concis et dense, pas de rembourrage.
-NOTE : Analyse à titre informatif — l'investisseur garde la responsabilité finale.`;
+NOTE : Analyse à titre informatif — l'investisseur garde la responsabilité finale.
+
+PLAN EXTRACTABLE : Si tu proposes ou modifies un plan d'allocation COMPLET (plusieurs tickers avec leurs proportions ou nombre de parts), ajoute OBLIGATOIREMENT à la toute fin de ta réponse, sur une nouvelle ligne seule, ce bloc exact :
+[PLAN_DATA:{"name":"Nom court du plan","items":[{"ticker":"TICKER.PA","name":"Nom complet","isEtf":true,"allocationPct":60},{"ticker":"TICKER2.PA","name":"Nom 2","isEtf":false,"monthlyShares":1}]}]
+Règles : isEtf=true → utilise allocationPct (0-100, somme libre) ; isEtf=false → utilise monthlyShares (entier ≥1). N'inclus ce bloc QUE pour un plan complet actionnable, jamais pour une analyse ou un commentaire partiel.`;
   const resp = await fetch(CLAUDE_URL, {
     method: 'POST',
     headers: { 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
@@ -2225,10 +2229,11 @@ function renderAI() {
     </div>
     <div id="ai-msgs">
       ${S.ai.length===0?`<div class="empty"><div class="ico">🤖</div><p>Commencez avec "Analyser mon portefeuille"</p><p style="font-size:0.75rem;margin-top:8px">Les actualités chargées dans l'onglet 📰 Actualités seront incluses dans l'analyse.</p></div>`
-        : S.ai.map(m=>`
+        : S.ai.map((m,i)=>`
         <div class="ai-msg ${m.role}">
           <div class="ai-msg-role">${m.role==='user'?'👤 Vous':'🤖 Claude'} · ${m.time}</div>
           <div>${m.role==='assistant'&&m.isStructured?renderAnalysisCard(m.structuredData,m.structuredType):m.role==='assistant'?mdToHtml(m.content):esc(m.content)}</div>
+          ${m.aiChatPlan?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)"><button onclick="applyAIChatPlan(${i})" class="btn btn-primary btn-sm" style="font-size:0.8rem">📋 Appliquer ce plan → Planning</button><span style="font-size:0.72rem;color:var(--muted);margin-left:10px">${esc(m.aiChatPlan.name||'Plan IA')} · ${(m.aiChatPlan.items||[]).length} titre(s)</span></div>`:''}
         </div>
       `).join('')}
     </div>
@@ -2246,8 +2251,12 @@ async function aiRun(prompt) {
     // Limiter l'historique aux 6 derniers messages pour réduire les coûts API
     const messages = S.ai.slice(-6).map(m => ({ role: m.role, content: m.content }));
     const res = await callClaude(messages);
-    S.ai.push({ role:'assistant', content:res, time:new Date().toLocaleTimeString('fr-FR') });
-    saveAIMemory(res);
+    let aiChatPlan = null;
+    const planMatch = res.match(/\[PLAN_DATA:(\{[\s\S]*?\})\]\s*$/);
+    if (planMatch) { try { aiChatPlan = JSON.parse(planMatch[1]); } catch(e) {} }
+    const displayContent = res.replace(/\n?\[PLAN_DATA:[\s\S]*?\]\s*$/, '').trim();
+    S.ai.push({ role:'assistant', content:displayContent, time:new Date().toLocaleTimeString('fr-FR'), aiChatPlan });
+    saveAIMemory(displayContent);
   } catch(e) {
     S.ai.push({ role:'assistant', content:`❌ Erreur: ${e.message}`, time:new Date().toLocaleTimeString('fr-FR') });
     toast(e.message, 'error', 6000);
@@ -3642,6 +3651,29 @@ function applyAiPlanByIndex(i) {
   S.data.planItems = newItems;
   saveData();
   toast(`✅ Plan "${plan.name}" appliqué et sauvegardé — redirection vers Planning…`, 'success', 4000);
+  setTimeout(() => navigate('planning'), 1200);
+}
+
+function applyAIChatPlan(msgIdx) {
+  const plan = S.ai[msgIdx]?.aiChatPlan;
+  if (!plan || !plan.items?.length) { toast('Données du plan introuvables', 'error'); return; }
+  if (S.data.planItems.filter(p => p.active).length) {
+    if (!S.data.savedPlans) S.data.savedPlans = [];
+    S.data.savedPlans.push({ id: uid(), name: 'Avant IA chat — ' + today(), date: today(), source: 'manual', aiColor: null, items: S.data.planItems.map(p => ({...p})) });
+  }
+  const newItems = plan.items.map((item, idx) => ({
+    id: uid(), ticker: item.ticker, name: item.name,
+    isEtf: item.isEtf !== false,
+    allocationPct: item.isEtf !== false ? (item.allocationPct || 0) : 0,
+    monthlyShares: item.isEtf === false ? (item.monthlyShares || 1) : 0,
+    monthlyAmount: 0, minAmount: 200, feePct: item.isEtf !== false ? 0.5 : 0.9,
+    priority: idx + 1, active: true, notes: ''
+  }));
+  if (!S.data.savedPlans) S.data.savedPlans = [];
+  S.data.savedPlans.push({ id: uid(), name: plan.name || 'Plan IA chat', date: today(), source: 'ai', aiColor: '#3b82f6', items: newItems });
+  S.data.planItems = newItems;
+  saveData();
+  toast(`✅ Plan "${plan.name || 'Plan IA'}" appliqué — redirection vers Planning…`, 'success', 4000);
   setTimeout(() => navigate('planning'), 1200);
 }
 

@@ -47,7 +47,7 @@
     .section-title{font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin-bottom:10px}
 
     /* ===== CARDS ===== */
-    .card{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:18px;border-top:1px solid var(--border)}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px;box-shadow:0 2px 12px rgba(0,0,0,0.18)}
     .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
     .grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:20px}
     .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px}
@@ -123,10 +123,16 @@
 
     /* ===== TOAST ===== */
     #toasts{position:fixed;bottom:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px}
-    .toast{padding:11px 15px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:0.82rem;animation:slideIn 0.2s ease;max-width:300px;box-shadow:0 4px 12px rgba(0,0,0,0.3)}
+    .toast{padding:11px 15px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;font-size:0.82rem;animation:slideIn 0.2s ease;max-width:300px;box-shadow:0 4px 16px rgba(0,0,0,0.4)}
     .toast.success{border-left:3px solid var(--success)}
     .toast.error{border-left:3px solid var(--danger)}
     @keyframes slideIn{from{transform:translateX(110%);opacity:0}to{transform:translateX(0);opacity:1}}
+    @media(max-width:900px){
+      #toasts{bottom:calc(64px + env(safe-area-inset-bottom,0px) + 12px);right:12px;left:12px}
+      .toast{max-width:100%;text-align:center}
+      .modal{border-radius:20px 20px 0 0;position:fixed;bottom:0;left:0;right:0;width:100%!important;max-width:100%!important;max-height:85vh;margin:0}
+      .modal-overlay{align-items:flex-end;padding:0}
+    }
 
     /* ===== NEWS ===== */
     .news-card{background:var(--surface2);border:1px solid var(--border);border-radius:9px;padding:14px;margin-bottom:10px;transition:border-color 0.12s}
@@ -169,49 +175,88 @@
     ::-webkit-scrollbar-track{background:transparent}
     ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 
-    /* ===== MOBILE NAV ===== */
-    #mobile-nav{display:none;position:sticky;top:0;z-index:100;background:var(--surface);border-bottom:2px solid var(--border);overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;flex-shrink:0}
-    #mobile-nav::-webkit-scrollbar{display:none}
-    .mob-nav-inner{display:flex;padding:0 2px}
-    .mob-tab{display:flex;flex-direction:column;align-items:center;gap:2px;padding:10px 13px 8px;cursor:pointer;color:var(--muted);font-size:0.58rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all 0.15s;user-select:none;white-space:nowrap;min-width:54px}
-    .mob-tab .mico{font-size:1.15rem;line-height:1}
-    .mob-tab:hover{color:var(--text);background:rgba(255,255,255,0.03)}
-    .mob-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+    /* ===== MOBILE HEADER ===== */
+    #mobile-header{display:none;position:fixed;top:0;left:0;right:0;height:56px;background:var(--surface);border-bottom:1px solid var(--border);z-index:110;align-items:center;justify-content:space-between;padding:0 16px;box-shadow:0 2px 12px rgba(0,0,0,0.25)}
+    .mhdr-logo{font-size:1.05rem;font-weight:800;color:var(--accent);letter-spacing:-0.03em;display:flex;align-items:center;gap:6px}
+    #mobile-page-title{font-size:0.95rem;font-weight:600;color:var(--text);position:absolute;left:50%;transform:translateX(-50%);white-space:nowrap}
+
+    /* ===== BOTTOM NAV ===== */
+    #bottom-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:110;background:var(--surface);border-top:1px solid var(--border);align-items:center;justify-content:space-around;padding:0 8px;padding-bottom:env(safe-area-inset-bottom,0px);box-shadow:0 -4px 24px rgba(0,0,0,0.35);height:calc(60px + env(safe-area-inset-bottom,0px))}
+    .bnav-item{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 6px 6px;cursor:pointer;color:var(--muted);flex:1;font-size:0.58rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;transition:color 0.15s;user-select:none;-webkit-tap-highlight-color:transparent;border-radius:10px;position:relative}
+    .bnav-item .bico{font-size:1.3rem;line-height:1;transition:transform 0.15s}
+    .bnav-item:active .bico{transform:scale(0.82)}
+    .bnav-item.active{color:var(--accent)}
+    .bnav-item.active::before{content:'';position:absolute;top:4px;left:50%;transform:translateX(-50%);width:28px;height:3px;background:var(--accent);border-radius:0 0 3px 3px;top:0}
+
+    /* ===== MORE SHEET ===== */
+    #more-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:200;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+    #more-overlay.open{display:block}
+    #more-sheet{position:fixed;bottom:0;left:0;right:0;z-index:201;background:var(--surface);border-radius:22px 22px 0 0;border:1px solid var(--border);padding:12px 20px calc(16px + env(safe-area-inset-bottom,0px));transform:translateY(110%);transition:transform 0.32s cubic-bezier(0.34,1.2,0.64,1);box-shadow:0 -16px 48px rgba(0,0,0,0.5)}
+    #more-sheet.open{transform:translateY(0)}
+    .sheet-handle{width:36px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 14px}
+    .sheet-label{font-size:0.68rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--muted);margin-bottom:14px}
+    .sheet-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:4px}
+    .sheet-item{display:flex;flex-direction:column;align-items:center;gap:7px;padding:14px 6px;background:var(--surface2);border:1px solid var(--border);border-radius:14px;cursor:pointer;color:var(--muted);font-size:0.68rem;font-weight:600;text-align:center;transition:all 0.12s;-webkit-tap-highlight-color:transparent;user-select:none;line-height:1.2}
+    .sheet-item .sico{font-size:1.55rem;line-height:1}
+    .sheet-item:active{transform:scale(0.93);background:var(--border)}
+    .sheet-item.active{color:var(--accent);background:rgba(45,126,247,0.12);border-color:rgba(45,126,247,0.3)}
 
     /* ===== RESPONSIVE ===== */
     @media(max-width:900px){
       :root{--sidebar:0px}
       body{flex-direction:column}
-      #mobile-nav{display:block}
+      #mobile-header{display:flex}
+      #bottom-nav{display:flex}
       #sidebar{display:none!important}
-      #main{margin-left:0;padding:14px;flex:1}
+      #main{margin-left:0;padding:12px;padding-top:calc(56px + 12px);padding-bottom:calc(60px + 16px + env(safe-area-inset-bottom,0px));flex:1}
       .grid-4{grid-template-columns:repeat(2,1fr)}
       .grid-3{grid-template-columns:repeat(2,1fr)}
+      .card{border-radius:16px;padding:14px}
+      h2{font-size:1.15rem}
     }
     @media(max-width:600px){
       .grid-4,.grid-2,.grid-3{grid-template-columns:1fr}
       .form-row{grid-template-columns:1fr}
+      .btn{min-height:42px}
+      input,select,textarea{min-height:44px;font-size:16px!important}
+      .page-actions{gap:6px}
+      .page-actions .btn{flex:1;justify-content:center}
     }
   </style>
 </head>
 <body>
 
-<!-- ===== MOBILE NAV ===== -->
-<nav id="mobile-nav">
-  <div class="mob-nav-inner">
-    <div class="mob-tab active" data-page="dashboard"><span class="mico">📊</span>Board</div>
-    <div class="mob-tab" data-page="portfolio"><span class="mico">💼</span>PF</div>
-    <div class="mob-tab" data-page="transactions"><span class="mico">🔄</span>TX</div>
-    <div class="mob-tab" data-page="treasury"><span class="mico">💰</span>Cash</div>
-    <div class="mob-tab" data-page="planning"><span class="mico">📅</span>Plan</div>
-    <div class="mob-tab" data-page="simulation"><span class="mico">🔮</span>Sim</div>
-    <div class="mob-tab" data-page="performance"><span class="mico">📈</span>Perf</div>
-    <div class="mob-tab" data-page="technical"><span class="mico">📉</span>Tech</div>
-    <div class="mob-tab" data-page="news"><span class="mico">📰</span>News</div>
-    <div class="mob-tab" data-page="ai"><span class="mico">🤖</span>IA</div>
-    <div class="mob-tab" data-page="settings"><span class="mico">⚙️</span>Config</div>
-  </div>
+<!-- ===== MOBILE HEADER ===== -->
+<header id="mobile-header">
+  <div class="mhdr-logo"><span style="font-size:1.1rem">📈</span> PEA</div>
+  <div id="mobile-page-title">Dashboard</div>
+  <div style="width:44px"></div>
+</header>
+
+<!-- ===== BOTTOM NAV ===== -->
+<nav id="bottom-nav">
+  <div class="bnav-item active" data-page="dashboard"><span class="bico">📊</span><span>Board</span></div>
+  <div class="bnav-item" data-page="portfolio"><span class="bico">💼</span><span>Portef.</span></div>
+  <div class="bnav-item" data-page="planning"><span class="bico">📅</span><span>Plan</span></div>
+  <div class="bnav-item" data-page="ai"><span class="bico">🤖</span><span>IA</span></div>
+  <div class="bnav-item" id="bnav-more" onclick="openMoreSheet()"><span class="bico">☰</span><span>Plus</span></div>
 </nav>
+
+<!-- ===== MORE SHEET ===== -->
+<div id="more-overlay" onclick="closeMoreSheet()"></div>
+<div id="more-sheet">
+  <div class="sheet-handle"></div>
+  <div class="sheet-label">Navigation</div>
+  <div class="sheet-grid">
+    <div class="sheet-item" data-page="transactions" onclick="sheetNav('transactions')"><span class="sico">🔄</span><span>Transactions</span></div>
+    <div class="sheet-item" data-page="treasury" onclick="sheetNav('treasury')"><span class="sico">💰</span><span>Trésorerie</span></div>
+    <div class="sheet-item" data-page="simulation" onclick="sheetNav('simulation')"><span class="sico">🔮</span><span>Simulation</span></div>
+    <div class="sheet-item" data-page="performance" onclick="sheetNav('performance')"><span class="sico">📈</span><span>Performance</span></div>
+    <div class="sheet-item" data-page="technical" onclick="sheetNav('technical')"><span class="sico">📉</span><span>Technique</span></div>
+    <div class="sheet-item" data-page="news" onclick="sheetNav('news')"><span class="sico">📰</span><span>Actualités</span></div>
+    <div class="sheet-item" data-page="settings" onclick="sheetNav('settings')"><span class="sico">⚙️</span><span>Réglages</span></div>
+  </div>
+</div>
 
 <!-- ===== SIDEBAR ===== -->
 <nav id="sidebar">
@@ -2706,7 +2751,8 @@ async function aiRunStructured(fullPrompt, type) {
   const jsonSystem = `Tu es un gérant de portefeuille senior spécialisé PEA français, niveau CFA, 20 ans d'expérience chez Amundi/BlackRock. Tu analyses avec précision et conviction.
 RÈGLE ABSOLUE: Tu réponds UNIQUEMENT avec un objet JSON valide. Pas de texte avant, pas de texte après, pas de bloc markdown. Juste le JSON brut commençant par { et finissant par }.`;
   try {
-    const res = await callClaude([{ role:'user', content:fullPrompt }], { system: jsonSystem, maxTokens: 3000 });
+    const tokenMap = { plan: 6000, analyze: 5000, risk: 4000, monthly: 3000, valuation: 3000, compare: 3500 };
+    const res = await callClaude([{ role:'user', content:fullPrompt }], { system: jsonSystem, maxTokens: tokenMap[type] ?? 3000 });
     let data = null;
     try { data = parseAIJSON(res); } catch(e) { /* fall back to markdown */ }
     S.ai.push({ role:'assistant', content:res, time:new Date().toLocaleTimeString('fr-FR'), isStructured:!!data, structuredType:type, structuredData:data });
@@ -2857,11 +2903,9 @@ async function aiPlanAnalysis() {
   const ctx = buildPortfolioContext();
   const planTxt = buildPlanText(planItems, 'PLAN MENSUEL ACTUEL À ANALYSER');
   await aiRunStructured(`${ctx}${planTxt}
-MISSION — ANALYSE COMPLÈTE DU PLAN D'INVESTISSEMENT MENSUEL.
-Analyse en détail : qualité de la diversification, cohérence des allocations ETF, utilité des titres directs, coûts estimés (courtage + TER ETF), potentiel rendement, risques spécifiques au plan, et optimisations concrètes.
-RÈGLES: ETFs → analyser la répartition %, couverture géographique/sectorielle, chevauchements. Titres directs → utilité dans le plan, budget consommé, rythme d'achat. Coûts → estimer frais annuels totaux.
-Réponds UNIQUEMENT avec un objet JSON valide.
-Schéma exact:{"note_globale":<integer 0-10>,"verdict":"<2-3 phrases directes>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<number>,"note":<0-10>,"role":"","commentaire":"","risque":""}],"titres":[{"ticker":"","parts_mois":<number>,"budget_mois_eur":<number>,"commentaire":"","utilite":""}],"diversification":{"score":<0-10>,"detail":"","zones_manquantes":[""],"chevauchements":[""]},"couts":{"total_annuel_eur":<number>,"detail":"","frais_etf_pct_moy":<number>},"points_forts":[""],"risques_plan":[""],"optimisations":[{"priorite":<1-5>,"action":"","impact":"","effort":"facile|moyen|complexe"}],"synthese":""}`, 'plan');
+MISSION: Analyse complète du plan mensuel. Diversification, allocations ETF, chevauchements, titres directs, coûts (courtage+TER), risques, optimisations.
+JSON UNIQUEMENT — schéma strict:
+{"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse>","risque":"<risque>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":<n>,"detail":"<détail>","frais_etf_pct_moy":<n>},"points_forts":["<point>"],"risques_plan":["<risque>"],"optimisations":[{"priorite":<1-5>,"action":"<action>","impact":"<impact>","effort":"facile|moyen|complexe"}],"synthese":"<synthèse 3-4 phrases>"}`, 'plan');
 }
 
 async function aiComparePlans() {
@@ -5338,16 +5382,34 @@ function renderAiLoyaltyEvents(snapshots) {
 // ======================================================
 // ROUTER
 // ======================================================
+const PAGE_TITLES = { dashboard:'Dashboard', portfolio:'Portefeuille', transactions:'Transactions', treasury:'Trésorerie', planning:'Planning', simulation:'Simulation', performance:'Performance', technical:'Technique', news:'Actualités', ai:'IA Claude', settings:'Paramètres' };
+const MORE_PAGES = new Set(['transactions','treasury','simulation','performance','technical','news','settings']);
+
 function navigate(page) {
   S.page = page;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-item, .mob-tab').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.nav-item, .bnav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-'+page)?.classList.add('active');
-  document.querySelectorAll(`.nav-item[data-page="${page}"], .mob-tab[data-page="${page}"]`).forEach(el => el.classList.add('active'));
-  const activeTab = document.querySelector(`#mobile-nav .mob-tab[data-page="${page}"]`);
-  if (activeTab) activeTab.scrollIntoView({ behavior:'smooth', inline:'center', block:'nearest' });
+  document.querySelectorAll(`.nav-item[data-page="${page}"], .bnav-item[data-page="${page}"]`).forEach(el => el.classList.add('active'));
+  // Si la page est dans "Plus", activer le bouton Plus
+  if (MORE_PAGES.has(page)) document.getElementById('bnav-more')?.classList.add('active');
+  // Mettre à jour les sheet-items
+  document.querySelectorAll('.sheet-item').forEach(el => el.classList.toggle('active', el.dataset.page === page));
+  // Titre mobile
+  const titleEl = document.getElementById('mobile-page-title');
+  if (titleEl) titleEl.textContent = PAGE_TITLES[page] || page;
   renderPage(page);
 }
+
+function openMoreSheet() {
+  document.getElementById('more-overlay').classList.add('open');
+  document.getElementById('more-sheet').classList.add('open');
+}
+function closeMoreSheet() {
+  document.getElementById('more-overlay').classList.remove('open');
+  document.getElementById('more-sheet').classList.remove('open');
+}
+function sheetNav(page) { closeMoreSheet(); navigate(page); }
 
 // ======================================================
 // PAGE — PERFORMANCE
@@ -5873,7 +5935,7 @@ function init() {
   S.txFilter = 'all'; S.txSearch = ''; S.newsCache = {}; S.evolFilter = '1M';
 
   document.getElementById('sidebar-broker').textContent = S.data.settings.brokerName || 'Mon PEA';
-  document.querySelectorAll('.nav-item, .mob-tab').forEach(el => el.addEventListener('click', () => navigate(el.dataset.page)));
+  document.querySelectorAll('.nav-item, .bnav-item').forEach(el => { if (!el.id?.includes('more')) el.addEventListener('click', () => navigate(el.dataset.page)); });
   document.getElementById('form-tx').addEventListener('submit', handleTx);
   document.getElementById('form-dep').addEventListener('submit', handleDep);
   document.getElementById('form-plan').addEventListener('submit', handlePlan);

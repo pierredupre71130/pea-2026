@@ -1100,10 +1100,64 @@ function makePlanChart(etfItems) {
 // ======================================================
 // API — PRICES
 // ======================================================
+
+// Boursorama fallback : convertit un ticker Yahoo Finance en code Boursorama
+// Stocks : 1rP{BASE}   ETFs/trackers : 1rT{BASE}
+async function fetchPriceBoursorama(ticker) {
+  const base = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
+  // Try stock URL first, then ETF/tracker URL
+  const candidates = [
+    `https://www.boursorama.com/cours/1rP${base}/`,
+    `https://www.boursorama.com/bourse/trackers/cours/1rT${base}/`,
+  ];
+  for (const boursoUrl of candidates) {
+    try {
+      const r = await fetch(`${PROXY}${encodeURIComponent(boursoUrl)}`, { signal: AbortSignal.timeout(15000) });
+      if (!r.ok) continue;
+      const d = await r.json();
+      const html = d.contents || '';
+      if (!html || html.length < 500) continue;
+      // Check page exists (Boursorama 404 redirects to home with specific text)
+      if (html.includes('Cette page') && html.includes('introuvable')) continue;
+      // Extract price : span/div with class containing c-instrument--last
+      const priceMatch = html.match(/c-instrument--last[^>]*>[\s\r\n]*([0-9\s]+[,\.][0-9]{1,4})/);
+      if (!priceMatch) continue;
+      const priceStr = priceMatch[1].trim().replace(/\s/g, '').replace(',', '.');
+      const price = parseFloat(priceStr);
+      if (!isNaN(price) && price > 0) {
+        // Try to extract name from og:title or <title>
+        const nameMatch = html.match(/property="og:title"\s+content="([^"]+)"/) ||
+                          html.match(/<title>([^|<\-]+)/);
+        const rawName = nameMatch ? nameMatch[1].trim() : ticker;
+        const name = rawName.replace(/\s*\|.*$/, '').replace(/\s*-\s*(Boursorama|bourse).*$/i, '').trim() || ticker;
+        // Try change percent
+        const chgMatch = html.match(/c-instrument--variation[^>]*>[\s\r\n]*([+-]?[0-9]+[,\.][0-9]+)\s*%/);
+        const changePercent = chgMatch ? parseFloat(chgMatch[1].replace(',', '.')) : 0;
+        return { price, changePercent, name, currency: 'EUR', timestamp: Date.now(), source: 'boursorama' };
+      }
+    } catch(e) { /* try next */ }
+  }
+  return null;
+}
+
 async function fetchPrice(ticker, attempt = 1) {
   const cache = S.data.priceCache[ticker];
   if (cache?.manual) return cache; // cours manuel : jamais remplacé par l'auto
   if (cache && (Date.now() - (cache.timestamp||0) < PRICE_TTL)) return cache;
+
+  // Boursorama en premier pour les tickers .PA et .DE
+  if (/\.(PA|DE)$/i.test(ticker)) {
+    const bourso = await fetchPriceBoursorama(ticker);
+    if (bourso) {
+      S.data.priceCache[ticker] = bourso;
+      checkPriceAlerts(ticker, bourso.price);
+      saveData();
+      return bourso;
+    }
+    console.warn('fetchPrice', ticker, 'Boursorama KO → fallback Yahoo Finance');
+  }
+
+  // Fallback Yahoo Finance (autres tickers ou si Boursorama échoue)
   try {
     const url = `${YF_CHART}${encodeURIComponent(ticker)}?interval=1d&range=1d`;
     const r = await fetch(`${PROXY}${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(20000) });
@@ -1346,7 +1400,7 @@ function renderPortfolio() {
               <td>
                 <span onclick="openPriceModal('${esc(p.ticker)}')" title="Cliquer pour saisir un cours manuel" style="cursor:pointer;border-bottom:1px dashed var(--muted)">
                   ${p.currentPrice!==null ? `<strong>${fc(p.currentPrice)}</strong>` : '<span class="neutral" style="font-size:0.75rem">Saisir</span>'}
-                  ${S.data.priceCache[p.ticker]?.manual ? ' <span style="font-size:0.68rem;color:var(--warning);font-weight:700" title="Cours manuel actif">M</span>' : ''}
+                  ${S.data.priceCache[p.ticker]?.manual ? ' <span style="font-size:0.68rem;color:var(--warning);font-weight:700" title="Cours manuel actif">M</span>' : S.data.priceCache[p.ticker]?.source==='boursorama' ? ' <span style="font-size:0.65rem;color:var(--muted)" title="Source : Boursorama (fallback Yahoo Finance)">B</span>' : ''}
                 </span>
               </td>
               <td class="${p.changePercent!==null && !S.data.priceCache[p.ticker]?.manual ?sign(p.changePercent):'neutral'}">${p.changePercent!==null && !S.data.priceCache[p.ticker]?.manual ?fp(p.changePercent):'—'}</td>

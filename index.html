@@ -3008,54 +3008,32 @@ function renderAnalysisCard(data, type) {
     else if (type==='valuation') html = renderValuationCard(data);
     else if (type==='plan')      html = renderPlanAnalysisCard(data);
     else if (type==='compare')   html = renderCompareCard(data);
-    // === CHOIX INTERACTIFS (etfs_base + choix) ===
-    if (type === 'plan' && data.choix?.length) {
+    // === PLAN ASSEMBLÉ (affiché après que tous les choix inline sont répondus) ===
+    if (type === 'plan' && data.etfs_base?.length) {
+      const optionsChoix = (data.optimisations||[]).filter(o => o.choix_id && o.options?.length);
+      const total = optionsChoix.length;
+      const answered = optionsChoix.filter(o => S._planChoices?.[o.choix_id] !== undefined).length;
+      const allAnswered = total > 0 && answered === total;
       const budget = S.data.settings.monthlyBudget || 1800;
-      const basePct = (data.etfs_base||[]).reduce((s,e)=>s+(e.allocationPct||0),0);
-      const allAnswered = data.choix.every(c => S._planChoices?.[c.id] !== undefined);
-      html += `<div style="margin-top:14px">
-        <div style="font-size:0.75rem;color:var(--accent);font-weight:700;text-transform:uppercase;margin-bottom:10px;letter-spacing:0.5px">🎯 Personnalise ton plan — réponds à chaque question</div>
-        ${data.choix.map((c,ci) => {
-          const sel = S._planChoices?.[c.id];
-          return `<div style="background:var(--surface2);border-radius:10px;padding:12px 14px;margin-bottom:8px;border:1px solid ${sel!==undefined?'var(--accent)44':'var(--border)'}">
-            <div style="font-size:0.8rem;font-weight:700;margin-bottom:3px">${ci+1}. ${esc(c.question)}</div>
-            ${c.context?`<div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px">${esc(c.context)}</div>`:''}
-            <div style="display:flex;flex-direction:column;gap:5px">
-              ${c.options.map((opt,oi) => {
-                const isSel = sel===oi;
-                const optPct = (opt.items||[]).reduce((s,e)=>s+(e.allocationPct||0),0);
-                const totalPct = basePct + optPct;
-                const mois = opt.items?.length && totalPct>0 ? Math.round(optPct/totalPct*budget) : 0;
-                const moisTxt = opt.items?.length>0 ? ` · ~${mois}€/mois` : ' · renforce les ETFs existants';
-                const warnColor = mois>0 && mois<200 ? '#ef4444' : 'var(--muted)';
-                const warnTxt = mois>0 && mois<200 ? ' ⚠️ <200€' : '';
-                return `<div onclick="selectPlanChoix('${c.id}',${oi})" style="cursor:pointer;border-radius:8px;padding:9px 12px;border:2px solid ${isSel?'var(--accent)':'var(--border)'};background:${isSel?'var(--accent)0d':'var(--surface)'};display:flex;align-items:flex-start;gap:10px">
-                  <div style="width:18px;height:18px;border-radius:50%;border:2px solid ${isSel?'var(--accent)':'var(--muted)'};background:${isSel?'var(--accent)':'transparent'};flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center">${isSel?'<div style="width:8px;height:8px;border-radius:50%;background:#fff"></div>':''}</div>
-                  <div style="flex:1">
-                    <div style="font-size:0.8rem;font-weight:${isSel?700:600};color:${isSel?'var(--accent)':'var(--text)'}">${esc(opt.label)}<span style="color:${warnColor};font-size:0.72rem">${moisTxt}${warnTxt}</span></div>
-                    ${opt.rationale?`<div style="font-size:0.71rem;color:var(--muted);margin-top:2px">${esc(opt.rationale)}</div>`:''}
-                  </div>
-                </div>`;
-              }).join('')}
-            </div>
-          </div>`;
-        }).join('')}
-        ${allAnswered ? (()=>{
-          const plan = assemblePlanFromChoices(data);
-          const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(plan))));
-          const items = plan.items||[];
-          const tot = items.reduce((s,e)=>s+(e.allocationPct||0),0);
-          const tags = items.map(e=>{
-            const m = tot>0?Math.round(e.allocationPct/tot*budget):0;
-            return `<span style="font-size:0.73rem;background:var(--surface);border-radius:4px;padding:2px 7px;margin:2px">${esc(e.ticker)} ${e.allocationPct}% · ~${m}€</span>`;
-          }).join('');
-          return `<div style="background:var(--accent)0d;border:2px solid var(--accent)55;border-radius:10px;padding:12px 14px">
-            <div style="font-size:0.72rem;color:var(--accent);font-weight:700;text-transform:uppercase;margin-bottom:6px">✅ Ton plan personnalisé</div>
-            <div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:10px">${tags}</div>
-            <button onclick="applyAIStructuredPlanB64('${b64}')" class="btn btn-primary" style="width:100%;font-size:0.85rem">✅ Appliquer mon plan → Planning</button>
-          </div>`;
-        })() : `<div style="text-align:center;padding:8px;font-size:0.77rem;color:var(--muted)">Réponds à toutes les questions pour générer ton plan (${Object.keys(S._planChoices||{}).length}/${data.choix.length} répondu${Object.keys(S._planChoices||{}).length>1?'s':''})</div>`}
-      </div>`;
+      if (allAnswered) {
+        const plan = assemblePlanFromChoices(data);
+        const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(plan))));
+        const items = plan.items || [];
+        const tot = items.reduce((s,e)=>s+(e.allocationPct||0),0);
+        const tags = items.map(e=>{
+          const m = tot>0 ? Math.round(e.allocationPct/tot*budget) : 0;
+          return `<span style="font-size:0.73rem;background:var(--surface);border-radius:4px;padding:2px 7px;margin:2px">${esc(e.ticker)} ${e.allocationPct}% · ~${m}€/mois</span>`;
+        }).join('');
+        html += `<div data-plan-assembled style="margin-top:12px;background:var(--accent)0d;border:2px solid var(--accent)55;border-radius:10px;padding:12px 14px">
+          <div style="font-size:0.72rem;color:var(--accent);font-weight:700;text-transform:uppercase;margin-bottom:6px">✅ Ton plan personnalisé (${total}/${total} choix)</div>
+          <div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:10px">${tags}</div>
+          <button onclick="applyAIStructuredPlanB64('${b64}')" class="btn btn-primary" style="width:100%;font-size:0.85rem">✅ Appliquer mon plan → Planning</button>
+        </div>`;
+      } else if (total > 0) {
+        html += `<div style="margin-top:10px;text-align:center;padding:8px;font-size:0.77rem;color:var(--muted);background:var(--surface2);border-radius:8px">
+          Réponds aux choix ci-dessus pour générer ton plan personnalisé (${answered}/${total} répondu${answered>1?'s':''})
+        </div>`;
+      }
     }
     // === VARIANTES DIRECTES (plan_variantes ou plan_suggere compat) ===
     if (!data.choix?.length) {
@@ -3510,13 +3488,14 @@ NOTE_GLOBALE = qualité du plan mensuel proposé (choix ETFs, allocations, coût
 RAPPELS CRITIQUES: 1) Parts ENTIÈRES uniquement. 2) Minimum 200€/ordre Boursobank avril 2026. 3) Boursomarkets 0€ = iShares .PA listés. 4) Substitution ETF = même catégorie obligatoire.
 NE PAS recalculer les coûts — utiliser les chiffres fournis dans COÛTS CALCULÉS PAR L'APPLICATION.
 JSON UNIQUEMENT — schéma strict:
-{"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse concise>","risque":"<risque principal>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse concise>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan concis>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":${costs.total_annuel_eur},"courtage_annuel_eur":${costs.courtage_annuel_eur},"ter_annuel_eur":${costs.ter_annuel_eur},"frais_etf_pct_moy":${costs.frais_etf_pct_moy},"detail":"${costs.detail}"},"points_forts":["<point>"],"risques_plan":["<risque>"],"optimisations":[{"priorite":<1-5>,"action":"<action>","impact":"<impact>","effort":"facile|moyen|complexe"}],"synthese":"<synthèse 3-4 phrases>","etfs_base":[{"ticker":"","name":"","allocationPct":<n>}],"choix":[{"id":"<id_court>","question":"<question claire>","context":"<1 phrase de contexte>","options":[{"label":"<label court>","items":[{"ticker":"","name":"","allocationPct":<n>}],"rationale":"<1 phrase pourquoi>"}]}]}
-RÈGLES etfs_base + choix (PRIORITÉ sur plan_variantes) :
-- etfs_base = ETFs qui restent dans TOUS les cas (pas de décision à prendre). allocationPct relatif entre eux.
-- choix = liste des décisions où l'utilisateur doit choisir entre 2-3 options. Chaque option a items=[] si elle supprime un poste (ex: "Ne pas ajouter").
-- JAMAIS d'ETF avec allocation mensuelle < 200€ dans les options. Budget: ${S.data.settings.monthlyBudget}€. Vérifier: allocationPct/(sum_base_pct+option_pct)×budget ≥ 200€.
-- JAMAIS de cash, monétaire, obligations. ETFs uniquement. Titres directs préservés automatiquement.
-- Si aucune décision binaire pertinente : omettre choix et etfs_base, utiliser plan_variantes à la place.
+{"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse concise>","risque":"<risque principal>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse concise>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan concis>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":${costs.total_annuel_eur},"courtage_annuel_eur":${costs.courtage_annuel_eur},"ter_annuel_eur":${costs.ter_annuel_eur},"frais_etf_pct_moy":${costs.frais_etf_pct_moy},"detail":"${costs.detail}"},"points_forts":["<point>"],"risques_plan":["<risque>"],"optimisations":[{"priorite":<1-5>,"action":"<action>","impact":"<impact>","effort":"facile|moyen|complexe","choix_id":"<id_unique_optionnel>","options":[{"label":"<label court>","items":[{"ticker":"","name":"","allocationPct":<n>}],"rationale":"<1 phrase>"}]}],"synthese":"<synthèse 3-4 phrases>","etfs_base":[{"ticker":"","name":"","allocationPct":<n>}]}
+RÈGLES options dans optimisations :
+- Ajouter "choix_id" + "options" UNIQUEMENT sur les optimisations où il y a une vraie alternative (A vs B). Pas sur toutes.
+- options[].items = ETFs à modifier/ajouter pour ce choix. Si l'option supprime un ETF, mettre items:[].
+- Si une option modifie un ETF déjà dans etfs_base (même ticker), il REMPLACE l'allocationPct (pas de doublon).
+- etfs_base = ETFs qui restent dans TOUS les cas. allocationPct relatif entre eux.
+- JAMAIS d'ETF dont allocationPct/totalPct×${S.data.settings.monthlyBudget}€ < 200€. JAMAIS de cash/monétaire/obligations.
+- Titres directs (actions) préservés automatiquement — ne pas les inclure.
 - Plan actuel : ${currentPlanSummary}`,
   'plan',
   (d) => { d.couts = { total_annuel_eur: costs.total_annuel_eur, courtage_annuel_eur: costs.courtage_annuel_eur, ter_annuel_eur: costs.ter_annuel_eur, frais_etf_pct_moy: costs.frais_etf_pct_moy, detail: costs.detail }; return d; });
@@ -3570,7 +3549,36 @@ function renderPlanAnalysisCard(d) {
       ${d.points_forts?.length ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div style="font-size:0.68rem;color:#22c55e;text-transform:uppercase;margin-bottom:6px;font-weight:700">✅ Points forts</div>${d.points_forts.map(p=>`<div style="font-size:0.78rem;margin-bottom:3px;padding-left:8px;border-left:2px solid #22c55e44">${esc(p)}</div>`).join('')}</div>` : ''}
       ${d.risques_plan?.length ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div style="font-size:0.68rem;color:#ef4444;text-transform:uppercase;margin-bottom:6px;font-weight:700">⚠️ Risques</div>${d.risques_plan.map(r=>`<div style="font-size:0.78rem;margin-bottom:3px;padding-left:8px;border-left:2px solid #ef444444">${esc(r)}</div>`).join('')}</div>` : ''}
     </div>` : ''}
-    ${d.optimisations?.length ? `<div><div class="section-title" style="margin-bottom:6px">🎯 Optimisations</div>${d.optimisations.map((o,i) => `<div style="background:var(--surface2);border-radius:7px;padding:9px 12px;margin-bottom:5px;display:flex;gap:10px;align-items:flex-start"><span style="width:20px;height:20px;border-radius:50%;background:var(--accent);color:#fff;font-size:0.7rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${o.priorite||i+1}</span><div><div style="font-size:0.83rem;font-weight:600">${esc(o.action)}</div>${o.impact ? `<div style="font-size:0.75rem;color:#22c55e;margin-top:2px">${esc(o.impact)}</div>` : ''}${o.effort ? `<span style="font-size:0.7rem;color:var(--muted)">${esc(o.effort)}</span>` : ''}</div></div>`).join('')}</div>` : ''}
+    ${d.optimisations?.length ? `<div><div class="section-title" style="margin-bottom:6px">🎯 Optimisations</div>${d.optimisations.map((o,i) => {
+      const hasChoix = o.choix_id && o.options?.length;
+      const selectedIdx = hasChoix ? S._planChoices?.[o.choix_id] : undefined;
+      const isPending = hasChoix && selectedIdx === undefined;
+      const budget = S.data.settings.monthlyBudget || 1800;
+      const basePct = (d.etfs_base||[]).reduce((s,e)=>s+(e.allocationPct||0),0);
+      const choixHtml = hasChoix ? `<div ${isPending?'data-choix-pending':''} style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+        <div style="font-size:0.72rem;color:var(--accent);font-weight:700;margin-bottom:6px">👆 Ton choix :</div>
+        <div style="display:flex;flex-direction:column;gap:5px">
+          ${o.options.map((opt,oi) => {
+            const isSel = selectedIdx === oi;
+            const optPct = (opt.items||[]).reduce((s,e)=>s+(e.allocationPct||0),0);
+            const totPct = basePct + optPct || 100;
+            const mois = opt.items?.length ? Math.round(optPct/totPct*budget) : 0;
+            const moisStr = opt.items?.length && mois>0 ? ` · ~${mois}€/mois` : opt.items?.length===0 ? ' · supprime ce poste' : '';
+            return `<div onclick="selectPlanChoix('${o.choix_id}',${oi})" style="cursor:pointer;border-radius:7px;padding:8px 11px;border:2px solid ${isSel?'var(--accent)':'var(--border)'};background:${isSel?'var(--accent)11':'transparent'};transition:all 0.15s;display:flex;align-items:center;gap:8px">
+              <div style="width:14px;height:14px;border-radius:50%;border:2px solid ${isSel?'var(--accent)':'var(--muted)'};background:${isSel?'var(--accent)':'transparent'};flex-shrink:0"></div>
+              <div><div style="font-size:0.8rem;font-weight:${isSel?'700':'500'};color:${isSel?'var(--accent)':'var(--text)'}">${esc(opt.label)}${moisStr}</div>${opt.rationale?`<div style="font-size:0.71rem;color:var(--muted)">${esc(opt.rationale)}</div>`:''}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>` : '';
+      return `<div style="background:var(--surface2);border-radius:7px;padding:9px 12px;margin-bottom:5px">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <span style="width:20px;height:20px;border-radius:50%;background:${hasChoix?'var(--accent)':'var(--surface)'};border:${hasChoix?'none':'2px solid var(--border)'};color:${hasChoix?'#fff':'var(--muted)'};font-size:0.7rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${o.priorite||i+1}</span>
+          <div style="flex:1"><div style="font-size:0.83rem;font-weight:600">${esc(o.action)}</div>${o.impact?`<div style="font-size:0.75rem;color:#22c55e;margin-top:2px">${esc(o.impact)}</div>`:''}${o.effort?`<span style="font-size:0.7rem;color:var(--muted)">${esc(o.effort)}</span>`:''}</div>
+        </div>
+        ${choixHtml}
+      </div>`;
+    }).join('')}</div>` : ''}
     ${d.synthese ? `<div style="background:var(--surface2);border-radius:8px;padding:12px 14px;border-left:3px solid var(--accent)"><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:5px">Synthèse</div><div style="font-size:0.83rem;line-height:1.5">${esc(d.synthese)}</div></div>` : ''}
   </div>`;
 }
@@ -4562,20 +4570,32 @@ function selectPlanChoix(choixId, optionIdx) {
   if (!S._planChoices) S._planChoices = {};
   S._planChoices[choixId] = optionIdx;
   renderAI();
+  // Scroll vers le prochain choix non répondu, ou vers le plan assemblé si tout répondu
+  requestAnimationFrame(() => {
+    const next = document.querySelector('[data-choix-pending]');
+    const assembled = document.querySelector('[data-plan-assembled]');
+    const target = next || assembled;
+    if (target) target.scrollIntoView({ behavior:'smooth', block:'start' });
+  });
 }
 
 function assemblePlanFromChoices(data) {
-  const base  = (data.etfs_base || []).map(e => ({...e, isEtf:true}));
-  const extra = [];
-  for (const c of (data.choix || [])) {
-    const idx = S._planChoices?.[c.id];
-    if (idx !== undefined && c.options[idx]) {
-      for (const item of (c.options[idx].items || [])) {
-        extra.push({...item, isEtf:true});
-      }
+  // Base (ETFs fixes)
+  const merged = (data.etfs_base || []).map(e => ({...e, isEtf:true}));
+  // Appliquer chaque choix sélectionné — MERGE par ticker (replace, pas append)
+  for (const o of (data.optimisations || [])) {
+    if (!o.choix_id || !o.options) continue;
+    const idx = S._planChoices?.[o.choix_id];
+    if (idx === undefined) continue;
+    for (const item of (o.options[idx]?.items || [])) {
+      const existing = merged.findIndex(e => e.ticker === item.ticker);
+      if (existing >= 0) merged[existing] = {...item, isEtf:true}; // remplace
+      else merged.push({...item, isEtf:true});                     // ajoute
     }
+    // Si l'option supprime un ETF (items vide mais ticker à retirer dans action)
+    // Les items:[] signifient "ne rien ajouter/modifier" — déjà géré
   }
-  return { name:'Plan personnalisé', items:[...base, ...extra] };
+  return { name:'Plan personnalisé', items: merged.filter(e => e.allocationPct > 0) };
 }
 
 function applyAIStructuredPlan(plan) {

@@ -2540,15 +2540,34 @@ function renderPlanning() {
                 <div style="font-size:0.68rem;color:${allocMois<200&&allocMois>0?'#f59e0b':'var(--muted)'};margin-top:2px">~${allocMois}€/mois${allocMois<200&&allocMois>0?' ⚡':''}</div>
               </div>
             </div>
-            <!-- Ligne 3 : poids actuel → projeté + valeur -->
-            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;padding-top:8px;border-top:1px solid var(--border)">
+            <!-- Ligne 3 : poids actuel → projeté -->
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;padding-top:8px;border-top:1px solid var(--border);margin-bottom:8px">
               <div style="font-size:0.75rem">
                 <span style="color:var(--muted)">${r.currentPct.toFixed(1)}%</span>
                 <span style="color:var(--muted)"> → </span>
                 <span style="color:${devColor};font-weight:600">${r.projPct.toFixed(1)}%</span>
                 <span style="color:var(--muted);font-size:0.68rem"> (cible ${r.targetPct.toFixed(1)}%)</span>
               </div>
-              <div style="font-size:0.75rem;color:var(--muted)">${fc(r.currentVal)}${terVal!==null?` · TER ${terVal}%`:''}</div>
+              <div style="font-size:0.74rem;color:var(--muted)">${fc(r.currentVal)}</div>
+            </div>
+            <!-- Ligne 4 : TER + Frais % éditable -->
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <div style="display:flex;align-items:center;gap:5px">
+                <span style="font-size:0.68rem;color:var(--muted);text-transform:uppercase">TER</span>
+                <span style="font-size:0.78rem;font-weight:600;color:${terVal===null?'var(--muted)':terVal>=0.5?'var(--warning)':terVal>=0.3?'var(--muted)':'var(--success)'}">${terVal!==null?terVal+'%':'—'}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:5px">
+                <span style="font-size:0.68rem;color:var(--muted);text-transform:uppercase">Frais</span>
+                <input type="number" value="${r.feePct??0}" min="0" max="5" step="0.01"
+                  style="width:52px;padding:3px 6px;font-size:0.78rem;min-height:32px" onchange="updPlanFee('${r.id}',this.value)">
+                <span style="font-size:0.75rem;color:var(--muted)">%</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:5px">
+                <span style="font-size:0.68rem;color:var(--muted);text-transform:uppercase">Min.</span>
+                <input type="number" value="${r.minAmount??200}" min="0" step="10"
+                  style="width:58px;padding:3px 6px;font-size:0.78rem;min-height:32px" onchange="updPlanMin('${r.id}',this.value)">
+                <span style="font-size:0.75rem;color:var(--muted)">€</span>
+              </div>
             </div>
             ${r.amount>0?`<button class="btn btn-success w-full" style="margin-top:10px;justify-content:center" onclick="execPlan('${r.id}',${r.amount.toFixed(2)},${r.parts??0})">✓ Acheter ${fc(r.amount)}</button>`:''}
           </div>`;

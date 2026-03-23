@@ -3178,7 +3178,7 @@ function renderValuationCard(d) {
   </div>`;
 }
 
-async function aiRunStructured(fullPrompt, type) {
+async function aiRunStructured(fullPrompt, type, postProcess) {
   const labels = { analyze:'📊 Analyse du portefeuille', monthly:'📅 Conseil achat mensuel', risk:'⚡ Analyse des risques', valuation:'💰 Valorisation IA', plan:'📋 Analyse du plan mensuel', compare:'🔄 Comparaison de plans' };
   const now = new Date().toLocaleTimeString('fr-FR');
   S.ai.push({ role:'user', content:labels[type]||'Analyse IA', time:now, isLabel:true });
@@ -3197,6 +3197,7 @@ RÈGLES CRITIQUES INVIOLABLES :
     const res = await callAI([{ role:'user', content:fullPrompt }], { system: jsonSystem, maxTokens: tokenMap[type] ?? 3000 });
     let data = null;
     try { data = parseAIJSON(res); } catch(e) { console.warn('parseAIJSON failed:', e.message, '| raw:', res.slice(0,200)); }
+    if (data && typeof postProcess === 'function') { try { data = postProcess(data) || data; } catch(e) { console.warn('postProcess failed:', e); } }
     S.ai.push({ role:'assistant', content:res, time:new Date().toLocaleTimeString('fr-FR'), isStructured:!!data, structuredType:type, structuredData:data });
     saveAIMemory(res);
   } catch(e) {
@@ -3341,24 +3342,82 @@ function buildPlanText(planItems, label) {
   return `\n\n=== ${label} ===\nBudget mensuel: ${fc(budget)}\nETFs (${etfItems.length}) — allocation % cible:\n${etfLines}\nTitres directs (${stockItems.length}) — achats fixes en parts:\n${stockLines}\n`;
 }
 
+// Calcule les coûts réels du plan (courtage + TER) en JS — source de vérité, jamais laissé à l'IA
+function computePlanCosts(planItems) {
+  const budget = S.data.settings.monthlyBudget;
+  const etfItems   = planItems.filter(p => p.isEtf !== false);
+  const stockItems = planItems.filter(p => p.isEtf === false);
+  const totalEtfPct = etfItems.reduce((s, p) => s + (p.allocationPct || 0), 0);
+  let courtageAn = 0, terAn = 0, sumTerW = 0, sumAmt = 0;
+  const lines = [];
+
+  for (const p of etfItems) {
+    const pct  = totalEtfPct > 0 ? p.allocationPct / totalEtfPct : 0;
+    const mois = budget * pct;
+    const an   = mois * 12;
+    // Courtage annuel
+    let crt = 0;
+    if (NO_COURTAGE.has(p.ticker) || p.feePct === 0) {
+      crt = 0;
+    } else if (mois < BOURSO_ETF_FEE_THRESHOLD) {
+      crt = BOURSO_ETF_FEE_MIN * 12;          // 1,99€ × 12
+    } else {
+      crt = mois * (BOURSO_ETF_FEE_PCT / 100) * 12;
+    }
+    const ter     = p.ter ?? 0;
+    const terAnnee = an * (ter / 100);
+    courtageAn += crt;
+    terAn      += terAnnee;
+    sumTerW    += ter * an;
+    sumAmt     += an;
+    const crtStr = crt === 0 ? '0,00€' : crt.toFixed(2) + '€';
+    lines.push(`${p.ticker} (~${Math.round(mois)}€/mois) : courtage ${crtStr}/an + TER ${ter}% → ${terAnnee.toFixed(2)}€/an`);
+  }
+
+  for (const p of stockItems) {
+    const cache  = S.data.priceCache[p.ticker];
+    const price  = cache?.price || 0;
+    const shares = p.monthlyShares || 1;
+    const mois   = price * shares;
+    const an     = mois * 12;
+    const feePct = p.feePct ?? 0.9;
+    const crt    = an * (feePct / 100);
+    courtageAn  += crt;
+    sumAmt      += an;
+    lines.push(`${p.ticker} (${shares} part(s) × ${price.toFixed(2)}€ → ~${Math.round(mois)}€/mois) : courtage ${crt.toFixed(2)}€/an + TER 0% (action)`);
+  }
+
+  const total    = courtageAn + terAn;
+  const terMoyen = sumAmt > 0 ? sumTerW / sumAmt : 0;
+  return {
+    total_annuel_eur:      +total.toFixed(2),
+    courtage_annuel_eur:   +courtageAn.toFixed(2),
+    ter_annuel_eur:        +terAn.toFixed(2),
+    frais_etf_pct_moy:     +terMoyen.toFixed(3),
+    detail: `Courtage: ${courtageAn.toFixed(2)}€/an | TER (sur versements): ${terAn.toFixed(2)}€/an | TOTAL: ${total.toFixed(2)}€/an`,
+    lines
+  };
+}
+
 async function aiPlanAnalysis() {
   const planItems = S.data.planItems.filter(p => p.active);
   if (!planItems.length) { toast('Aucun titre dans le plan actuel — ajoutez des titres dans Planning', 'error'); return; }
-  const ctx = buildPortfolioContext();
+  const costs  = computePlanCosts(planItems);
+  const ctx    = buildPortfolioContext();
   const planTxt = buildPlanText(planItems, 'PLAN MENSUEL ACTUEL À ANALYSER');
-  const feeNote = `\nGRILLE TARIFAIRE BOURSOBANK RÉELLE (confirmée) :
-• WPEA.PA (iShares Boursomarkets) : 0€ frais courtage / TER 0,20%
-• PANX.PA : 1,99€ fixe si ordre <500€ ou 0,60% si ≥500€ / TER 0,30%
-• PAEEM.PA : 1,99€ fixe si ordre <500€ ou 0,60% si ≥500€ / TER 0,30%
-• PINR.PA : 1,99€ fixe si ordre <500€ ou 0,60% si ≥500€ / TER 0,85% (très élevé)
-• GUARD.PA : 1,99€ fixe si ordre <500€ ou 0,60% si ≥500€ / TER 0,18%
-• AI.PA (action) : ~0,90% (0,50% courtage + 0,40% TTF)
-Utilise ces chiffres EXACTS pour calculer les coûts annuels réels.\n`;
-  await aiRunStructured(`${ctx}${planTxt}${feeNote}
-MISSION: Analyse complète du plan mensuel. Diversification, allocations ETF, chevauchements, titres directs, coûts (courtage+TER), risques, optimisations.
-RAPPELS CRITIQUES: 1) Parts ENTIÈRES uniquement (PEA français, jamais 1.5 part). 2) Minimum 200€/ordre depuis avril 2026 sur Boursobank — ne jamais recommander < 200€. 3) Boursomarkets 0€ = seulement les iShares .PA listés — jamais les .DE. 4) Substitution ETF = même catégorie/thématique obligatoire, sinon expliciter le changement stratégique.
+  // Coûts pré-calculés par l'app — l'IA ne doit PAS recalculer
+  const costsNote = `\nCOÛTS CALCULÉS PAR L'APPLICATION (valeurs exactes à reprendre telles quelles dans le champ "couts" du JSON — NE PAS RECALCULER) :
+${costs.lines.join('\n')}
+→ Courtage annuel total : ${costs.courtage_annuel_eur}€/an
+→ TER annuel total (sur versements) : ${costs.ter_annuel_eur}€/an
+→ TOTAL FRAIS : ${costs.total_annuel_eur}€/an | TER moyen pondéré : ${costs.frais_etf_pct_moy}%\n`;
+  await aiRunStructured(`${ctx}${planTxt}${costsNote}
+MISSION: Analyse complète du plan mensuel. Diversification, allocations ETF, chevauchements, titres directs, risques, optimisations. NE PAS recalculer les coûts — utiliser les chiffres fournis ci-dessus.
+RAPPELS CRITIQUES: 1) Parts ENTIÈRES uniquement (PEA français, jamais 1.5 part). 2) Minimum 200€/ordre depuis avril 2026 sur Boursobank. 3) Boursomarkets 0€ = seulement iShares .PA listés. 4) Substitution ETF = même catégorie/thématique obligatoire.
 JSON UNIQUEMENT — schéma strict:
-{"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse>","risque":"<risque>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":<n>,"detail":"<détail>","frais_etf_pct_moy":<n>},"points_forts":["<point>"],"risques_plan":["<risque>"],"optimisations":[{"priorite":<1-5>,"action":"<action>","impact":"<impact>","effort":"facile|moyen|complexe"}],"synthese":"<synthèse 3-4 phrases>"}`, 'plan');
+{"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse concise>","risque":"<risque principal>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse concise>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan concis>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":${costs.total_annuel_eur},"courtage_annuel_eur":${costs.courtage_annuel_eur},"ter_annuel_eur":${costs.ter_annuel_eur},"frais_etf_pct_moy":${costs.frais_etf_pct_moy},"detail":"${costs.detail}"},"points_forts":["<point>"],"risques_plan":["<risque>"],"optimisations":[{"priorite":<1-5>,"action":"<action>","impact":"<impact>","effort":"facile|moyen|complexe"}],"synthese":"<synthèse 3-4 phrases>"}`,
+  'plan',
+  (d) => { d.couts = { total_annuel_eur: costs.total_annuel_eur, courtage_annuel_eur: costs.courtage_annuel_eur, ter_annuel_eur: costs.ter_annuel_eur, frais_etf_pct_moy: costs.frais_etf_pct_moy, detail: costs.detail }; return d; });
 }
 
 async function aiComparePlans() {
@@ -3403,7 +3462,7 @@ function renderPlanAnalysisCard(d) {
     </div>` : ''}
     ${d.etfs?.length ? `<div><div class="section-title" style="margin-bottom:6px">📊 ETFs du plan</div>${d.etfs.map(e => `<div style="background:var(--surface2);border-radius:8px;padding:10px 13px;margin-bottom:5px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-weight:700">${esc(e.ticker)}</span>${e.pct_reel !== undefined ? `<span style="font-size:0.75rem;color:var(--muted)">${e.pct_reel.toFixed(1)}% du bucket</span>` : ''}</div>${e.note !== undefined ? `<div style="margin-bottom:4px">${aiScoreBar(e.note)}</div>` : ''}${e.role ? `<div style="font-size:0.76rem;color:var(--accent);margin-bottom:2px">${esc(e.role)}</div>` : ''}${e.commentaire ? `<div style="font-size:0.78rem;color:var(--muted)">${esc(e.commentaire)}</div>` : ''}${e.risque ? `<div style="font-size:0.75rem;color:#f59e0b;margin-top:2px">⚠️ ${esc(e.risque)}</div>` : ''}</div>`).join('')}</div>` : ''}
     ${d.titres?.length ? `<div><div class="section-title" style="margin-bottom:6px">🏢 Titres directs du plan</div>${d.titres.map(t => `<div style="background:var(--surface2);border-radius:8px;padding:10px 13px;margin-bottom:5px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px"><span style="font-weight:700">${esc(t.ticker)}</span>${t.budget_mois_eur ? `<span style="font-size:0.78rem;color:var(--accent)">${fc(t.budget_mois_eur)}/mois</span>` : ''}</div>${t.utilite ? `<div style="font-size:0.76rem;color:var(--accent);margin-bottom:2px">${esc(t.utilite)}</div>` : ''}${t.commentaire ? `<div style="font-size:0.78rem;color:var(--muted)">${esc(t.commentaire)}</div>` : ''}</div>`).join('')}</div>` : ''}
-    ${d.couts ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div class="section-title" style="margin-bottom:5px">💸 Coûts estimés</div><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="font-size:1.1rem;font-weight:800;color:#f59e0b">${d.couts.total_annuel_eur ? fc(d.couts.total_annuel_eur) : '—'}/an</span>${d.couts.frais_etf_pct_moy ? `<span style="font-size:0.78rem;color:var(--muted)">TER moy.: ${d.couts.frais_etf_pct_moy.toFixed(2)}%</span>` : ''}</div>${d.couts.detail ? `<div style="font-size:0.76rem;color:var(--muted);margin-top:4px">${esc(d.couts.detail)}</div>` : ''}</div>` : ''}
+    ${d.couts ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div class="section-title" style="margin-bottom:8px">💸 Coûts réels (calculés par l'app)</div><div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px"><div style="text-align:center"><div style="font-size:1.15rem;font-weight:800;color:#f59e0b">${d.couts.total_annuel_eur != null ? fc(d.couts.total_annuel_eur) : '—'}/an</div><div style="font-size:0.68rem;color:var(--muted)">TOTAL</div></div>${d.couts.courtage_annuel_eur != null ? `<div style="text-align:center"><div style="font-size:0.92rem;font-weight:700;color:var(--text)">${fc(d.couts.courtage_annuel_eur)}</div><div style="font-size:0.68rem;color:var(--muted)">Courtage/an</div></div>` : ''}${d.couts.ter_annuel_eur != null ? `<div style="text-align:center"><div style="font-size:0.92rem;font-weight:700;color:var(--text)">${fc(d.couts.ter_annuel_eur)}</div><div style="font-size:0.68rem;color:var(--muted)">TER/an</div></div>` : ''}${d.couts.frais_etf_pct_moy != null ? `<div style="text-align:center"><div style="font-size:0.92rem;font-weight:700;color:var(--text)">${(d.couts.frais_etf_pct_moy*100).toFixed(2)}%</div><div style="font-size:0.68rem;color:var(--muted)">TER moy.</div></div>` : ''}</div>${d.couts.detail ? `<div style="font-size:0.74rem;color:var(--muted)">${esc(d.couts.detail)}</div>` : ''}</div>` : ''}
     ${(d.points_forts?.length || d.risques_plan?.length) ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       ${d.points_forts?.length ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div style="font-size:0.68rem;color:#22c55e;text-transform:uppercase;margin-bottom:6px;font-weight:700">✅ Points forts</div>${d.points_forts.map(p=>`<div style="font-size:0.78rem;margin-bottom:3px;padding-left:8px;border-left:2px solid #22c55e44">${esc(p)}</div>`).join('')}</div>` : ''}
       ${d.risques_plan?.length ? `<div style="background:var(--surface2);border-radius:8px;padding:11px 13px"><div style="font-size:0.68rem;color:#ef4444;text-transform:uppercase;margin-bottom:6px;font-weight:700">⚠️ Risques</div>${d.risques_plan.map(r=>`<div style="font-size:0.78rem;margin-bottom:3px;padding-left:8px;border-left:2px solid #ef444444">${esc(r)}</div>`).join('')}</div>` : ''}

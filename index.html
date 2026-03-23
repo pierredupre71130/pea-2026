@@ -3257,7 +3257,7 @@ RÈGLES CRITIQUES INVIOLABLES :
 4. BOURSOMARKETS 0€ — uniquement les iShares .PA listés dans la KB. Les ETF .DE, .L et autres ont des frais standards. Ne jamais affirmer qu'un .DE est à 0€ chez Boursobank.
 5. SUBSTITUTION = MÊME CATÉGORIE — remplacer un ETF défense par un ETF EURO STOXX 50 n'est pas une substitution neutre, c'est un pivot stratégique. Toujours signaler explicitement si l'exposition change.`;
   try {
-    const tokenMap = { plan: 10000, analyze: 6000, risk: 4000, monthly: 3000, valuation: 3000, compare: 4000 };
+    const tokenMap = { plan: 10000, analyze: 6000, risk: 5000, monthly: 3000, valuation: 3000, compare: 8000 };
     const res = await callAI([{ role:'user', content:fullPrompt }], { system: jsonSystem, maxTokens: tokenMap[type] ?? 3000 });
     let data = null;
     try { data = parseAIJSON(res); } catch(e) { console.warn('parseAIJSON failed:', e.message, '| raw:', res.slice(0,200)); }
@@ -3271,11 +3271,16 @@ RÈGLES CRITIQUES INVIOLABLES :
   renderAI();
 }
 
-function buildPortfolioContext() {
+// mode: 'chat' | 'plan' | 'analysis' | 'full'
+function buildPortfolioContext(mode = 'full') {
   const { positions, cash, deposited, portValue, totalCost, pnl, pnlP } = computeSummary();
-  const recent = [...S.data.transactions].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10);
+  const nTx   = mode === 'chat' ? 3 : mode === 'plan' ? 5 : 10;
+  const nNews = mode === 'chat' ? 0 : mode === 'plan' ? 0 : mode === 'analysis' ? 5 : 8;
+  const recent = [...S.data.transactions].sort((a,b)=>b.date.localeCompare(a.date)).slice(0, nTx);
   const plan = S.data.planItems.filter(p=>p.active);
-  const news = Object.entries(S.newsCache).flatMap(([t,items])=>items.slice(0,5).map(n=>`[${t}] ${n.title}${n.desc?' — '+n.desc.slice(0,120):''}`.trim())).slice(0,20);
+  const news = nNews > 0
+    ? Object.entries(S.newsCache).flatMap(([t,items])=>items.slice(0,3).map(n=>`[${t}] ${n.title.slice(0,80)}`)).slice(0, nNews)
+    : [];
   const today = new Date().toLocaleDateString('fr-FR');
 
   const posLines = positions.map(p => {
@@ -3329,13 +3334,13 @@ ${stockPlanLines}
 HISTORIQUE RÉCENT (10 dernières opérations):
 ${recent.map(tx=>`• ${fd(tx.date)}: ${txLbl(tx.type)} ${fn(tx.quantity,4)} x ${tx.ticker} @ ${fc(tx.price)} (frais: ${fc(tx.fees||0)})`).join('\n') || '• Aucune'}
 
-ACTUALITÉS RÉCENTES (${news.length} titres chargés):
-${news.length ? news.map((n,i)=>`${i+1}. ${n}`).join('\n') : '⚠️ Aucune actualité chargée — va dans l\'onglet 📰 Actualités pour enrichir l\'analyse'}
-${getAIMemoryContext()}${getUserDecisionsContext()}${S_macroCtx}${buildKBContext()}=== FIN DES DONNÉES ===`;
+ACTUALITÉS RÉCENTES:
+${news.length ? news.map((n,i)=>`${i+1}. ${n}`).join('\n') : '(non chargées pour cette analyse)'}
+${getAIMemoryContext()}${getUserDecisionsContext()}${mode !== 'chat' && mode !== 'plan' ? S_macroCtx : ''}${buildKBContext(mode)}=== FIN DES DONNÉES ===`;
 }
 
 async function aiAnalyze() {
-  const ctx = buildPortfolioContext();
+  const ctx = buildPortfolioContext('full');
   await aiRunStructured(`${ctx}
 
 MISSION — ANALYSE DE PORTEFEUILLE NIVEAU INSTITUTIONNEL.
@@ -3351,7 +3356,7 @@ RÈGLE plan_variantes : 1-2 variantes ETF uniquement si amélioration claire (sc
 }
 
 async function aiMonthly() {
-  const ctx = buildPortfolioContext();
+  const ctx = buildPortfolioContext('plan');
   await aiRunStructured(`${ctx}
 
 MISSION — PLAN D'INVESTISSEMENT MENSUEL (budget: ${fc(S.data.settings.monthlyBudget)}).
@@ -3367,7 +3372,7 @@ RÈGLE plan_variantes : 1-2 variantes ETF uniquement (score_preview >= 7). JAMAI
 }
 
 async function aiRisk() {
-  const ctx = buildPortfolioContext();
+  const ctx = buildPortfolioContext('analysis');
   await aiRunStructured(`${ctx}
 
 MISSION — ANALYSE DES RISQUES NIVEAU PROFESSIONNEL.
@@ -3470,7 +3475,7 @@ async function aiPlanAnalysis() {
   const planItems = S.data.planItems.filter(p => p.active);
   if (!planItems.length) { toast('Aucun titre dans le plan actuel — ajoutez des titres dans Planning', 'error'); return; }
   const costs  = computePlanCosts(planItems);
-  const ctx    = buildPortfolioContext();
+  const ctx    = buildPortfolioContext('plan');
   const planTxt = buildPlanText(planItems, 'PLAN MENSUEL ACTUEL À ANALYSER');
   // Coûts pré-calculés par l'app — l'IA ne doit PAS recalculer
   const costsNote = `\nCOÛTS CALCULÉS PAR L'APPLICATION (valeurs exactes à reprendre telles quelles dans le champ "couts" du JSON — NE PAS RECALCULER) :
@@ -3518,15 +3523,14 @@ async function aiComparePlans() {
   const itemsA = getPlanItems(selA), itemsB = getPlanItems(selB);
   if (!itemsA.length || !itemsB.length) { toast('Un des plans est vide', 'error'); return; }
   const labelA = getPlanLabel(selA), labelB = getPlanLabel(selB);
-  const ctx = buildPortfolioContext();
+  const ctx = buildPortfolioContext('plan');
   const planA = buildPlanText(itemsA, 'PLAN A — ' + labelA);
   const planB = buildPlanText(itemsB, 'PLAN B — ' + labelB);
   await aiRunStructured(`${ctx}${planA}${planB}
-MISSION — COMPARAISON DÉTAILLÉE DE DEUX PLANS D'INVESTISSEMENT MENSUEL.
-Compare ces deux plans sur tous les axes : diversification, coûts annuels estimés, potentiel de rendement, niveau de risque, simplicité de gestion, adéquation avec le portefeuille actuel et les objectifs PEA long terme.
-Réponds UNIQUEMENT avec un objet JSON valide.
-Schéma exact:{"plan_a":"${labelA.replace(/"/g,"'")}","plan_b":"${labelB.replace(/"/g,"'")}","verdict_global":"<2 phrases>","gagnant":"A|B|ex-aequo","axes":[{"nom":"","score_a":<0-10>,"score_b":<0-10>,"detail":""}],"differences_cles":[""],"avantages_a":[""],"avantages_b":[""],"risques_a":[""],"risques_b":[""],"recommandation":"<2-3 phrases directes sur lequel choisir et pourquoi>","plan_suggere":{"name":"<Plan gagnant amélioré>","items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
-RÈGLE plan_variantes : le plan gagnant en 1-2 variantes ETF (score_preview >= 7). JAMAIS titres directs, cash, monétaire, ETF < 200€/mois.`, 'compare');
+MISSION — COMPARE CES DEUX PLANS. Sois concis (max 1 phrase par champ texte, max 5 axes, max 3 items par liste).
+Réponds UNIQUEMENT avec un objet JSON valide, sans markdown.
+Schéma:{"plan_a":"${labelA.replace(/"/g,"'")}","plan_b":"${labelB.replace(/"/g,"'")}","verdict_global":"<1-2 phrases>","gagnant":"A|B|ex-aequo","axes":[{"nom":"<axe>","score_a":<0-10>,"score_b":<0-10>,"detail":"<1 phrase>"}],"differences_cles":["<diff courte>"],"avantages_a":[""],"avantages_b":[""],"risques_a":[""],"risques_b":[""],"recommandation":"<2 phrases max>","plan_suggere":{"name":"<nom court>","score_preview":<0-10>,"items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
+RÈGLES : max 5 axes, max 3 éléments par liste. ETFs uniquement dans plan_suggere. JAMAIS ETF < 200€/mois (budget ${S.data.settings.monthlyBudget}€).`, 'compare');
 }
 
 function renderPlanAnalysisCard(d) {
@@ -7169,19 +7173,39 @@ const PEA_KB = {
   ]
 };
 
-function buildKBContext() {
+function buildKBContext(mode = 'full') {
   const zeroFeeEtfs = PEA_KB.etfs.filter(e => e.zeroFee);
+  const zeroFeeTickers = zeroFeeEtfs.map(e => e.ticker).join(', ');
+
+  // Chat/plan : KB ultra-compacte (juste les ETFs du portefeuille + plan)
+  if (mode === 'chat' || mode === 'plan') {
+    const { positions } = computeSummary();
+    const activeTickers = new Set([
+      ...positions.map(p => p.ticker),
+      ...S.data.planItems.filter(p => p.active).map(p => p.ticker)
+    ]);
+    const relevantEtfs = PEA_KB.etfs.filter(e => activeTickers.has(e.ticker));
+    const lines = relevantEtfs.map(e => `• ${e.ticker}${e.zeroFee?' [0€]':''} — ${e.name} | TER:${e.ter}%${e.index?' | '+e.index:''}`).join('\n');
+    return `\nCONTRAINTES BOURSOBANK : min 200€/ordre, parts entières, 0€ courtage SEULEMENT : ${zeroFeeTickers}.\nETFs pertinents:\n${lines || '(aucun)'}\n`;
+  }
+
+  // Analysis/full : KB complète mais compressée (1 ligne par ETF, sans sectors/holdings)
   const zeroFeeLines = zeroFeeEtfs.map(e => `  • ${e.ticker} — ${e.name} (TER:${e.ter}%)`).join('\n');
   const cats = [...new Set(PEA_KB.etfs.map(e => e.cat))];
   const etfLines = cats.map(cat => {
     const items = PEA_KB.etfs.filter(e => e.cat === cat);
     return `[${cat}]\n` + items.map(e => {
       let line = `  • ${e.ticker}${e.zeroFee?' [0€]':''} — ${e.name} | TER:${e.ter}%`;
-      if (e.isin) line += ` | ISIN:${e.isin}`;
-      if (e.replication) line += ` | Rép.:${e.replication}`;
-      if (e.sectors && e.sectors.length) line += ` | Secteurs: ${e.sectors.join(', ')}`;
-      if (e.holdings && e.holdings.length) line += ` | Top: ${e.holdings.join(', ')}`;
-      line += ` | ${e.note}`;
+      if (e.isin) line += ` | ${e.isin}`;
+      if (e.index) line += ` | ${e.index}`;
+      // Sectors/holdings seulement pour les ETFs dans le portefeuille ou plan (mode full)
+      if (mode === 'full') {
+        const { positions } = computeSummary();
+        const activeTickers = new Set([...positions.map(p=>p.ticker), ...S.data.planItems.filter(p=>p.active).map(p=>p.ticker)]);
+        if (activeTickers.has(e.ticker)) {
+          if (e.sectors?.length) line += ` | ${e.sectors.slice(0,3).join(', ')}`;
+        }
+      }
       return line;
     }).join('\n');
   }).join('\n');

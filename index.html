@@ -2355,6 +2355,7 @@ function renderPlanning() {
     <div class="card mb16">
       <div class="section-title mb16">ETFs — Répartition cible &amp; Simulation d'achat</div>
       ${etfItems.length ? `
+        ${(()=>{ const under200=etfItems.filter(p=>totalEtfPct>0&&(p.allocationPct/totalEtfPct)*etfBudget<200&&(p.allocationPct||0)>0); return under200.length?`<div class="info-box info-warning" style="margin-bottom:10px">⚡ ${under200.length} ETF${under200.length>1?'s':''} avec allocation théorique < 200€/mois : ${under200.map(p=>`<strong>${p.ticker}</strong> (~${Math.round(p.allocationPct/totalEtfPct*etfBudget)}€)`).join(', ')} — l'achat sera forcé à 200€ min (⚡ Min. forcé)</div>`:''; })()}
         ${outOf3.length > 0
           ? `<div class="info-box info-warning" style="margin-bottom:10px">⚠ ${outOf3.length} ETF${outOf3.length>1?'s':''} hors règle ±${REBAL_TOL}% après achat : ${outOf3.map(r=>`<strong>${r.ticker}</strong> (${r.devAfter>0?'+':''}${r.devAfter.toFixed(1)}%)`).join(', ')} — budget insuffisant pour rééquilibrer complètement</div>`
           : `<div class="info-box info-success" style="margin-bottom:10px">✓ Tous les ETF seront dans la règle ±${REBAL_TOL}% après les achats suggérés</div>`}
@@ -2397,10 +2398,11 @@ function renderPlanning() {
               <td><span class="chip">${esc(r.ticker)}</span></td>
               <td>${esc(r.name)}</td>
               <td>
-                <div style="display:flex;align-items:center;gap:4px">
+                <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
                   <input type="number" value="${r.allocationPct}" min="0" max="100" step="0.1"
                     style="width:52px;padding:3px 6px;font-size:0.78rem" onchange="updPlanPct('${r.id}',this.value)">
                   <span class="neutral">%</span>
+                  ${(()=>{ const m=totalEtfPct>0?Math.round(r.allocationPct/totalEtfPct*etfBudget):0; return m>0?`<span style="font-size:0.68rem;font-weight:${m<200?'600':'400'};color:${m<200?'#f59e0b':'var(--muted)'}" title="${m<200?'Allocation < 200€ → achat forcé à 200€ min (⚡ Min. forcé)':'Allocation mensuelle théorique'}">~${m}€${m<200?' ⚡':''}</span>`:''; })()}
                 </div>
               </td>
               <td>
@@ -4434,7 +4436,15 @@ function handlePlan(e) {
   }
   S.data.planItems.push(item);
   saveData(); closeModal('modal-plan'); e.target.reset();
-  toast('Titre ajouté au planning ✓'); renderPlanning();
+  // Avertissement si allocation < 200€/mois
+  if (isEtf && item.allocationPct > 0) {
+    const budget = S.data.settings.monthlyBudget || 0;
+    const totalPct = S.data.planItems.filter(p => p.active && p.isEtf !== false).reduce((s, p) => s + (p.allocationPct || 0), 0);
+    const mois = totalPct > 0 ? (item.allocationPct / totalPct) * budget : 0;
+    if (mois > 0 && mois < 200) toast(`✓ ${item.ticker} ajouté — allocation ~${Math.round(mois)}€/mois → achat forcé à 200€ min Boursobank`, 'info', 4000);
+    else toast('Titre ajouté au planning ✓');
+  } else { toast('Titre ajouté au planning ✓'); }
+  renderPlanning();
 }
 
 function delPlan(id) {
@@ -4444,7 +4454,15 @@ function delPlan(id) {
 
 function updPlanPct(id, val) {
   const item = S.data.planItems.find(p => p.id === id);
-  if (item) { item.allocationPct = parseFloat(val)||0; saveData(); renderPlanning(); }
+  if (!item) return;
+  item.allocationPct = parseFloat(val) || 0;
+  saveData();
+  // Avertissement si l'allocation mensuelle serait < 200€ min Boursobank
+  const budget = S.data.settings.monthlyBudget || 0;
+  const totalPct = S.data.planItems.filter(p => p.active && p.isEtf !== false).reduce((s, p) => s + (p.allocationPct || 0), 0);
+  const mois = totalPct > 0 ? (item.allocationPct / totalPct) * budget : 0;
+  if (mois > 0 && mois < 200) toast(`⚡ ${item.ticker} : ~${Math.round(mois)}€/mois → achat forcé à 200€ min Boursobank`, 'info', 4000);
+  renderPlanning();
 }
 
 function updBudget(v) {
@@ -4648,10 +4666,7 @@ function assemblePlanFromChoices(data) {
       else merged.push({...item, isEtf:true});                     // ajoute
     }
   }
-  const budget = S.data.settings.monthlyBudget || 1800;
-  const { items: filtered, removed } = enforceMin200(merged.filter(e => e.allocationPct > 0), budget);
-  if (removed.length) toast(`⚠️ ETF(s) retirés car < 200€/mois : ${removed.join(', ')}. Allocation redistribuée.`, 'warning', 5000);
-  return { name:'Plan personnalisé', items: filtered };
+  return { name:'Plan personnalisé', items: merged.filter(e => e.allocationPct > 0) };
 }
 
 function applyAIStructuredPlan(plan) {
@@ -4662,12 +4677,8 @@ function applyAIStructuredPlan(plan) {
   }
   // Titres directs = convictions → toujours préservés, jamais remplacés par l'IA
   const existingStocks = S.data.planItems.filter(p => p.isEtf === false && p.active);
-  // ETFs uniquement depuis le plan IA — filtre < 200€/mois
-  const budget = S.data.settings.monthlyBudget || 1800;
-  const rawEtfs = plan.items.filter(item => item.isEtf !== false);
-  const { items: validEtfs, removed: removedEtfs } = enforceMin200(rawEtfs, budget);
-  if (removedEtfs.length) toast(`⚠️ ETF(s) retirés car < 200€/mois : ${removedEtfs.join(', ')}`, 'warning', 5000);
-  const newEtfs = validEtfs.map((item, idx) => {
+  // ETFs uniquement depuis le plan IA
+  const newEtfs = plan.items.filter(item => item.isEtf !== false).map((item, idx) => {
     const feePct = NO_COURTAGE.has(item.ticker) ? 0 : BOURSO_ETF_FEE_PCT;
     const ter = item.ter ?? PEA_KB?.etfs?.find(e => e.ticker === item.ticker)?.ter ?? undefined;
     const existing = S.data.planItems.find(p => p.ticker === item.ticker);

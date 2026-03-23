@@ -3001,12 +3001,26 @@ function aiScoreBar(score,max=10) {
 function renderAnalysisCard(data, type) {
   if (!data) return '<em style="color:var(--muted)">Données indisponibles</em>';
   try {
-    if (type==='analyze')    return renderAnalyzeCard(data);
-    if (type==='monthly')    return renderMonthlyCard(data);
-    if (type==='risk')       return renderRiskCard(data);
-    if (type==='valuation')  return renderValuationCard(data);
-    if (type==='plan')       return renderPlanAnalysisCard(data);
-    if (type==='compare')    return renderCompareCard(data);
+    let html = '';
+    if (type==='analyze')   html = renderAnalyzeCard(data);
+    else if (type==='monthly')   html = renderMonthlyCard(data);
+    else if (type==='risk')      html = renderRiskCard(data);
+    else if (type==='valuation') html = renderValuationCard(data);
+    else if (type==='plan')      html = renderPlanAnalysisCard(data);
+    else if (type==='compare')   html = renderCompareCard(data);
+    if (data.plan_suggere?.items?.length) {
+      const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(data.plan_suggere))));
+      const nb = data.plan_suggere.items.length;
+      html += `<div style="margin-top:12px;padding:12px 14px;background:var(--accent)11;border:1px solid var(--accent)44;border-radius:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:0.72rem;color:var(--accent);font-weight:700;text-transform:uppercase;margin-bottom:2px">📋 Plan proposé par l'IA</div>
+          <div style="font-size:0.83rem;font-weight:600">${esc(data.plan_suggere.name||'Plan IA')}</div>
+          <div style="font-size:0.72rem;color:var(--muted)">${nb} titre${nb>1?'s':''} · ${data.plan_suggere.items.filter(i=>i.isEtf!==false).length} ETF${data.plan_suggere.items.filter(i=>i.isEtf!==false).length>1?'s':''} · ${data.plan_suggere.items.filter(i=>i.isEtf===false).length} titre${data.plan_suggere.items.filter(i=>i.isEtf===false).length>1?'s':''} direct${data.plan_suggere.items.filter(i=>i.isEtf===false).length>1?'s':''}</div>
+        </div>
+        <button onclick="applyAIStructuredPlanB64('${b64}')" class="btn btn-primary" style="font-size:0.82rem;white-space:nowrap">✅ Appliquer → Planning</button>
+      </div>`;
+    }
+    return html;
   } catch(e) { return `<em style="color:var(--muted)">Erreur rendu: ${esc(e.message)}</em>`; }
   return '';
 }
@@ -3282,7 +3296,8 @@ RÈGLES OBLIGATOIRES:
 
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
 Schéma exact (tous les champs requis):
-{"score":<integer 0-10>,"verdict":"<2-3 phrases directes>","etfs":[{"ticker":"","verdict":"renforcer|maintenir|surveiller|alléger","note":<0-10>,"ecart":"","action":"","raison":""}],"titres":[{"ticker":"","verdict":"continuer|pause|surveiller|sortie","note":<0-10>,"utilite":"","risque":"","rythme":""}],"macro":[{"force":"pour|contre","facteur":"","impact":""}],"manque":[{"ticker":"","raison":"","urgence":"haute|modérée|faible"}],"actions":[{"priorite":<1-5>,"action":"","montant":"","timing":""}]}`, 'analyze');
+{"score":<integer 0-10>,"verdict":"<2-3 phrases directes>","etfs":[{"ticker":"","verdict":"renforcer|maintenir|surveiller|alléger","note":<0-10>,"ecart":"","action":"","raison":""}],"titres":[{"ticker":"","verdict":"continuer|pause|surveiller|sortie","note":<0-10>,"utilite":"","risque":"","rythme":""}],"macro":[{"force":"pour|contre","facteur":"","impact":""}],"manque":[{"ticker":"","raison":"","urgence":"haute|modérée|faible"}],"actions":[{"priorite":<1-5>,"action":"","montant":"","timing":""}],"plan_suggere":{"name":"<nom 4 mots>","items":[{"ticker":"TICKER.PA","name":"Nom","isEtf":true,"allocationPct":50}]}}
+RÈGLE plan_suggere : inclure UNIQUEMENT si tu proposes des changements concrets d'allocation. ETFs→allocationPct(0-100,somme libre). Titres directs→isEtf:false+monthlyShares. Omettre si le plan actuel est bon tel quel.`, 'analyze');
 }
 
 async function aiMonthly() {
@@ -3297,7 +3312,8 @@ RÈGLES OBLIGATOIRES:
 
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
 Schéma exact:
-{"budget_total":${S.data.settings.monthlyBudget},"timing":"bon|neutre|attendre","timing_detail":"<1 phrase>","etfs":[{"ticker":"","cours":"","cible_pct":<number>,"actuel_pct":<number>,"montant":"","parts":<number>,"priorite":<1-5>,"raison":""}],"titres":[{"ticker":"","cours":"","plan":"","recommandation":"maintenir|pause|augmenter|réduire","raison":""}],"actualites_impact":"<2-3 phrases>","actions":[{"priorite":<1-5>,"action":"","montant":"","condition":""}]}`, 'monthly');
+{"budget_total":${S.data.settings.monthlyBudget},"timing":"bon|neutre|attendre","timing_detail":"<1 phrase>","etfs":[{"ticker":"","cours":"","cible_pct":<number>,"actuel_pct":<number>,"montant":"","parts":<number>,"priorite":<1-5>,"raison":""}],"titres":[{"ticker":"","cours":"","plan":"","recommandation":"maintenir|pause|augmenter|réduire","raison":""}],"actualites_impact":"<2-3 phrases>","actions":[{"priorite":<1-5>,"action":"","montant":"","condition":""}],"plan_suggere":{"name":"<nom>","items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
+RÈGLE plan_suggere : inclure si tu ajustes les cibles. ETFs→allocationPct. Titres directs→isEtf:false+monthlyShares. Omettre si plan inchangé.`, 'monthly');
 }
 
 async function aiRisk() {
@@ -3312,7 +3328,8 @@ RÈGLES OBLIGATOIRES:
 
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
 Schéma exact:
-{"score_diversification":<integer 0-10>,"correlations":"<1-2 phrases>","risques":[{"niveau":"élevé|modéré|faible","type":"","detail":"","impact_eur":"<ex: -6700€ sur krach -30%>","horizon":"Court|Moyen|Long terme"}],"stress":[{"scenario":"","perte_eur":<number négatif>,"perte_pct":<number négatif>,"detail":""}],"recommandations_etf":[""],"recommandations_titres":[""],"alertes":[{"ticker":"","declencheur":""}]}`, 'risk');
+{"score_diversification":<integer 0-10>,"correlations":"<1-2 phrases>","risques":[{"niveau":"élevé|modéré|faible","type":"","detail":"","impact_eur":"<ex: -6700€ sur krach -30%>","horizon":"Court|Moyen|Long terme"}],"stress":[{"scenario":"","perte_eur":<number négatif>,"perte_pct":<number négatif>,"detail":""}],"recommandations_etf":[""],"recommandations_titres":[""],"alertes":[{"ticker":"","declencheur":""}],"plan_suggere":{"name":"<nom>","items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
+RÈGLE plan_suggere : inclure si les risques justifient une révision du plan. Omettre sinon.`, 'risk');
 }
 
 function toggleCompareForm() { S._compareOpen = !S._compareOpen; S._valOpen = false; renderAI(); }
@@ -3364,7 +3381,7 @@ function computePlanCosts(planItems) {
     } else {
       crt = mois * (BOURSO_ETF_FEE_PCT / 100) * 12;
     }
-    const ter     = p.ter ?? 0;
+    const ter     = p.ter ?? S.data.terCache?.[p.ticker]?.ter ?? PEA_KB?.etfs?.find(e => e.ticker === p.ticker)?.ter ?? 0;
     const terAnnee = an * (ter / 100);
     courtageAn += crt;
     terAn      += terAnnee;
@@ -3415,7 +3432,8 @@ ${costs.lines.join('\n')}
 MISSION: Analyse complète du plan mensuel. Diversification, allocations ETF, chevauchements, titres directs, risques, optimisations. NE PAS recalculer les coûts — utiliser les chiffres fournis ci-dessus.
 RAPPELS CRITIQUES: 1) Parts ENTIÈRES uniquement (PEA français, jamais 1.5 part). 2) Minimum 200€/ordre depuis avril 2026 sur Boursobank. 3) Boursomarkets 0€ = seulement iShares .PA listés. 4) Substitution ETF = même catégorie/thématique obligatoire.
 JSON UNIQUEMENT — schéma strict:
-{"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse concise>","risque":"<risque principal>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse concise>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan concis>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":${costs.total_annuel_eur},"courtage_annuel_eur":${costs.courtage_annuel_eur},"ter_annuel_eur":${costs.ter_annuel_eur},"frais_etf_pct_moy":${costs.frais_etf_pct_moy},"detail":"${costs.detail}"},"points_forts":["<point>"],"risques_plan":["<risque>"],"optimisations":[{"priorite":<1-5>,"action":"<action>","impact":"<impact>","effort":"facile|moyen|complexe"}],"synthese":"<synthèse 3-4 phrases>"}`,
+{"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse concise>","risque":"<risque principal>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse concise>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan concis>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":${costs.total_annuel_eur},"courtage_annuel_eur":${costs.courtage_annuel_eur},"ter_annuel_eur":${costs.ter_annuel_eur},"frais_etf_pct_moy":${costs.frais_etf_pct_moy},"detail":"${costs.detail}"},"points_forts":["<point>"],"risques_plan":["<risque>"],"optimisations":[{"priorite":<1-5>,"action":"<action>","impact":"<impact>","effort":"facile|moyen|complexe"}],"synthese":"<synthèse 3-4 phrases>","plan_suggere":{"name":"<nom 4 mots>","items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
+RÈGLE plan_suggere : TOUJOURS inclure un plan optimisé concret basé sur tes recommandations. ETFs→allocationPct(somme libre 0-100). Titres directs→isEtf:false+monthlyShares(entier≥1).`,
   'plan',
   (d) => { d.couts = { total_annuel_eur: costs.total_annuel_eur, courtage_annuel_eur: costs.courtage_annuel_eur, ter_annuel_eur: costs.ter_annuel_eur, frais_etf_pct_moy: costs.frais_etf_pct_moy, detail: costs.detail }; return d; });
 }
@@ -3444,7 +3462,8 @@ async function aiComparePlans() {
 MISSION — COMPARAISON DÉTAILLÉE DE DEUX PLANS D'INVESTISSEMENT MENSUEL.
 Compare ces deux plans sur tous les axes : diversification, coûts annuels estimés, potentiel de rendement, niveau de risque, simplicité de gestion, adéquation avec le portefeuille actuel et les objectifs PEA long terme.
 Réponds UNIQUEMENT avec un objet JSON valide.
-Schéma exact:{"plan_a":"${labelA.replace(/"/g,"'")}","plan_b":"${labelB.replace(/"/g,"'")}","verdict_global":"<2 phrases>","gagnant":"A|B|ex-aequo","axes":[{"nom":"","score_a":<0-10>,"score_b":<0-10>,"detail":""}],"differences_cles":[""],"avantages_a":[""],"avantages_b":[""],"risques_a":[""],"risques_b":[""],"recommandation":"<2-3 phrases directes sur lequel choisir et pourquoi>"}`, 'compare');
+Schéma exact:{"plan_a":"${labelA.replace(/"/g,"'")}","plan_b":"${labelB.replace(/"/g,"'")}","verdict_global":"<2 phrases>","gagnant":"A|B|ex-aequo","axes":[{"nom":"","score_a":<0-10>,"score_b":<0-10>,"detail":""}],"differences_cles":[""],"avantages_a":[""],"avantages_b":[""],"risques_a":[""],"risques_b":[""],"recommandation":"<2-3 phrases directes sur lequel choisir et pourquoi>","plan_suggere":{"name":"<Plan gagnant amélioré>","items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
+RÈGLE plan_suggere : inclure le plan gagnant (ou un mix des deux si ex-aequo). ETFs→allocationPct. Titres directs→isEtf:false+monthlyShares.`, 'compare');
 }
 
 function renderPlanAnalysisCard(d) {
@@ -4443,6 +4462,32 @@ function applyAIChatPlan(msgIdx) {
   S.data.planItems = newItems;
   saveData();
   toast(`✅ Plan "${plan.name || 'Plan IA'}" appliqué — redirection vers Planning…`, 'success', 4000);
+  setTimeout(() => navigate('planning'), 1200);
+}
+
+function applyAIStructuredPlanB64(b64) {
+  try { applyAIStructuredPlan(JSON.parse(decodeURIComponent(escape(atob(b64))))); }
+  catch(e) { toast('Erreur lecture plan IA', 'error'); }
+}
+function applyAIStructuredPlan(plan) {
+  if (!plan?.items?.length) { toast('Plan vide', 'error'); return; }
+  if (S.data.planItems.filter(p => p.active).length) {
+    if (!S.data.savedPlans) S.data.savedPlans = [];
+    S.data.savedPlans.push({ id:uid(), name:'Avant IA — '+today(), date:today(), source:'manual', aiColor:null, items:S.data.planItems.map(p=>({...p})) });
+  }
+  const newItems = plan.items.map((item,idx) => ({
+    id:uid(), ticker:item.ticker, name:item.name,
+    isEtf: item.isEtf !== false,
+    allocationPct: item.isEtf !== false ? (item.allocationPct||0) : 0,
+    monthlyShares: item.isEtf === false ? (item.monthlyShares||1) : 0,
+    monthlyAmount:0, minAmount:200, feePct: item.isEtf!==false ? 0.5 : 0.9,
+    priority:idx+1, active:true, notes:''
+  }));
+  if (!S.data.savedPlans) S.data.savedPlans = [];
+  S.data.savedPlans.push({ id:uid(), name:plan.name||'Plan IA', date:today(), source:'ai', aiColor:'#3b82f6', items:newItems });
+  S.data.planItems = newItems;
+  saveData();
+  toast(`✅ Plan "${plan.name||'Plan IA'}" appliqué — redirection vers Planning…`, 'success', 4000);
   setTimeout(() => navigate('planning'), 1200);
 }
 

@@ -596,8 +596,9 @@ const PROXY = 'https://api.allorigins.win/get?url=';
 const YF_CHART = 'https://query2.finance.yahoo.com/v8/finance/chart/';
 const YF_RSS   = 'https://feeds.finance.yahoo.com/rss/2.0/headline?s=';
 const CLAUDE_URL = 'https://api.anthropic.com/v1/messages';
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
-const GROQ_URL   = 'https://api.groq.com/openai/v1/chat/completions';
+const GEMINI_URL   = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+const GROQ_URL     = 'https://api.groq.com/openai/v1/chat/completions';
+const GROK_XAI_URL = 'https://api.x.ai/v1/chat/completions';
 const CLAUDE_MODELS = {
   haiku:  'claude-haiku-4-5-20251001',
   sonnet: 'claude-sonnet-4-6',
@@ -616,6 +617,7 @@ const GROQ_MODELS = {
 function getClaudeModel()  { return CLAUDE_MODELS[S.data.settings.claudeModel ?? 'haiku'] ?? CLAUDE_MODELS.haiku; }
 function getGeminiModel()  { return GEMINI_MODELS[S.data.settings.geminiModel  ?? 'flash'] ?? 'gemini-2.0-flash'; }
 function getGroqModel()    { return GROQ_MODELS[S.data.settings.groqModel      ?? 'llama-70b'] ?? 'llama-3.3-70b-versatile'; }
+function getGrokXaiModel() { return 'grok-2-latest'; }
 const PRICE_TTL = 15 * 60 * 1000;
 const PEA_MAX = 150000;
 const COLORS = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6','#a855f7','#0ea5e9'];
@@ -660,7 +662,7 @@ let S = {
 // ======================================================
 function defData() {
   return {
-    settings: { claudeApiKey:'', geminiApiKey:'', groqApiKey:'', aiProvider:'claude', monthlyBudget:500, brokerName:'Mon PEA' },
+    settings: { claudeApiKey:'', geminiApiKey:'', groqApiKey:'', grokXaiApiKey:'', aiProvider:'claude', monthlyBudget:500, brokerName:'Mon PEA' },
     transactions: [],
     deposits: [],
     planItems: [],
@@ -1177,94 +1179,123 @@ function makePlanChart(etfItems) {
 
 // Boursorama fallback : convertit un ticker Yahoo Finance en code Boursorama
 // Stocks : 1rP{BASE}   ETFs/trackers : 1rT{BASE}
-async function fetchPriceBoursorama(ticker) {
-  const base = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
-  // Try stock URL first, then ETF/tracker URL
-  const candidates = [
-    `https://www.boursorama.com/cours/1rP${base}/`,
-    `https://www.boursorama.com/bourse/trackers/cours/1rT${base}/`,
-  ];
-  for (const boursoUrl of candidates) {
-    try {
-      const r = await fetch(`${PROXY}${encodeURIComponent(boursoUrl)}`, { signal: AbortSignal.timeout(15000) });
-      if (!r.ok) continue;
-      const d = await r.json();
-      const html = d.contents || '';
-      if (!html || html.length < 500) continue;
-      // Check page exists (Boursorama 404 redirects to home with specific text)
-      if (html.includes('Cette page') && html.includes('introuvable')) continue;
-      // Extract price : span/div with class containing c-instrument--last
-      const priceMatch = html.match(/c-instrument--last[^>]*>[\s\r\n]*([0-9\s]+[,\.][0-9]{1,4})/);
-      if (!priceMatch) continue;
-      const priceStr = priceMatch[1].trim().replace(/\s/g, '').replace(',', '.');
-      const price = parseFloat(priceStr);
-      if (!isNaN(price) && price > 0) {
-        // Try to extract name from og:title or <title>
-        const nameMatch = html.match(/property="og:title"\s+content="([^"]+)"/) ||
-                          html.match(/<title>([^|<\-]+)/);
-        const rawName = nameMatch ? nameMatch[1].trim() : ticker;
-        const name = rawName.replace(/\s*\|.*$/, '').replace(/\s*-\s*(Boursorama|bourse).*$/i, '').trim() || ticker;
-        // Try change percent
-        const chgMatch = html.match(/c-instrument--variation[^>]*>[\s\r\n]*([+-]?[0-9]+[,\.][0-9]+)\s*%/);
-        const changePercent = chgMatch ? parseFloat(chgMatch[1].replace(',', '.')) : 0;
-        return { price, changePercent, name, currency: 'EUR', timestamp: Date.now(), source: 'boursorama' };
-      }
-    } catch(e) { /* try next */ }
+// Liste ordonnée de proxies CORS à essayer successivement
+const CORS_PROXIES = [
+  async (url) => { const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(12000)}); if (!r.ok) throw new Error('allorigins'); return (await r.json()).contents || ''; },
+  async (url) => { const r = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(12000)}); if (!r.ok) throw new Error('corsproxy'); return await r.text(); },
+  async (url) => { const r = await fetch(`https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(12000)}); if (!r.ok) throw new Error('codetabs'); return await r.text(); },
+];
+
+async function proxyFetch(url) {
+  for (const proxy of CORS_PROXIES) {
+    try { const body = await proxy(url); if (body && body.length > 100) return body; } catch(e) {}
   }
   return null;
 }
 
-async function fetchPrice(ticker, attempt = 1) {
+async function fetchPriceYahoo(ticker) {
+  // Yahoo Finance v7/quote — ticker .PA direct, sans remapping
+  try {
+    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(ticker)}&fields=regularMarketPrice,regularMarketChangePercent,longName,shortName,currency,previousClose`;
+    const body = await proxyFetch(url);
+    if (!body) return null;
+    const j = JSON.parse(body);
+    const q = j?.quoteResponse?.result?.[0];
+    if (!q) return null;
+    const price = q.regularMarketPrice ?? q.previousClose;
+    if (!price || price <= 0) return null;
+    return { price, changePercent: Math.round((q.regularMarketChangePercent ?? 0) * 100) / 100, name: q.longName || q.shortName || ticker, currency: q.currency || 'EUR', timestamp: Date.now(), source: 'yahoo' };
+  } catch(e) { return null; }
+}
+
+async function fetchPriceBoursorama(ticker) {
+  // API JSON interne Boursorama (GetTicksEOD) — nécessite proxy non bloqué par Cloudflare
+  const base = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
+  const symbols = [`1rT${base}`, `1rP${base}`];
+  for (const sym of symbols) {
+    try {
+      const apiUrl = `https://www.boursorama.com/bourse/action/graph/ws/GetTicksEOD?symbol=${sym}&length=2&period=0&guid=`;
+      const body = await proxyFetch(apiUrl);
+      if (!body || body.length < 20) continue;
+      let j; try { j = JSON.parse(body); } catch(e) { continue; }
+      const ticks = j?.d?.TicksEOD;
+      if (!ticks?.length) continue;
+      const last = ticks[ticks.length - 1];
+      const price = last.c;
+      if (!price || price <= 0) continue;
+      const name = j.d?.Name || ticker;
+      let changePercent = 0;
+      if (ticks.length >= 2) {
+        const prev = ticks[ticks.length - 2];
+        if (prev.c > 0) changePercent = ((price - prev.c) / prev.c) * 100;
+      } else if (last.o > 0) changePercent = ((price - last.o) / last.o) * 100;
+      return { price, changePercent: Math.round(changePercent * 100) / 100, name, currency: 'EUR', timestamp: Date.now(), source: 'boursorama' };
+    } catch(e) {}
+  }
+  return null;
+}
+
+async function fetchPrice(ticker) {
   const cache = S.data.priceCache[ticker];
-  if (cache?.manual) return cache; // cours manuel : jamais remplacé par l'auto
+  if (cache?.manual) return cache;
   if (cache && (Date.now() - (cache.timestamp||0) < PRICE_TTL)) return cache;
 
-  // Boursorama en premier pour les tickers .PA et .DE
-  if (/\.(PA|DE)$/i.test(ticker)) {
-    const bourso = await fetchPriceBoursorama(ticker);
-    if (bourso) {
-      S.data.priceCache[ticker] = bourso;
-      checkPriceAlerts(ticker, bourso.price);
-      saveData();
-      return bourso;
-    }
-    console.warn('fetchPrice', ticker, 'Boursorama KO → fallback Yahoo Finance');
+  // 1. Stooq en premier (pas de protection anti-bot, JSON propre)
+  const stooq = await fetchPriceStooq(ticker);
+  if (stooq) {
+    S.data.priceCache[ticker] = stooq;
+    checkPriceAlerts(ticker, stooq.price);
+    saveData();
+    return stooq;
   }
 
-  // Fallback Yahoo Finance (autres tickers ou si Boursorama échoue)
-  try {
-    const url = `${YF_CHART}${encodeURIComponent(ticker)}?interval=1d&range=1d`;
-    const r = await fetch(`${PROXY}${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(20000) });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const d = await r.json();
-    const j = JSON.parse(d.contents);
-    const m = j?.chart?.result?.[0]?.meta;
-    if (!m) throw new Error('No data');
-    const result = { price: m.regularMarketPrice ?? m.previousClose, changePercent: m.regularMarketChangePercent ?? 0, name: m.longName || m.shortName || ticker, currency: m.currency || 'EUR', timestamp: Date.now() };
-    S.data.priceCache[ticker] = result;
-    checkPriceAlerts(ticker, result.price);
+  // 2. Boursorama JSON API (si Stooq n'a pas le ticker)
+  const bourso = await fetchPriceBoursorama(ticker);
+  if (bourso) {
+    S.data.priceCache[ticker] = bourso;
+    checkPriceAlerts(ticker, bourso.price);
     saveData();
-    return result;
-  } catch(e) {
-    if (e.name === 'TimeoutError' && attempt < 3) {
-      console.warn('fetchPrice', ticker, `timeout, tentative ${attempt + 1}...`);
-      await new Promise(r => setTimeout(r, 1500));
-      return fetchPrice(ticker, attempt + 1);
-    }
-    console.warn('fetchPrice', ticker, e.message);
-    return null;
+    return bourso;
   }
+
+  console.warn('fetchPrice', ticker, 'Stooq + Boursorama KO');
+  return null;
 }
 
 async function refreshPrices(tickers) {
   const autoTickers = tickers.filter(t => !S.data.priceCache[t]?.manual);
   autoTickers.forEach(t => { if (S.data.priceCache[t]) S.data.priceCache[t].timestamp = 0; });
   let ok = 0, fail = 0;
+  const manual = tickers.length - autoTickers.length;
+  if (!autoTickers.length) return { ok, fail, manual };
+
+  // Si clé Grok (xAI) configurée → batch en UNE seule requête avec recherche web
+  if (S.data.settings.grokXaiApiKey) {
+    toast('🔍 Grok recherche les cours en temps réel…', 'info', 3000);
+    const grokPrices = await fetchAllPricesGrokXai(autoTickers);
+    const found = Object.keys(grokPrices);
+    for (const ticker of found) {
+      S.data.priceCache[ticker] = grokPrices[ticker];
+      checkPriceAlerts(ticker, grokPrices[ticker].price);
+      ok++;
+    }
+    // Tickers non trouvés par Grok → fallback Boursorama
+    const missing = autoTickers.filter(t => !grokPrices[t]);
+    for (const t of missing) {
+      const r = await fetchPriceBoursorama(t);
+      if (r) { S.data.priceCache[t] = r; checkPriceAlerts(t, r.price); ok++; }
+      else fail++;
+    }
+    saveData();
+    return { ok, fail, manual };
+  }
+
+  // Sinon → source par source (Boursorama → Yahoo)
   for (const t of autoTickers) {
     const r = await fetchPrice(t);
     r ? ok++ : fail++;
   }
-  return { ok, fail, manual: tickers.length - autoTickers.length };
+  return { ok, fail, manual };
 }
 
 // ======================================================
@@ -1502,13 +1533,66 @@ function callGemini(messages, opts = {}) {
 function callGroq(messages, opts = {}) {
   return callOpenAICompat(GROQ_URL, S.data.settings.groqApiKey, getGroqModel(), messages, opts, 'Groq');
 }
+function callGrokXai(messages, opts = {}) {
+  return callOpenAICompat(GROK_XAI_URL, S.data.settings.grokXaiApiKey, getGrokXaiModel(), messages, opts, 'Grok');
+}
 
 // Routeur IA — choisit le provider selon les settings
 async function callAI(messages, opts = {}) {
   const provider = S.data.settings.aiProvider ?? 'claude';
   if (provider === 'gemini') return callGemini(messages, opts);
   if (provider === 'groq')   return callGroq(messages, opts);
+  if (provider === 'grok')   return callGrokXai(messages, opts);
   return callClaude(messages, opts);
+}
+
+// ── Grok prix temps réel (batch) ────────────────────────────
+// Grok a une recherche web intégrée → récupère les vrais cours live
+async function fetchAllPricesGrokXai(tickers) {
+  const key = S.data.settings.grokXaiApiKey;
+  if (!key || !tickers.length) return {};
+  try {
+    const list = tickers.join(', ');
+    const prompt = `Recherche sur le web les cours actuels (temps réel ou clôture du jour) de ces valeurs boursières : ${list}.
+Réponds UNIQUEMENT avec un tableau JSON valide, sans texte ni markdown autour :
+[{"ticker":"XXX.PA","price":123.45,"change_pct":0.12,"name":"Nom complet"}]
+Un objet par ticker. Si introuvable, omets-le du tableau.`;
+    const resp = await fetch(GROK_XAI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+      body: JSON.stringify({
+        model: 'grok-2-latest',
+        messages: [{ role: 'user', content: prompt }],
+        search_parameters: { mode: 'on' },
+        temperature: 0,
+        max_tokens: 600
+      }),
+      signal: AbortSignal.timeout(30000)
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const d = await resp.json();
+    const text = d.choices?.[0]?.message?.content ?? '';
+    const m = text.match(/\[[\s\S]*?\]/);
+    if (!m) return {};
+    const arr = JSON.parse(m[0]);
+    const result = {};
+    for (const item of arr) {
+      if (item.ticker && item.price > 0) {
+        result[item.ticker] = {
+          price: parseFloat(item.price),
+          changePercent: parseFloat(item.change_pct ?? 0),
+          name: item.name || item.ticker,
+          currency: 'EUR',
+          timestamp: Date.now(),
+          source: 'grok-xai'
+        };
+      }
+    }
+    return result;
+  } catch(e) {
+    console.warn('fetchAllPricesGrokXai', e.message);
+    return {};
+  }
 }
 
 // ======================================================
@@ -3778,9 +3862,10 @@ function renderSettings() {
             <select onchange="updSetting('aiProvider',this.value);renderSettings()">
               <option value="claude" ${(s.aiProvider??'claude')==='claude'?'selected':''}>🤖 Claude (Anthropic) — payant, qualité maximale</option>
               <option value="gemini" ${s.aiProvider==='gemini'?'selected':''}>✨ Gemini (Google) — gratuit</option>
-              <option value="groq"   ${s.aiProvider==='groq'  ?'selected':''}>⚡ Groq (LLaMA) — gratuit, ultra-rapide</option>
+              <option value="groq"   ${s.aiProvider==='groq'  ?'selected':''}>⚡ Groq LLaMA — gratuit, ultra-rapide</option>
+              <option value="grok"   ${s.aiProvider==='grok'  ?'selected':''}>🌐 Grok (xAI) — web temps réel, cours live</option>
             </select>
-            <div style="font-size:0.72rem;color:var(--muted);margin-top:4px">Gemini et Groq sont gratuits (avec limites journalières). L'analyse photo de relevé reste toujours sur Claude (vision requise).</div>
+            <div style="font-size:0.72rem;color:var(--muted);margin-top:4px">Gemini et Groq sont gratuits. <strong>Grok (xAI)</strong> a une recherche web intégrée : il récupère les cours boursiers en temps réel. L'analyse photo reste toujours sur Claude (vision requise).</div>
           </div>
 
           ${(s.aiProvider??'claude')==='claude' ? `
@@ -3818,7 +3903,7 @@ function renderSettings() {
           <button class="btn btn-secondary btn-sm" onclick="testKeyFree('gemini')">🔑 Tester</button>
           ${s.geminiApiKey?`<span style="margin-left:10px;font-size:0.75rem;color:var(--success)">✓ Clé enregistrée</span>`:''}
 
-          ` : `
+          ` : s.aiProvider==='groq' ? `
           <div class="section-title" style="margin-bottom:6px;margin-top:14px">Groq — console.groq.com/keys</div>
           <div style="font-size:0.78rem;color:var(--muted);margin-bottom:10px">Gratuit jusqu'à 14 400 requêtes/jour. LLaMA 3.3 70B = qualité très proche de Claude Sonnet.</div>
           <div class="form-group">
@@ -3835,6 +3920,19 @@ function renderSettings() {
           </div>
           <button class="btn btn-secondary btn-sm" onclick="testKeyFree('groq')">🔑 Tester</button>
           ${s.groqApiKey?`<span style="margin-left:10px;font-size:0.75rem;color:var(--success)">✓ Clé enregistrée</span>`:''}
+
+          ` : `
+          <div class="section-title" style="margin-bottom:6px;margin-top:14px">Grok (xAI) — console.x.ai</div>
+          <div style="font-size:0.78rem;color:var(--muted);margin-bottom:10px">🌐 <strong>Recherche web intégrée</strong> : Grok récupère les cours boursiers en temps réel sur le web. Une seule requête pour tous vos tickers. Crédit gratuit à l'inscription sur <strong>console.x.ai</strong>.</div>
+          <div class="form-group">
+            <label>Clé API (xai-…)</label>
+            <input type="password" id="inp-key-grok" value="${esc(s.grokXaiApiKey)}" placeholder="xai-…" onchange="updSetting('grokXaiApiKey',this.value)">
+          </div>
+          <div style="background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:8px;padding:10px;font-size:0.75rem;color:var(--muted);margin-bottom:10px">
+            💡 <strong>Double usage</strong> : la clé Grok sert à la fois pour les analyses IA <em>et</em> pour l'actualisation des cours (recherche web temps réel). C'est la même clé pour tout.
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="testKeyFree('grok')">🔑 Tester</button>
+          ${s.grokXaiApiKey?`<span style="margin-left:10px;font-size:0.75rem;color:var(--success)">✓ Clé enregistrée</span>`:''}
           `}
         </div>
       </div>
@@ -3864,7 +3962,7 @@ function renderSettings() {
           <div style="font-size:0.78rem;color:var(--muted);line-height:1.7">
             <p><strong>PEA Manager 2026</strong> v1.0</p>
             <p>Données stockées localement (localStorage).</p>
-            <p>Cours: Boursorama / Yahoo Finance · News: RSS Yahoo Finance · IA: Claude, Gemini ou Groq (au choix).</p>
+            <p>Cours: Grok web search (si clé) / Boursorama · News: RSS Yahoo Finance · IA: Claude, Gemini, Groq ou Grok (au choix).</p>
             <p style="margin-top:8px;color:rgba(239,68,68,0.8)">⚠ Application à usage personnel. Ne constitue pas un conseil financier.</p>
           </div>
         </div>
@@ -4152,6 +4250,9 @@ async function testKeyFree(provider) {
   if (provider === 'gemini') {
     inputId = 'inp-key-gemini'; settingKey = 'geminiApiKey'; name = 'Gemini';
     url = GEMINI_URL; model = getGeminiModel();
+  } else if (provider === 'grok') {
+    inputId = 'inp-key-grok'; settingKey = 'grokXaiApiKey'; name = 'Grok (xAI)';
+    url = GROK_XAI_URL; model = getGrokXaiModel();
   } else {
     inputId = 'inp-key-groq'; settingKey = 'groqApiKey'; name = 'Groq';
     url = GROQ_URL; model = getGroqModel();

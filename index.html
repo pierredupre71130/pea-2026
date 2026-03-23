@@ -7212,7 +7212,6 @@ function buildKBContext(mode = 'full') {
   const fiscLines = PEA_KB.fiscalite.map(f => `• ${f}`).join('\n');
   const stratLines = PEA_KB.strategies.map(s => `• ${s}`).join('\n');
   const indLines = PEA_KB.indicateurs.map(i => `• ${i}`).join('\n');
-  const zeroFeeTickers = zeroFeeEtfs.map(e => e.ticker).join(', ');
   const confusionWarnings = `\n⚠️ SUBSTITUTIONS TROMPEUSES — NE JAMAIS AFFIRMER QUE CES ETFs SONT ÉQUIVALENTS :\n• GUARD.PA (Bloomberg Europe Defense) ≠ CSX5.DE / CEMU.DE (EURO STOXX 50 / large-cap Eurozone) — GUARD cible UNIQUEMENT les industriels de défense (Rheinmetall, BAE, Thales, Airbus défense, Saab...) ; CSX5/CEMU couvrent 50 grandes capi Eurozone tous secteurs confondus (LVMH, SAP, ASML, TotalEnergies...). Exposition RADICALEMENT différente.\n• Si tu proposes CSX5 ou CEMU en remplacement de GUARD, tu DOIS mentionner que c'est un pivot stratégique majeur (abandon du thème défense).\n• Substitution ETF valide = même indice ou même thématique. Ex : GUARD.PA → autre ETF défense (s'il existe en PEA). CSX5.DE → autre ETF EURO STOXX 50.`;
 
   // Profils ETF depuis justETF (source vérifiée — prioritaire sur données d'entraînement)

@@ -3011,11 +3011,18 @@ function renderAnalysisCard(data, type) {
     if (data.plan_suggere?.items?.length) {
       const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(data.plan_suggere))));
       const nb = data.plan_suggere.items.length;
+      const sp = data.plan_suggere.score_preview;
+      const noteActuelle = data.note_globale ?? 0;
+      const spColor = sp >= 8 ? '#22c55e' : sp >= 6 ? '#f59e0b' : '#ef4444';
+      const scoreGain = sp && noteActuelle ? `+${(sp - noteActuelle).toFixed(1)}` : '';
       html += `<div style="margin-top:12px;padding:12px 14px;background:var(--accent)11;border:1px solid var(--accent)44;border-radius:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <div style="flex:1;min-width:0">
           <div style="font-size:0.72rem;color:var(--accent);font-weight:700;text-transform:uppercase;margin-bottom:2px">📋 Plan proposé par l'IA</div>
-          <div style="font-size:0.83rem;font-weight:600">${esc(data.plan_suggere.name||'Plan IA')}</div>
-          <div style="font-size:0.72rem;color:var(--muted)">${nb} titre${nb>1?'s':''} · ${data.plan_suggere.items.filter(i=>i.isEtf!==false).length} ETF${data.plan_suggere.items.filter(i=>i.isEtf!==false).length>1?'s':''} · ${data.plan_suggere.items.filter(i=>i.isEtf===false).length} titre${data.plan_suggere.items.filter(i=>i.isEtf===false).length>1?'s':''} direct${data.plan_suggere.items.filter(i=>i.isEtf===false).length>1?'s':''}</div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <div style="font-size:0.83rem;font-weight:600">${esc(data.plan_suggere.name||'Plan IA')}</div>
+            ${sp != null ? `<span style="background:${spColor}22;color:${spColor};border:1px solid ${spColor}55;border-radius:4px;padding:1px 7px;font-size:0.72rem;font-weight:700">★ ${sp}/10${scoreGain ? ' ('+scoreGain+')' : ''}</span>` : ''}
+          </div>
+          <div style="font-size:0.72rem;color:var(--muted);margin-top:2px">${nb} titre${nb>1?'s':''} · ${data.plan_suggere.items.filter(i=>i.isEtf!==false).length} ETFs · ${data.plan_suggere.items.filter(i=>i.isEtf===false).length} direct${data.plan_suggere.items.filter(i=>i.isEtf===false).length>1?'s':''}</div>
         </div>
         <button onclick="applyAIStructuredPlanB64('${b64}')" class="btn btn-primary" style="font-size:0.82rem;white-space:nowrap">✅ Appliquer → Planning</button>
       </div>`;
@@ -3428,12 +3435,16 @@ ${costs.lines.join('\n')}
 → Courtage annuel total : ${costs.courtage_annuel_eur}€/an
 → TER annuel total (sur versements) : ${costs.ter_annuel_eur}€/an
 → TOTAL FRAIS : ${costs.total_annuel_eur}€/an | TER moyen pondéré : ${costs.frais_etf_pct_moy}%\n`;
+  // Contexte plan actuel pour score différentiel
+  const currentPlanSummary = planItems.map(p => `${p.ticker}:${p.isEtf!==false?p.allocationPct+'%':p.monthlyShares+'parts'}`).join(',');
   await aiRunStructured(`${ctx}${planTxt}${costsNote}
-MISSION: Analyse complète du plan mensuel. Diversification, allocations ETF, chevauchements, titres directs, risques, optimisations. NE PAS recalculer les coûts — utiliser les chiffres fournis ci-dessus.
-RAPPELS CRITIQUES: 1) Parts ENTIÈRES uniquement (PEA français, jamais 1.5 part). 2) Minimum 200€/ordre depuis avril 2026 sur Boursobank. 3) Boursomarkets 0€ = seulement iShares .PA listés. 4) Substitution ETF = même catégorie/thématique obligatoire.
+MISSION: Analyse du plan mensuel UNIQUEMENT (décisions d'achat futures). NE PAS noter les positions déjà en portefeuille — elles sont un contexte, pas un objet d'évaluation du plan.
+NOTE_GLOBALE = qualité du plan mensuel proposé (choix ETFs, allocations, coûts des ordres, diversification des nouveaux achats). Une concentration existante dans le portefeuille est une OBSERVATION dans synthese, pas un malus sur la note du plan.
+RAPPELS CRITIQUES: 1) Parts ENTIÈRES uniquement. 2) Minimum 200€/ordre Boursobank avril 2026. 3) Boursomarkets 0€ = iShares .PA listés. 4) Substitution ETF = même catégorie obligatoire.
+NE PAS recalculer les coûts — utiliser les chiffres fournis dans COÛTS CALCULÉS PAR L'APPLICATION.
 JSON UNIQUEMENT — schéma strict:
-{"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse concise>","risque":"<risque principal>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse concise>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan concis>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":${costs.total_annuel_eur},"courtage_annuel_eur":${costs.courtage_annuel_eur},"ter_annuel_eur":${costs.ter_annuel_eur},"frais_etf_pct_moy":${costs.frais_etf_pct_moy},"detail":"${costs.detail}"},"points_forts":["<point>"],"risques_plan":["<risque>"],"optimisations":[{"priorite":<1-5>,"action":"<action>","impact":"<impact>","effort":"facile|moyen|complexe"}],"synthese":"<synthèse 3-4 phrases>","plan_suggere":{"name":"<nom 4 mots>","items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
-RÈGLE plan_suggere OBLIGATOIRE : Inclure TOUJOURS un plan concret qui CORRIGE les problèmes identifiés et viserait une note ≥8/10. Ce plan doit être DIFFÉRENT du plan actuel (sinon inutile). Appliquer tes recommandations d'optimisation prioritaires. ETFs→allocationPct(0-100,somme libre). Titres directs→isEtf:false+monthlyShares(entier≥1). Si tu inclus les mêmes allocations que le plan actuel, le plan_suggere sera rejeté.`,
+{"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases sur la qualité des achats mensuels>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse concise>","risque":"<risque principal>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse concise>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan concis>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":${costs.total_annuel_eur},"courtage_annuel_eur":${costs.courtage_annuel_eur},"ter_annuel_eur":${costs.ter_annuel_eur},"frais_etf_pct_moy":${costs.frais_etf_pct_moy},"detail":"${costs.detail}"},"points_forts":["<point>"],"risques_plan":["<risque lié au plan mensuel>"],"optimisations":[{"priorite":<1-5>,"action":"<action concrète et différente du plan actuel>","impact":"<impact chiffré si possible>","effort":"facile|moyen|complexe"}],"synthese":"<synthèse 3-4 phrases>","plan_suggere":{"name":"<nom court>","score_preview":<note estimée 0-10 si ce plan est appliqué>,"items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
+RÈGLE plan_suggere : Inclure SEULEMENT si score_preview >= note_globale + 1.5 ET score_preview >= 7. Le plan doit appliquer tes optimisations prioritaires et être SUBSTANTIELLEMENT différent du plan actuel (${currentPlanSummary}). ETFs→allocationPct. Titres→isEtf:false+monthlyShares. Si impossible d'améliorer significativement, omettre plan_suggere et expliquer pourquoi dans synthese.`,
   'plan',
   (d) => { d.couts = { total_annuel_eur: costs.total_annuel_eur, courtage_annuel_eur: costs.courtage_annuel_eur, ter_annuel_eur: costs.ter_annuel_eur, frais_etf_pct_moy: costs.frais_etf_pct_moy, detail: costs.detail }; return d; });
 }

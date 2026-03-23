@@ -533,7 +533,7 @@
           </div>
           <div class="form-group">
             <label>Frais de courtage (%) <span style="color:var(--muted)" id="fee-hint">ex: 0.5</span></label>
-            <input type="number" id="plan-fee-input" name="feePct" min="0" max="5" step="0.01" value="0.5" placeholder="0.5">
+            <input type="number" id="plan-fee-input" name="feePct" min="0" max="5" step="0.01" value="0.6" placeholder="0.6">
           </div>
         </div>
         <div class="form-group">
@@ -974,7 +974,7 @@ function togglePlanType() {
   const isEtf = document.querySelector('#form-plan [name=isEtf]:checked')?.value !== 'false';
   document.getElementById('plan-etf-fields').style.display   = isEtf ? '' : 'none';
   document.getElementById('plan-stock-fields').style.display = isEtf ? 'none' : '';
-  // Défauts frais : ETF 0.5% (courtage), Actions 0.9% (courtage + TTF)
+  // Défauts frais : ETF 0.6% Boursobank (courtage), Actions 0.9% (courtage + TTF)
   const feeInp = document.getElementById('plan-fee-input');
   const hint   = document.getElementById('fee-hint');
   if (feeInp && !feeInp.dataset.touched) {
@@ -1539,6 +1539,10 @@ async function refreshAllTER() {
   toast(`Récupération TER pour ${planItems.length} ETF(s)…`, 'info');
   let ok = 0; const failed = [];
   for (const item of planItems) {
+    // Correction frais Boursobank : 0% si sans courtage, sinon 0.60% (structure réelle appliquée à la simulation)
+    const correctFee = NO_COURTAGE.has(item.ticker) ? 0 : BOURSO_ETF_FEE_PCT;
+    if (item.feePct !== correctFee) item.feePct = correctFee;
+
     // PEA_KB — données TER vérifiées manuellement (justETF bloqué par proxies)
     const kbEntry = PEA_KB?.etfs?.find(e => e.ticker === item.ticker);
     if (kbEntry?.ter && kbEntry.ter > 0) {
@@ -1551,11 +1555,11 @@ async function refreshAllTER() {
   saveData();
   renderPage(S.page);
   if (failed.length === 0) {
-    toast(`✅ ${ok} TER mis à jour depuis la base interne`, 'success');
+    toast(`✅ ${ok} TER mis à jour + frais corrigés`, 'success');
   } else if (ok > 0) {
-    toast(`⚠️ ${ok} OK, non trouvés : ${failed.join(', ')}`, 'warning');
+    toast(`⚠️ ${ok} TER OK (frais corrigés), non trouvés : ${failed.join(', ')}`, 'warning');
   } else {
-    toast(`❌ Aucun TER trouvé — ajouter ces ETFs à la base`, 'error');
+    toast(`❌ Aucun TER trouvé — frais corrigés quand même`, 'error');
   }
 }
 
@@ -2130,6 +2134,23 @@ function renderTreasury() {
 }
 
 // ======================================================
+// PAGE — PLANNING — helpers frais Boursobank réels
+// ======================================================
+// Frais réels Boursobank ETF : 1.99€ fixe si net < 500€, sinon feePct%
+function etfFeeAmt(netAmt, feePct, ticker) {
+  if (netAmt <= 0 || feePct === 0 || NO_COURTAGE.has(ticker)) return 0;
+  return netAmt < BOURSO_ETF_FEE_THRESHOLD ? BOURSO_ETF_FEE_MIN : netAmt * feePct / 100;
+}
+// Inverse : donné un montant cash total débité, retourne le net investi
+function etfNetFromCash(cashAmt, feePct, ticker) {
+  if (cashAmt <= 0 || feePct === 0 || NO_COURTAGE.has(ticker)) return cashAmt;
+  const netFixed = cashAmt - BOURSO_ETF_FEE_MIN;
+  return netFixed < BOURSO_ETF_FEE_THRESHOLD
+    ? Math.max(0, netFixed)
+    : cashAmt / (1 + feePct / 100);
+}
+
+// ======================================================
 // PAGE — PLANNING
 // ======================================================
 function renderPlanning() {
@@ -2168,19 +2189,19 @@ function renderPlanning() {
     const targetVal  = projectedEtfTotal * (targetPct / 100);
     const idealBuy   = Math.max(0, targetVal - currentVal);      // investissement net idéal
     const feePct     = item.feePct ?? 0;
-    const feeMul     = 1 + feePct / 100;
-    const idealBuyCash = idealBuy * feeMul;                      // cash total à débourser
-    const minAmt     = Math.max(item.minAmount ?? 200, 200);     // minimum en cash — Boursobank: 200€ min depuis avr. 2026
+    const feeOnIdeal = etfFeeAmt(idealBuy, feePct, item.ticker);
+    const idealBuyCash = idealBuy + feeOnIdeal;                  // cash total à débourser
+    const minAmt     = Math.max(item.minAmount ?? 200, 200);     // minimum en cash — Boursobank: 200€ min
     const price      = S.data.priceCache[item.ticker]?.price ?? null;
     let status, amount;
     if (idealBuy <= 0.01)             { status = 'overweight'; amount = 0; }
     else if (idealBuyCash >= minAmt)  { status = 'ok';         amount = idealBuyCash; }
     else                              { status = 'min-forced'; amount = minAmt; }
     // netInvestment = ce qui est réellement acheté (valeur de marché gagnée)
-    const netInvestment = amount > 0 ? amount / feeMul : 0;
+    const netInvestment = amount > 0 ? etfNetFromCash(amount, feePct, item.ticker) : 0;
     const feeAmt        = amount - netInvestment;
     return { ...item, currentVal, currentPct, targetPct, idealBuy, idealBuyCash,
-             amount, netInvestment, feeAmt, feePct, feeMul, status, price };
+             amount, netInvestment, feeAmt, feePct, status, price };
   });
 
   // Phase 2 : ajustement si le total dépasse le budget ETF
@@ -2214,12 +2235,14 @@ function renderPlanning() {
   }
 
   // Phase 3 : calcul du nombre de parts (sur l'investissement net, hors frais)
-  etfResults = etfResults.map(r => ({
-    ...r,
-    netInvestment: r.amount > 0 ? r.amount / r.feeMul : 0,
-    feeAmt: r.amount > 0 ? r.amount - r.amount / r.feeMul : 0,
-    parts: r.price && r.amount > 0 ? (r.amount / r.feeMul) / r.price : null
-  }));
+  etfResults = etfResults.map(r => {
+    const net = r.amount > 0 ? etfNetFromCash(r.amount, r.feePct, r.ticker) : 0;
+    return { ...r,
+      netInvestment: net,
+      feeAmt: r.amount - net,
+      parts: r.price && net > 0 ? net / r.price : null
+    };
+  });
 
   // Phase 4 : Règle ±3% — si un ETF s'écarte trop de sa cible après achat,
   // on redirige du budget depuis les ETFs déjà dans la cible vers les sous-pondérés
@@ -2257,7 +2280,7 @@ function renderPlanning() {
       if (dfFreeNet <= 0.01) continue;
       const takeNet = Math.min(dfFreeNet, extraNet);
       const newDfNet = dfCur.netInvestment - takeNet;
-      const newDfCash = newDfNet * dfCur.feeMul;
+      const newDfCash = newDfNet > 0 ? newDfNet + etfFeeAmt(newDfNet, dfCur.feePct, dfCur.ticker) : 0;
       // Si montant résiduel < minimum → annuler entièrement l'achat df
       let finalDfNet = newDfNet, finalDfCash = newDfCash, actualTakeNet = takeNet;
       if (newDfCash > 0 && newDfCash < Math.max(dfCur.minAmount ?? 200, 200)) {
@@ -2270,7 +2293,7 @@ function renderPlanning() {
       const uwIdx = etfResults.findIndex(r => r.id === uw.id);
       const uwCur = etfResults[uwIdx];
       const newUwNet = uwCur.netInvestment + actualTakeNet;
-      const newUwCash = newUwNet * uwCur.feeMul;
+      const newUwCash = newUwNet + etfFeeAmt(newUwNet, uwCur.feePct, uwCur.ticker);
       etfResults[uwIdx] = { ...uwCur, amount: newUwCash, netInvestment: newUwNet,
         feeAmt: newUwCash - newUwNet,
         parts: uwCur.price ? newUwNet / uwCur.price : null, status: 'boosted' };
@@ -2281,22 +2304,24 @@ function renderPlanning() {
   totalEtfUsed = etfResults.reduce((s,r) => s + r.amount, 0);
 
   // Arrondi parts entières — Boursobank ne supporte pas les fractions
-  // Si floor donne un montant < 200€ min, on prend ceil(200/prix) pour respecter le minimum
+  // Si floor donne un montant cash < 200€ min, on incrémente les parts jusqu'à atteindre le min
   etfResults = etfResults.map(r => {
     if (!r.price || !r.parts) return r;
     const minAmt = Math.max(r.minAmount ?? 200, 200);
+    const cashForParts = (n) => {
+      const net = n * r.price;
+      return net + etfFeeAmt(net, r.feePct, r.ticker);
+    };
     let wholeParts = Math.floor(r.parts);
     if (wholeParts === 0) {
       // Pas assez pour 1 part idéale — mais si min-forcé, on vérifie si 1 part suffit
-      if (r.status === 'min-forced' && r.price * r.feeMul >= minAmt) wholeParts = 1;
+      if (r.status === 'min-forced' && cashForParts(1) >= minAmt) wholeParts = 1;
       else return { ...r, parts: 0, netInvestment: 0, feeAmt: 0, amount: 0 };
     }
-    // Si l'arrondi inférieur donne < minimum → arrondi supérieur pour atteindre 200€
-    if (wholeParts * r.price * r.feeMul < minAmt) {
-      wholeParts = Math.ceil(minAmt / (r.price * r.feeMul));
-    }
+    // Si l'arrondi inférieur donne un cash < minimum → incrémenter jusqu'à satisfaire le min
+    while (cashForParts(wholeParts) < minAmt) wholeParts++;
     const netInvestment = wholeParts * r.price;
-    const amount = netInvestment * r.feeMul;
+    const amount = netInvestment + etfFeeAmt(netInvestment, r.feePct, r.ticker);
     return { ...r, parts: wholeParts, netInvestment, feeAmt: amount - netInvestment, amount };
   });
   etfResults = recomputeProj(etfResults);
@@ -2473,7 +2498,7 @@ function renderPlanning() {
               <td>${fc(r.currentVal)}</td>
               <td class="${r.amount>0?'positive':'neutral'}">
                 ${r.amount>0 ? `<strong>${fc(r.amount)}</strong>
-                  ${r.feePct>0 ? `<div style="font-size:0.7rem;color:var(--muted)">net ${fc(r.netInvestment)} + frais ${fc(r.feeAmt)}</div>` : ''}` : '—'}
+                  ${r.feePct>0 ? `<div style="font-size:0.7rem;color:var(--muted)">net ${fc(r.netInvestment)} + frais ${fc(r.feeAmt)}${r.feeAmt>0&&r.feeAmt<2.5?' (fixe)':''}</div>` : ''}` : '—'}
               </td>
               <td class="neutral" style="font-size:0.78rem">${r.parts!==null && r.parts>0?r.parts+' part'+(r.parts>1?'s':''):'—'}</td>
               <td>
@@ -2527,8 +2552,7 @@ function renderPlanning() {
               <div style="background:var(--bg);border-radius:8px;padding:9px 10px">
                 <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;margin-bottom:3px">Montant ce mois</div>
                 <div style="font-size:1.15rem;font-weight:800;color:${amtColor}">${r.amount>0?fc(r.amount):'—'}</div>
-                <div style="font-size:0.7rem;color:var(--muted)">${r.parts&&r.parts>0?r.parts+' part'+(r.parts>1?'s':''):'—'}${r.feePct>0&&r.amount>0?` · frais ${fc(r.feeAmt)}`:''}
-                </div>
+                <div style="font-size:0.7rem;color:var(--muted)">${r.parts&&r.parts>0?r.parts+' part'+(r.parts>1?'s':''):'—'}${r.feePct>0&&r.amount>0?` · frais ${fc(r.feeAmt)}${r.feeAmt>0&&r.feeAmt<2.5?' (fixe)':''}`:''}</div>
               </div>
               <div style="background:var(--bg);border-radius:8px;padding:9px 10px">
                 <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;margin-bottom:3px">% Cible</div>
@@ -4753,7 +4777,7 @@ function applyAiPlanByIndex(i) {
     isEtf: item.isEtf,
     allocationPct: item.isEtf ? (item.allocationPct || 0) : 0,
     monthlyShares: !item.isEtf ? (item.monthlyShares || 1) : 0,
-    monthlyAmount: 0, minAmount: 200, feePct: item.isEtf ? 0.5 : 0.9,
+    monthlyAmount: 0, minAmount: 200, feePct: item.isEtf ? (NO_COURTAGE.has(item.ticker) ? 0 : BOURSO_ETF_FEE_PCT) : 0.9,
     priority: idx + 1, active: true, notes: ''
   }));
   // Sauvegarder ce plan IA dans les plans sauvegardés
@@ -5756,7 +5780,7 @@ RÉPONDS UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après 
         planItems: plan.items.map(i => ({
           id: 'mock_'+i.ticker, ticker: i.ticker, name: i.name,
           isEtf: i.isEtf, allocationPct: i.allocationPct || 0,
-          monthlyShares: i.monthlyShares || 0, feePct: 0.5, active: true
+          monthlyShares: i.monthlyShares || 0, feePct: i.isEtf ? (NO_COURTAGE.has(i.ticker) ? 0 : BOURSO_ETF_FEE_PCT) : 0.9, active: true
         }))
       };
       // Simuler avec une version temporaire du planItems

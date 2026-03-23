@@ -476,8 +476,8 @@
         </div>
         <div class="form-row">
           <div class="form-group">
-            <label>Achat minimum (€) <span style="color:var(--muted)">BoursoBank</span></label>
-            <input type="number" name="minAmount" min="0" step="10" value="200">
+            <label>Achat minimum (€) <span style="color:var(--warning)">200€ min Boursobank (depuis avril 2026)</span></label>
+            <input type="number" name="minAmount" min="200" step="10" value="200">
           </div>
           <div class="form-group">
             <label>Frais de courtage (%) <span style="color:var(--muted)" id="fee-hint">ex: 0.5</span></label>
@@ -594,12 +594,26 @@ const PROXY = 'https://api.allorigins.win/get?url=';
 const YF_CHART = 'https://query2.finance.yahoo.com/v8/finance/chart/';
 const YF_RSS   = 'https://feeds.finance.yahoo.com/rss/2.0/headline?s=';
 const CLAUDE_URL = 'https://api.anthropic.com/v1/messages';
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+const GROQ_URL   = 'https://api.groq.com/openai/v1/chat/completions';
 const CLAUDE_MODELS = {
   haiku:  'claude-haiku-4-5-20251001',
   sonnet: 'claude-sonnet-4-6',
   opus:   'claude-opus-4-6',
 };
-function getClaudeModel() { return CLAUDE_MODELS[S.data.settings.claudeModel ?? 'haiku'] ?? CLAUDE_MODELS.haiku; }
+const GEMINI_MODELS = {
+  'flash':      'gemini-2.0-flash',
+  'flash-lite': 'gemini-2.0-flash-lite',
+  'flash-15':   'gemini-1.5-flash',
+};
+const GROQ_MODELS = {
+  'llama-70b': 'llama-3.3-70b-versatile',
+  'llama-8b':  'llama-3.1-8b-instant',
+  'mixtral':   'mixtral-8x7b-32768',
+};
+function getClaudeModel()  { return CLAUDE_MODELS[S.data.settings.claudeModel ?? 'haiku'] ?? CLAUDE_MODELS.haiku; }
+function getGeminiModel()  { return GEMINI_MODELS[S.data.settings.geminiModel  ?? 'flash'] ?? 'gemini-2.0-flash'; }
+function getGroqModel()    { return GROQ_MODELS[S.data.settings.groqModel      ?? 'llama-70b'] ?? 'llama-3.3-70b-versatile'; }
 const PRICE_TTL = 15 * 60 * 1000;
 const PEA_MAX = 150000;
 const COLORS = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6','#a855f7','#0ea5e9'];
@@ -644,7 +658,7 @@ let S = {
 // ======================================================
 function defData() {
   return {
-    settings: { claudeApiKey:'', monthlyBudget:500, brokerName:'Mon PEA' },
+    settings: { claudeApiKey:'', geminiApiKey:'', groqApiKey:'', aiProvider:'claude', monthlyBudget:500, brokerName:'Mon PEA' },
     transactions: [],
     deposits: [],
     planItems: [],
@@ -654,15 +668,21 @@ function defData() {
     pruOverrides: {},
     alerts: {},
     aiMemory: [],
-    userDecisions: []
+    userDecisions: [],
+    terCache: {}
   };
 }
 
 // ======================================================
 // STORAGE
 // ======================================================
-// Frais de courtage BoursoBank par ticker (0% = pas de courtage, frais dans la VL)
-const NO_COURTAGE = new Set(['WPEA.PA','IWEA.PA','WPAE.PA']);
+// Frais de courtage Boursobank confirmés (source : grille tarifaire)
+// 0€ Boursomarkets : iShares (WPEA, IWEA, WPAE...)
+// Autres ETF/actions : 1,99€ fixe si ordre <500€, sinon 0,60% (ETF) ou 0,90% (actions FR avec TTF)
+const NO_COURTAGE = new Set(['WPEA.PA','IWEA.PA','WPAE.PA','WPEH.PA']);
+const BOURSO_ETF_FEE_PCT = 0.60;   // % pour ordres ≥ 500€
+const BOURSO_ETF_FEE_MIN = 1.99;   // € fixe pour ordres < 500€
+const BOURSO_ETF_FEE_THRESHOLD = 500;
 
 function migrateFees(d) {
   if (d._feesMigrated) return;
@@ -671,7 +691,7 @@ function migrateFees(d) {
       const t = (item.ticker || '').toUpperCase();
       if (NO_COURTAGE.has(t))      item.feePct = 0;
       else if (item.isEtf === false) item.feePct = 0.9;
-      else                           item.feePct = 0.5;
+      else                           item.feePct = BOURSO_ETF_FEE_PCT; // 0.60% Boursobank (ordres ≥500€)
     }
   });
   d._feesMigrated = true;
@@ -682,7 +702,7 @@ function loadData() {
     const r = localStorage.getItem(STORAGE_KEY);
     if (r) {
       const p = JSON.parse(r);
-      const d = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings }, snapshots: p.snapshots || [], savedPlans: p.savedPlans || [], priceCache: p.priceCache || {}, pruOverrides: p.pruOverrides || {} };
+      const d = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings }, snapshots: p.snapshots || [], savedPlans: p.savedPlans || [], priceCache: p.priceCache || {}, pruOverrides: p.pruOverrides || {}, terCache: p.terCache || {} };
       migrateFees(d);
       return d;
     }
@@ -904,8 +924,8 @@ function togglePlanType() {
   const feeInp = document.getElementById('plan-fee-input');
   const hint   = document.getElementById('fee-hint');
   if (feeInp && !feeInp.dataset.touched) {
-    feeInp.value = isEtf ? '0.5' : '0.9';
-    if (hint) hint.textContent = isEtf ? 'ex: 0 (WPEA), 0.5 (PANX/PAEEM)' : '0.9% = 0.5% courtage + 0.4% TTF';
+    feeInp.value = isEtf ? String(BOURSO_ETF_FEE_PCT) : '0.9';
+    if (hint) hint.textContent = isEtf ? 'ex: 0 (WPEA gratuit), 0.6 (PANX/PAEEM/PINR/GUARD)' : '0.9% = 0.5% courtage + 0.4% TTF';
   }
 }
 
@@ -922,6 +942,13 @@ function updPlanMin(id, val) {
 function updPlanShares(id, val) {
   const item = S.data.planItems.find(p => p.id === id);
   if (item) { item.monthlyShares = parseFloat(val) || 0; saveData(); renderPlanning(); }
+}
+
+async function doRefreshTER() {
+  const btn = document.getElementById('btn-refresh-ter');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> justETF…'; }
+  await refreshAllTER();
+  if (btn) { btn.disabled = false; btn.innerHTML = '📡 MAJ TER'; }
 }
 
 async function doRefreshPlan() {
@@ -1239,6 +1266,92 @@ async function refreshPrices(tickers) {
 }
 
 // ======================================================
+// API — TER (justETF.com)
+// ======================================================
+const TER_TTL = 7 * 24 * 60 * 60 * 1000; // 7 jours
+
+// Récupère TER + indice + secteurs + top holdings depuis justETF
+// Retourne { ter, isin, index, sectors:[{name,pct}], holdings:[{name,pct}] } ou null
+async function fetchETFProfileJustETF(ticker) {
+  const cache = (S.data.terCache || {})[ticker];
+  if (cache && (Date.now() - (cache.timestamp || 0) < TER_TTL)) return cache;
+
+  const symbol = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
+  try {
+    // Étape 1 : recherche par ticker → ISIN
+    const searchUrl = `https://www.justetf.com/en/find-etf.html?query=${encodeURIComponent(symbol)}`;
+    const sr = await fetch(`${PROXY}${encodeURIComponent(searchUrl)}`, { signal: AbortSignal.timeout(15000) });
+    if (!sr.ok) return null;
+    const shtml = (await sr.json()).contents || '';
+    const isinMatch = shtml.match(/data-isin="([A-Z]{2}[A-Z0-9]{10})"/) ||
+                      shtml.match(/[?&]isin=([A-Z]{2}[A-Z0-9]{10})/);
+    if (!isinMatch) return null;
+    const isin = isinMatch[1];
+
+    // Étape 2 : page profil complète
+    const profileUrl = `https://www.justetf.com/en/etf-profile.html?isin=${isin}`;
+    const pr = await fetch(`${PROXY}${encodeURIComponent(profileUrl)}`, { signal: AbortSignal.timeout(15000) });
+    if (!pr.ok) return null;
+    const phtml = (await pr.json()).contents || '';
+
+    // TER
+    const terMatch = phtml.match(/Total expense ratio[\s\S]{0,300}?([0-9]+[.,][0-9]+)\s*%\s*p\.a/i);
+    const ter = terMatch ? parseFloat(terMatch[1].replace(',', '.')) : null;
+    if (ter && (ter <= 0 || ter > 5)) return null;
+
+    // Indice répliqué
+    const indexMatch = phtml.match(/(?:Benchmark|Replication index|Index)[^<]*<[^>]+>\s*([^<]{5,80})<\/(?:td|span|div)/i) ||
+                       phtml.match(/tracks the ([^<]{5,80}?)(?:\s*index|\s*Index)/i);
+    const indexName = indexMatch ? indexMatch[1].trim().replace(/\s+/g,' ') : null;
+
+    // Top holdings — cherche les lignes du tableau "Holdings"
+    const holdingRows = [...phtml.matchAll(/class="[^"]*holding[^"]*"[\s\S]{0,200}?<td[^>]*>\s*([^<]{2,60})<\/td>[\s\S]{0,300}?([0-9]+[.,][0-9]+)\s*%/gi)];
+    const holdings = holdingRows.slice(0,5).map(m => ({
+      name: m[1].trim(), pct: parseFloat(m[2].replace(',','.'))
+    })).filter(h => h.pct > 0);
+
+    // Secteurs — cherche les barres de secteurs (pattern justETF)
+    const sectorRows = [...phtml.matchAll(/([A-Za-z][A-Za-z &\/]{3,35})\s*<\/td>[\s\S]{0,200}?([0-9]+[.,][0-9]+)\s*%[\s\S]{0,50}?sector/gi)];
+    const altSectors = [...phtml.matchAll(/sector[^>]*>[\s\S]{0,100}?([A-Za-z][A-Za-z &\/]{3,35})[\s\S]{0,100}?([0-9]+[.,][0-9]+)\s*%/gi)];
+    const sectors = (sectorRows.length ? sectorRows : altSectors).slice(0,5).map(m => ({
+      name: m[1].trim(), pct: parseFloat(m[2].replace(',','.'))
+    })).filter(s => s.pct > 0);
+
+    const profile = { ter, isin, index: indexName, sectors, holdings, timestamp: Date.now() };
+    if (!S.data.terCache) S.data.terCache = {};
+    S.data.terCache[ticker] = profile;
+    saveData();
+    return profile;
+  } catch(e) {
+    console.warn('fetchETFProfileJustETF', ticker, e.message);
+    return null;
+  }
+}
+
+// Compat : retourne juste le TER
+async function fetchTERJustETF(ticker) {
+  const p = await fetchETFProfileJustETF(ticker);
+  return p?.ter ?? null;
+}
+
+async function refreshAllTER() {
+  const planItems = S.data.planItems.filter(p => p.active && p.isEtf !== false);
+  if (!planItems.length) { toast('Aucun ETF dans le plan', 'error'); return; }
+  toast(`Récupération profil justETF pour ${planItems.length} ETF(s)…`, 'info');
+  let ok = 0, fail = 0;
+  for (const item of planItems) {
+    const profile = await fetchETFProfileJustETF(item.ticker);
+    if (profile) {
+      if (profile.ter) item.ter = profile.ter;
+      ok++;
+    } else { fail++; }
+  }
+  saveData();
+  renderPage(S.page);
+  toast(`Profils mis à jour : ${ok} OK${fail ? `, ${fail} échec(s)` : ''}`, ok > 0 ? 'success' : 'error');
+}
+
+// ======================================================
 // API — NEWS
 // ======================================================
 async function fetchNews(ticker) {
@@ -1259,18 +1372,19 @@ async function fetchNews(ticker) {
 // ======================================================
 // API — CLAUDE
 // ======================================================
-async function callClaude(messages, opts = {}) {
-  const key = S.data.settings.claudeApiKey;
-  if (!key) throw new Error('Clé API Anthropic non configurée. Allez dans ⚙️ Paramètres.');
-  const defaultSystem = `Tu es un gérant de portefeuille senior avec 20 ans d'expérience en gestion d'actifs, niveau CFA, spécialisé ETF et allocation d'actifs dans le cadre du PEA français. Tu penses et parles comme un professionnel chez Amundi, Blackrock ou une banque privée de premier rang.
+function getAISystemPrompt() {
+  return `Tu es un gérant de portefeuille senior avec 20 ans d'expérience en gestion d'actifs, niveau CFA, spécialisé ETF et allocation d'actifs dans le cadre du PEA français. Tu penses et parles comme un professionnel chez Amundi, Blackrock ou une banque privée de premier rang.
 
 ⚠️ DATE ET CONTEXTE TEMPOREL — RÈGLE CRITIQUE :
 Nous sommes en ${new Date().toLocaleDateString('fr-FR', {month:'long', year:'numeric'})} (${new Date().getFullYear()}). Ta base de connaissance s'arrête à août 2025 — elle est donc INCOMPLÈTE pour la période récente.
 OBLIGATION : Utilise EXCLUSIVEMENT les données de marché temps réel fournies dans le contexte (cours, VIX, EUR/USD, indices, actualités) pour analyser la situation ACTUELLE de 2026. Ne réfère JAMAIS à "début 2025" ou "contexte 2025" comme contexte actuel. Si une donnée récente te manque, dis-le explicitement plutôt que d'extrapoler depuis 2025.
 
 RÈGLES ABSOLUES DE TES RÉPONSES :
+0. PARTS ENTIÈRES UNIQUEMENT — sur PEA français, on ne peut acheter que des PARTS ENTIÈRES (jamais 1.5 part, jamais 0.7 part). Toute recommandation d'achat DOIT être un nombre entier ≥1. Arrondis toujours à l'entier inférieur ou supérieur le plus proche.
+0b. MONTANT MINIMUM 200€ PAR ORDRE — depuis avril 2026, Boursobank impose un minimum de 200€ par ordre d'achat. Ne jamais recommander un achat dont le montant total (cours × parts + frais) est inférieur à 200€. Si le montant idéal est inférieur à 200€, soit conseiller d'attendre le mois suivant, soit augmenter à 1 ordre de 200€ minimum.
+0c. SUBSTITUTION D'ETF = MÊME CATÉGORIE — quand tu proposes de remplacer un ETF, le remplaçant DOIT couvrir la même zone géographique ET le même secteur/thématique. Remplacer un ETF défense (GUARD) par un ETF large-cap Eurozone (EURO STOXX 50) n'est PAS une substitution équivalente — c'est un changement de stratégie. Toujours préciser explicitement si la substitution proposée change l'exposition.
 1. VERDICTS CLAIRS — chaque position, chaque ETF reçoit un verdict explicite : ✅ Renforcer / ⏸ Maintenir / ⚠️ Surveiller / 🔴 Alléger. Jamais de flou.
-2. CHIFFRES PRÉCIS — prix d'entrée cibles, montants exacts en €, nombre de parts, niveaux d'alerte. Pas de "environ" sans fourchette précise.
+2. CHIFFRES PRÉCIS — prix d'entrée cibles, montants exacts en €, nombre de parts (ENTIER), niveaux d'alerte. Pas de "environ" sans fourchette précise.
 3. CONTEXTE MARCHÉ ACTUEL — base-toi sur les données temps réel fournies (VIX, EUR/USD, indices, actualités 2026). Mentionne explicitement les niveaux de marché actuels dans tes analyses.
 4. ALLER AU-DELÀ — ne te contente pas de décrire le portefeuille existant. Identifie ce qui manque, ce qui devrait être ajouté, ce qui devrait être réduit, et POURQUOI maintenant.
 5. PLAN D'ACTION — termine toujours par une liste d'actions concrètes, classées par priorité, avec des niveaux de cours si disponibles.
@@ -1282,6 +1396,12 @@ NOTE : Analyse à titre informatif — l'investisseur garde la responsabilité f
 PLAN EXTRACTABLE : Si tu proposes ou modifies un plan d'allocation COMPLET (plusieurs tickers avec leurs proportions ou nombre de parts), ajoute OBLIGATOIREMENT à la toute fin de ta réponse, sur une nouvelle ligne seule, ce bloc exact :
 [PLAN_DATA:{"name":"Nom court du plan","items":[{"ticker":"TICKER.PA","name":"Nom complet","isEtf":true,"allocationPct":60},{"ticker":"TICKER2.PA","name":"Nom 2","isEtf":false,"monthlyShares":1}]}]
 Règles : isEtf=true → utilise allocationPct (0-100, somme libre) ; isEtf=false → utilise monthlyShares (entier ≥1). N'inclus ce bloc QUE pour un plan complet actionnable, jamais pour une analyse ou un commentaire partiel.`;
+}
+
+async function callClaude(messages, opts = {}) {
+  const key = S.data.settings.claudeApiKey;
+  if (!key) throw new Error('Clé API Anthropic non configurée. Allez dans ⚙️ Paramètres.');
+  const defaultSystem = getAISystemPrompt();
   const resp = await fetch(CLAUDE_URL, {
     method: 'POST',
     headers: { 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
@@ -1313,6 +1433,47 @@ Règles : isEtf=true → utilise allocationPct (0-100, somme libre) ; isEtf=fals
   }
   const j = await resp.json();
   return j.content[0].text;
+}
+
+// ======================================================
+// API — FOURNISSEURS GRATUITS (Gemini / Groq)
+// ======================================================
+async function callOpenAICompat(url, key, model, messages, opts = {}, providerName = '') {
+  if (!key) throw new Error(`Clé API ${providerName} non configurée. Allez dans ⚙️ Paramètres.`);
+  const systemContent = opts.system ?? (opts.portContext
+    ? getAISystemPrompt() + '\n\n' + opts.portContext
+    : getAISystemPrompt());
+  const fullMessages = [
+    { role: 'system', content: systemContent },
+    ...(Array.isArray(messages) ? messages : [{ role: 'user', content: messages }])
+  ];
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+    body: JSON.stringify({ model, max_tokens: opts.maxTokens ?? 1500, messages: fullMessages }),
+    signal: AbortSignal.timeout(60000)
+  });
+  if (!resp.ok) {
+    const e = await resp.json().catch(() => ({}));
+    throw new Error(e.error?.message || `Erreur API ${providerName} ${resp.status}`);
+  }
+  const j = await resp.json();
+  return j.choices?.[0]?.message?.content ?? '';
+}
+
+function callGemini(messages, opts = {}) {
+  return callOpenAICompat(GEMINI_URL, S.data.settings.geminiApiKey, getGeminiModel(), messages, opts, 'Gemini');
+}
+function callGroq(messages, opts = {}) {
+  return callOpenAICompat(GROQ_URL, S.data.settings.groqApiKey, getGroqModel(), messages, opts, 'Groq');
+}
+
+// Routeur IA — choisit le provider selon les settings
+async function callAI(messages, opts = {}) {
+  const provider = S.data.settings.aiProvider ?? 'claude';
+  if (provider === 'gemini') return callGemini(messages, opts);
+  if (provider === 'groq')   return callGroq(messages, opts);
+  return callClaude(messages, opts);
 }
 
 // ======================================================
@@ -1913,6 +2074,7 @@ function renderPlanning() {
       <div class="page-actions">
         <button class="btn btn-secondary" onclick="saveCurrentPlan()">💾 Sauvegarder</button>
         <button class="btn btn-secondary" onclick="doRefreshPlan()" id="btn-refresh-plan">⟳ Actualiser les cours</button>
+        <button class="btn btn-secondary" onclick="doRefreshTER()" id="btn-refresh-ter" title="Récupère les TER réels depuis justETF.com">📡 MAJ TER</button>
         <button class="btn btn-primary" onclick="openPlanModal()">+ Ajouter un titre</button>
       </div>
     </div>
@@ -1977,6 +2139,7 @@ function renderPlanning() {
             <th>Parts</th>
             <th title="Montant minimum d'achat (BoursoBank)">Achat min.</th>
             <th title="Frais de courtage en % du montant brut">Frais %</th>
+            <th title="Total Expense Ratio annuel — source justETF.com (cliquez 📡 MAJ TER pour actualiser)">TER %</th>
             <th>Statut</th>
             <th></th>
           </tr></thead>
@@ -1984,6 +2147,10 @@ function renderPlanning() {
             const gap = r.targetPct - r.currentPct;
             const gapColor = Math.abs(gap) < 2 ? 'neutral' : gap > 0 ? 'positive' : 'negative';
             const devColor = Math.abs(r.devAfter) <= REBAL_TOL ? 'positive' : Math.abs(r.devAfter) <= 6 ? 'warning' : 'negative';
+            const terVal = r.ter ?? S.data.terCache?.[r.ticker]?.ter ?? null;
+            const terHtml = terVal !== null
+              ? `<span style="color:${terVal>=0.5?'var(--warning)':terVal>=0.3?'var(--muted)':'var(--success)'}">${terVal}%</span>`
+              : `<span class="neutral" style="font-size:0.7rem">—</span>`;
             const statusHtml = r.status==='ok'
               ? `<span class="positive" style="font-size:0.74rem;font-weight:600">✓ OK</span>`
               : r.status==='overweight'
@@ -2031,6 +2198,7 @@ function renderPlanning() {
                   <span class="neutral">%</span>
                 </div>
               </td>
+              <td>${terHtml}</td>
               <td>${statusHtml}</td>
               <td style="white-space:nowrap">
                 <div style="display:flex;gap:4px">
@@ -2229,12 +2397,14 @@ async function loadNewsMarket() {
 // PAGE — AI
 // ======================================================
 function renderAI() {
-  const hasKey = !!S.data.settings.claudeApiKey;
+  const prov = S.data.settings.aiProvider ?? 'claude';
+  const hasKey = prov === 'gemini' ? !!S.data.settings.geminiApiKey : prov === 'groq' ? !!S.data.settings.groqApiKey : !!S.data.settings.claudeApiKey;
+  const provLabel = prov === 'gemini' ? `Gemini (${S.data.settings.geminiModel ?? 'flash'})` : prov === 'groq' ? `Groq (${S.data.settings.groqModel ?? 'llama-70b'})` : `Claude (${S.data.settings.claudeModel ?? 'haiku'})`;
   document.getElementById('page-ai').innerHTML = `
     <div class="page-header">
-      <div><h2>Analyse IA</h2><div class="page-sub">Conseils personnalisés par Claude (${S.data.settings.claudeModel ?? 'haiku'})</div></div>
+      <div><h2>Analyse IA</h2><div class="page-sub">Conseils personnalisés par ${provLabel}</div></div>
     </div>
-    ${!hasKey?`<div class="info-box info-warning mb16">🔑 Configurez votre clé API Anthropic dans <a href="#" onclick="navigate('settings')">⚙️ Paramètres</a> pour utiliser l'analyse IA.</div>`:''}
+    ${!hasKey?`<div class="info-box info-warning mb16">🔑 Configurez votre clé API dans <a href="#" onclick="navigate('settings')">⚙️ Paramètres</a> pour utiliser l'analyse IA.</div>`:''}
     <div class="card mb16" style="padding:14px 16px">
       <div class="section-title" style="margin-bottom:10px">Actions rapides</div>
       <div class="flex gap8 wrap">
@@ -2428,7 +2598,7 @@ async function aiRun(prompt) {
       }
     }
     // Injecter le contexte portefeuille dans le system prompt
-    const res = await callClaude(messages, { portContext: portCtx });
+    const res = await callAI(messages, { portContext: portCtx });
     let aiChatPlan = null;
     const planMatch = res.match(/\[PLAN_DATA:(\{[\s\S]*?\})\]\s*$/);
     if (planMatch) { try { aiChatPlan = JSON.parse(planMatch[1]); } catch(e) {} }
@@ -2749,10 +2919,15 @@ async function aiRunStructured(fullPrompt, type) {
   const btn = document.getElementById('btn-ai-send');
   if (btn) { btn.disabled=true; btn.innerHTML='<span class="spinner"></span>'; }
   const jsonSystem = `Tu es un gérant de portefeuille senior spécialisé PEA français, niveau CFA, 20 ans d'expérience chez Amundi/BlackRock. Tu analyses avec précision et conviction.
-RÈGLE ABSOLUE: Tu réponds UNIQUEMENT avec un objet JSON valide. Pas de texte avant, pas de texte après, pas de bloc markdown. Juste le JSON brut commençant par { et finissant par }.`;
+RÈGLES CRITIQUES INVIOLABLES :
+1. JSON UNIQUEMENT — pas de texte avant/après, pas de markdown, juste { ... }.
+2. PARTS ENTIÈRES — sur PEA français, on ne peut acheter que des parts entières. Tout nombre de parts dans tes recommandations DOIT être un entier ≥1 (jamais 1.5, jamais 0.7). Arrondir à l'entier le plus proche.
+3. MINIMUM 200€ PAR ORDRE (depuis avril 2026, Boursobank) — ne jamais recommander un achat < 200€. Si le montant est inférieur, conseiller d'attendre ou de grouper.
+4. BOURSOMARKETS 0€ — uniquement les iShares .PA listés dans la KB. Les ETF .DE, .L et autres ont des frais standards. Ne jamais affirmer qu'un .DE est à 0€ chez Boursobank.
+5. SUBSTITUTION = MÊME CATÉGORIE — remplacer un ETF défense par un ETF EURO STOXX 50 n'est pas une substitution neutre, c'est un pivot stratégique. Toujours signaler explicitement si l'exposition change.`;
   try {
     const tokenMap = { plan: 6000, analyze: 5000, risk: 4000, monthly: 3000, valuation: 3000, compare: 3500 };
-    const res = await callClaude([{ role:'user', content:fullPrompt }], { system: jsonSystem, maxTokens: tokenMap[type] ?? 3000 });
+    const res = await callAI([{ role:'user', content:fullPrompt }], { system: jsonSystem, maxTokens: tokenMap[type] ?? 3000 });
     let data = null;
     try { data = parseAIJSON(res); } catch(e) { /* fall back to markdown */ }
     S.ai.push({ role:'assistant', content:res, time:new Date().toLocaleTimeString('fr-FR'), isStructured:!!data, structuredType:type, structuredData:data });
@@ -2884,8 +3059,10 @@ function buildPlanText(planItems, label) {
     const budgetEtf = budget * (totalEtfPct > 0 ? p.allocationPct / totalEtfPct : 0);
     const cache = S.data.priceCache[p.ticker];
     const cours = cache?.price ? fc(cache.price) : 'N/A';
-    const feePct = p.feePct ?? 0.5;
-    return `• ETF ${p.ticker} (${p.name}): ${normPct}% du bucket ETF → ~${fc(budgetEtf)}/mois | Cours: ${cours} | Frais courtage: ${feePct}%`;
+    const feePct = p.feePct ?? BOURSO_ETF_FEE_PCT;
+    const terVal = p.ter ?? (S.data.terCache?.[p.ticker]?.ter ?? null);
+    const terStr = terVal !== null ? `TER: ${terVal}%` : 'TER: ?';
+    return `• ETF ${p.ticker} (${p.name}): ${normPct}% du bucket ETF → ~${fc(budgetEtf)}/mois | Cours: ${cours} | Frais courtage: ${feePct}% | ${terStr}`;
   }).join('\n') || '• Aucun ETF';
   const stockLines = stockItems.map(p => {
     const cache = S.data.priceCache[p.ticker];
@@ -2902,8 +3079,17 @@ async function aiPlanAnalysis() {
   if (!planItems.length) { toast('Aucun titre dans le plan actuel — ajoutez des titres dans Planning', 'error'); return; }
   const ctx = buildPortfolioContext();
   const planTxt = buildPlanText(planItems, 'PLAN MENSUEL ACTUEL À ANALYSER');
-  await aiRunStructured(`${ctx}${planTxt}
+  const feeNote = `\nGRILLE TARIFAIRE BOURSOBANK RÉELLE (confirmée) :
+• WPEA.PA (iShares Boursomarkets) : 0€ frais courtage / TER 0,20%
+• PANX.PA : 1,99€ fixe si ordre <500€ ou 0,60% si ≥500€ / TER 0,30%
+• PAEEM.PA : 1,99€ fixe si ordre <500€ ou 0,60% si ≥500€ / TER 0,30%
+• PINR.PA : 1,99€ fixe si ordre <500€ ou 0,60% si ≥500€ / TER 0,85% (très élevé)
+• GUARD.PA : 1,99€ fixe si ordre <500€ ou 0,60% si ≥500€ / TER 0,18%
+• AI.PA (action) : ~0,90% (0,50% courtage + 0,40% TTF)
+Utilise ces chiffres EXACTS pour calculer les coûts annuels réels.\n`;
+  await aiRunStructured(`${ctx}${planTxt}${feeNote}
 MISSION: Analyse complète du plan mensuel. Diversification, allocations ETF, chevauchements, titres directs, coûts (courtage+TER), risques, optimisations.
+RAPPELS CRITIQUES: 1) Parts ENTIÈRES uniquement (PEA français, jamais 1.5 part). 2) Minimum 200€/ordre depuis avril 2026 sur Boursobank — ne jamais recommander < 200€. 3) Boursomarkets 0€ = seulement les iShares .PA listés — jamais les .DE. 4) Substitution ETF = même catégorie/thématique obligatoire, sinon expliciter le changement stratégique.
 JSON UNIQUEMENT — schéma strict:
 {"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse>","risque":"<risque>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":<n>,"detail":"<détail>","frais_etf_pct_moy":<n>},"points_forts":["<point>"],"risques_plan":["<risque>"],"optimisations":[{"priorite":<1-5>,"action":"<action>","impact":"<impact>","effort":"facile|moyen|complexe"}],"synthese":"<synthèse 3-4 phrases>"}`, 'plan');
 }
@@ -3551,25 +3737,70 @@ function renderSettings() {
           </div>
         </div>
         <div class="card">
-          <div class="section-title" style="margin-bottom:8px">Clé API Anthropic (Analyse IA)</div>
-          <div class="info-box mb16">
-            Obtenez une clé gratuite sur <strong>console.anthropic.com</strong>. Elle est stockée uniquement dans votre navigateur, jamais envoyée ailleurs.
+          <div class="section-title" style="margin-bottom:8px">Fournisseur IA (Analyse)</div>
+          <div class="form-group">
+            <label>Fournisseur IA</label>
+            <select onchange="updSetting('aiProvider',this.value);renderSettings()">
+              <option value="claude" ${(s.aiProvider??'claude')==='claude'?'selected':''}>🤖 Claude (Anthropic) — payant, qualité maximale</option>
+              <option value="gemini" ${s.aiProvider==='gemini'?'selected':''}>✨ Gemini (Google) — gratuit</option>
+              <option value="groq"   ${s.aiProvider==='groq'  ?'selected':''}>⚡ Groq (LLaMA) — gratuit, ultra-rapide</option>
+            </select>
+            <div style="font-size:0.72rem;color:var(--muted);margin-top:4px">Gemini et Groq sont gratuits (avec limites journalières). L'analyse photo de relevé reste toujours sur Claude (vision requise).</div>
           </div>
+
+          ${(s.aiProvider??'claude')==='claude' ? `
+          <div class="section-title" style="margin-bottom:6px;margin-top:14px">Claude — console.anthropic.com</div>
           <div class="form-group">
             <label>Clé API (sk-ant-…)</label>
             <input type="password" id="inp-key" value="${esc(s.claudeApiKey)}" placeholder="sk-ant-api03-…" onchange="updSetting('claudeApiKey',this.value)">
           </div>
           <div class="form-group">
-            <label>Modèle IA</label>
+            <label>Modèle</label>
             <select onchange="updSetting('claudeModel',this.value)">
               <option value="haiku"  ${(s.claudeModel??'haiku')==='haiku' ?'selected':''}>⚡ Haiku — rapide, économique (recommandé)</option>
               <option value="sonnet" ${s.claudeModel==='sonnet'?'selected':''}>✦ Sonnet — équilibré</option>
-              <option value="opus"   ${s.claudeModel==='opus'  ?'selected':''}>★ Opus — qualité maximale (coûteux)</option>
+              <option value="opus"   ${s.claudeModel==='opus'  ?'selected':''}>★ Opus — qualité maximale</option>
             </select>
-            <div style="font-size:0.72rem;color:var(--muted);margin-top:4px">Haiku coûte ~30× moins cher qu'Opus pour des résultats très proches.</div>
           </div>
-          <button class="btn btn-secondary btn-sm" onclick="testKey()">🔑 Tester la clé</button>
+          <button class="btn btn-secondary btn-sm" onclick="testKey()">🔑 Tester</button>
           ${s.claudeApiKey?`<span style="margin-left:10px;font-size:0.75rem;color:var(--success)">✓ Clé enregistrée</span>`:''}
+
+          ` : s.aiProvider==='gemini' ? `
+          <div class="section-title" style="margin-bottom:6px;margin-top:14px">Gemini — aistudio.google.com/apikey</div>
+          <div style="font-size:0.78rem;color:var(--muted);margin-bottom:10px">Gratuit jusqu'à 1 500 requêtes/jour et 15 req/min avec Gemini Flash.</div>
+          <div class="form-group">
+            <label>Clé API (AIza…)</label>
+            <input type="password" id="inp-key-gemini" value="${esc(s.geminiApiKey)}" placeholder="AIzaSy…" onchange="updSetting('geminiApiKey',this.value)">
+          </div>
+          <div class="form-group">
+            <label>Modèle</label>
+            <select onchange="updSetting('geminiModel',this.value)">
+              <option value="flash"      ${(s.geminiModel??'flash')==='flash'     ?'selected':''}>⚡ Gemini 2.0 Flash — recommandé (gratuit)</option>
+              <option value="flash-lite" ${s.geminiModel==='flash-lite'           ?'selected':''}>🪶 Gemini 2.0 Flash Lite — le plus léger</option>
+              <option value="flash-15"   ${s.geminiModel==='flash-15'            ?'selected':''}>✦ Gemini 1.5 Flash — contexte long</option>
+            </select>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="testKeyFree('gemini')">🔑 Tester</button>
+          ${s.geminiApiKey?`<span style="margin-left:10px;font-size:0.75rem;color:var(--success)">✓ Clé enregistrée</span>`:''}
+
+          ` : `
+          <div class="section-title" style="margin-bottom:6px;margin-top:14px">Groq — console.groq.com/keys</div>
+          <div style="font-size:0.78rem;color:var(--muted);margin-bottom:10px">Gratuit jusqu'à 14 400 requêtes/jour. LLaMA 3.3 70B = qualité très proche de Claude Sonnet.</div>
+          <div class="form-group">
+            <label>Clé API (gsk_…)</label>
+            <input type="password" id="inp-key-groq" value="${esc(s.groqApiKey)}" placeholder="gsk_…" onchange="updSetting('groqApiKey',this.value)">
+          </div>
+          <div class="form-group">
+            <label>Modèle</label>
+            <select onchange="updSetting('groqModel',this.value)">
+              <option value="llama-70b" ${(s.groqModel??'llama-70b')==='llama-70b'?'selected':''}>⚡ LLaMA 3.3 70B — recommandé (gratuit)</option>
+              <option value="llama-8b"  ${s.groqModel==='llama-8b'              ?'selected':''}>🪶 LLaMA 3.1 8B — ultra-rapide, léger</option>
+              <option value="mixtral"   ${s.groqModel==='mixtral'               ?'selected':''}>✦ Mixtral 8x7B — bon raisonnement</option>
+            </select>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="testKeyFree('groq')">🔑 Tester</button>
+          ${s.groqApiKey?`<span style="margin-left:10px;font-size:0.75rem;color:var(--success)">✓ Clé enregistrée</span>`:''}
+          `}
         </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:14px">
@@ -3597,7 +3828,7 @@ function renderSettings() {
           <div style="font-size:0.78rem;color:var(--muted);line-height:1.7">
             <p><strong>PEA Manager 2026</strong> v1.0</p>
             <p>Données stockées localement (localStorage).</p>
-            <p>Cours: Yahoo Finance · News: RSS Yahoo Finance · IA: Claude Anthropic.</p>
+            <p>Cours: Boursorama / Yahoo Finance · News: RSS Yahoo Finance · IA: Claude, Gemini ou Groq (au choix).</p>
             <p style="margin-top:8px;color:rgba(239,68,68,0.8)">⚠ Application à usage personnel. Ne constitue pas un conseil financier.</p>
           </div>
         </div>
@@ -3867,7 +4098,7 @@ function updSetting(k, v) {
 
 async function testKey() {
   const key = document.getElementById('inp-key')?.value?.trim();
-  if (!key) { toast('Entrez une clé API', 'error'); return; }
+  if (!key) { toast('Entrez une clé API Claude', 'error'); return; }
   S.data.settings.claudeApiKey = key; saveData();
   try {
     const r = await fetch(CLAUDE_URL, {
@@ -3875,7 +4106,30 @@ async function testKey() {
       headers:{ 'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
       body: JSON.stringify({ model:getClaudeModel(), max_tokens:10, messages:[{role:'user',content:'OK'}] })
     });
-    r.ok ? toast('✓ Clé API valide !', 'success') : toast('Clé invalide: ' + r.status, 'error');
+    r.ok ? toast('✓ Clé Claude valide !', 'success') : toast('Clé invalide: ' + r.status, 'error');
+  } catch(e) { toast('Erreur connexion: ' + e.message, 'error'); }
+  renderSettings();
+}
+
+async function testKeyFree(provider) {
+  let key, url, model, inputId, settingKey, name;
+  if (provider === 'gemini') {
+    inputId = 'inp-key-gemini'; settingKey = 'geminiApiKey'; name = 'Gemini';
+    url = GEMINI_URL; model = getGeminiModel();
+  } else {
+    inputId = 'inp-key-groq'; settingKey = 'groqApiKey'; name = 'Groq';
+    url = GROQ_URL; model = getGroqModel();
+  }
+  key = document.getElementById(inputId)?.value?.trim();
+  if (!key) { toast(`Entrez une clé API ${name}`, 'error'); return; }
+  S.data.settings[settingKey] = key; saveData();
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'Authorization':`Bearer ${key}` },
+      body: JSON.stringify({ model, max_tokens: 10, messages: [{role:'system',content:'OK'},{role:'user',content:'OK'}] })
+    });
+    r.ok ? toast(`✓ Clé ${name} valide !`, 'success') : toast(`Clé invalide: ${r.status}`, 'error');
   } catch(e) { toast('Erreur connexion: ' + e.message, 'error'); }
   renderSettings();
 }
@@ -4018,7 +4272,7 @@ function scanFromPhoto(input) {
 async function processPhotoScan(file) {
   const key = S.data.settings.claudeApiKey;
   if (!key) {
-    toast('🔑 Clé API Anthropic requise — configurez-la dans ⚙️ Paramètres', 'error', 5000);
+    toast('🔑 Clé API Claude requise pour la photo — configurez-la dans ⚙️ Paramètres', 'error', 5000);
     return;
   }
 
@@ -4526,8 +4780,10 @@ function makeBacktestChart(scenario, snapshots, isPositive) {
 // OPTIMISATION IA — MULTI-PLANS
 // ======================================================
 async function aiGeneratePlans() {
-  if (!S.data.settings.claudeApiKey) {
-    toast('🔑 Clé API Anthropic requise — configurez-la dans ⚙️ Paramètres', 'error', 5000);
+  const _prov = S.data.settings.aiProvider ?? 'claude';
+  const _hasAIKey = _prov === 'gemini' ? !!S.data.settings.geminiApiKey : _prov === 'groq' ? !!S.data.settings.groqApiKey : !!S.data.settings.claudeApiKey;
+  if (!_hasAIKey) {
+    toast('🔑 Clé API IA requise — configurez-la dans ⚙️ Paramètres', 'error', 5000);
     return;
   }
   const btn = document.getElementById('btn-ai-plans');
@@ -4608,7 +4864,7 @@ RÉPONDS UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après 
 }`;
 
   try {
-    const raw = await callClaude([{ role: 'user', content: prompt }], {
+    const raw = await callAI([{ role: 'user', content: prompt }], {
       maxTokens: 4000,
       system: 'Tu es un expert en gestion de portefeuille PEA. Réponds UNIQUEMENT avec un objet JSON valide et bien formé, sans aucun texte, explication, balise markdown ou bloc de code. Commence directement par { et termine par }. Ne génère rien en dehors du JSON.'
     });
@@ -6060,6 +6316,11 @@ const ETF_GEO = {
   'AEEM.PA':  {CN:27,IN:18,TW:17,KR:12,BR:5,ZA:4,OTHER:17},
   'PE600.PA': {UK:22,FR:15,CH:14,DE:13,NL:6,SE:5,OTHER:25},
   'C6E.PA':   {FR:16,DE:13,NL:10,IT:9,ES:8,FI:5,OTHER:39},
+  // SECTORIEL DÉFENSE — ≠ large cap Eurozone
+  'GUARD.PA': {DE:22,UK:18,FR:20,IT:10,SE:7,ES:5,OTHER:18}, // Bloomberg Europe Defense : Rheinmetall, BAE, Thales, Airbus, Leonardo, Saab...
+  // LARGE CAP EUROZONE — ≠ défense
+  'CSX5.DE':  {FR:22,DE:18,NL:14,ES:10,IT:8,OTHER:28},      // EURO STOXX 50 : LVMH, SAP, ASML, TotalEnergies, Sanofi...
+  'CEMU.DE':  {FR:22,DE:18,NL:14,ES:10,IT:8,OTHER:28},      // iShares Core MSCI EMU — similaire CSX5
 };
 
 function computeETFOverlap(tickerA, tickerB) {
@@ -6169,7 +6430,7 @@ const PEA_KB = {
     { ticker:'CW8.PA',    name:'Amundi MSCI World (cap)',          ter:0.38, index:'MSCI World',            provider:'Amundi',      cat:'Monde',      note:'Référence absolue PEA, encours >6Mds€, très liquide, capitalisant' },
     { ticker:'EWLD.PA',   name:'Amundi MSCI World (dist)',         ter:0.38, index:'MSCI World',            provider:'Amundi',      cat:'Monde',      note:'Version distribuante de CW8, dividendes versés en cash PEA' },
     { ticker:'DCAM.PA',   name:'Amundi PEA Monde MSCI World',      ter:0.20, index:'MSCI World',            provider:'Amundi',      cat:'Monde',      note:'Lancé 2025, part à 5€ pour DCA facile, frais réduits vs CW8' },
-    { ticker:'WPEA.PA',   name:'iShares MSCI World Swap PEA',      ter:0.25, index:'MSCI World',            provider:'iShares',     cat:'Monde',      zeroFee:true, note:'BlackRock, part à 5€, PEA éligible — 0€ frais courtage Boursobank' },
+    { ticker:'WPEA.PA',   name:'iShares MSCI World Swap PEA',      ter:0.20, index:'MSCI World',            provider:'iShares',     cat:'Monde',      zeroFee:true, note:'BlackRock, part à 5€, PEA éligible — 0€ frais courtage Boursomarkets (confirmé)' },
     { ticker:'WPEH.PA',   name:'iShares MSCI World Swap PEA Hdg',  ter:0.30, index:'MSCI World EUR Hdg',      provider:'iShares',     cat:'Monde',      zeroFee:true, note:'WPEA couvert EUR, élimine risque USD/EUR — 0€ frais courtage Boursobank' },
     // --- USA ---
     { ticker:'PSP5.PA',   name:'Amundi PEA S&P 500',               ter:0.12, index:'S&P 500',               provider:'Amundi',      cat:'USA',        note:'S&P 500 PEA éligible, frais ultra-bas, capitalisant' },
@@ -6177,7 +6438,7 @@ const PEA_KB = {
     { ticker:'PSPS.PA',   name:'Amundi PEA S&P 500 Scrn S-Acc',    ter:0.25, index:'S&P 500',               provider:'Amundi',      cat:'USA',        note:'Part S-Acc (5€) du PE500, même stratégie' },
     { ticker:'PUST.PA',   name:'Amundi PEA Nasdaq-100',             ter:0.23, index:'Nasdaq-100',            provider:'Amundi',      cat:'USA',        note:'Tech US, forte concentration GAFAM, volatil, capitalisant' },
     { ticker:'PNAS.PA',   name:'Amundi PEA Nasdaq-100 S-Acc',      ter:0.23, index:'Nasdaq-100',            provider:'Amundi',      cat:'USA',        note:'Part S-Acc (5€) du PUST' },
-    { ticker:'PANX.PA',   name:'Amundi PEA US Tech Screened',       ter:0.25, index:'Nasdaq-100 ESG',        provider:'Amundi',      cat:'USA',        note:'Nasdaq tech avec filtre ESG' },
+    { ticker:'PANX.PA',   name:'Amundi PEA US Tech Screened',       ter:0.30, index:'Nasdaq-100 ESG',        provider:'Amundi',      cat:'USA',        note:'Nasdaq tech avec filtre ESG — frais courtage Boursobank : 1,99€ (<500€) ou 0,60% (≥500€)' },
     { ticker:'RS2K.PA',   name:'Amundi PEA Russell 2000 (EUR)',     ter:0.45, index:'Russell 2000',          provider:'Amundi',      cat:'USA',        note:'Small caps US, prime risque, décorrélé partiellement MSCI World' },
     { ticker:'ESE.PA',    name:'BNP Paribas Easy S&P 500 (EUR)',    ter:0.13, index:'S&P 500',               provider:'BNP Paribas', cat:'USA',        note:'Alternative BNP, frais bas, très liquide' },
     { ticker:'USVE.PA',   name:'Amundi PEA MSCI USA Value Adv',     ter:0.25, index:'MSCI USA Value',        provider:'Amundi',      cat:'USA',        note:'Value factor sur USA, surperforme en reprise/hausse taux' },
@@ -6212,6 +6473,7 @@ const PEA_KB = {
     { ticker:'CS1.PA',    name:'Amundi Ibex 35 (cap)',              ter:0.35, index:'Ibex 35',                 provider:'Amundi',      cat:'National EU',note:'Espagne 35 titres, forte pondération banques/utilities' },
     { ticker:'GRE.PA',    name:'Amundi MSCI Greece (dist)',         ter:0.45, index:'MSCI Greece',            provider:'Amundi',      cat:'National EU',note:'Grèce, niche spéculative, fort rebond post-crise' },
     // --- EUROPE SECTORIELLE ---
+    { ticker:'GUARD.PA',  name:'BNP Paribas Easy Bloomberg Europe Defense', ter:0.18, index:'Bloomberg Europe Defense', provider:'BNP Paribas', cat:'Sectoriel EU', note:'Défense/industrie militaire EU (Airbus, Rheinmetall, Thales, Leonardo...) — TER 0,18% (confirmé Boursobank), frais courtage : 1,99€ (<500€) ou 0,60% (≥500€)' },
     { ticker:'BNK.PA',    name:'Amundi STOXX EU600 Banks (cap)',    ter:0.30, index:'STOXX EU600 Banks',       provider:'Amundi',      cat:'Sectoriel EU',note:'Banques européennes, très cyclique, sensible aux taux BCE' },
     { ticker:'BNKE.PA',   name:'Amundi Euro STOXX Banks (cap)',     ter:0.30, index:'Euro STOXX Banks',        provider:'Amundi',      cat:'Sectoriel EU',note:'Banques zone euro uniquement (vs EU600)' },
     { ticker:'UTI.PA',    name:'Amundi STOXX EU600 Utilities (cap)',ter:0.30, index:'STOXX EU600 Utilities',   provider:'Amundi',      cat:'Sectoriel EU',note:'Utilities EU, ultra-défensif, sensible aux taux longs' },
@@ -6243,7 +6505,7 @@ const PEA_KB = {
     { ticker:'EGRA.PA',   name:'WisdomTree Eurozone Qual Div Gr',  ter:0.35, index:'WisdomTree Eurozone',      provider:'WisdomTree',  cat:'Factoriel EU',note:'Dividendes croissants + qualité zone euro' },
     { ticker:'EEI.PA',    name:'WisdomTree Europe Equity Income',  ter:0.29, index:'WisdomTree Europe',        provider:'WisdomTree',  cat:'Factoriel EU',note:'Revenu Europe, pondération par dividendes' },
     // --- MARCHÉS ÉMERGENTS ---
-    { ticker:'PAEEM.PA',  name:'Amundi PEA MSCI EM ESG (cap)',     ter:0.30, index:'MSCI EM ESG',              provider:'Amundi',      cat:'Émergents',  note:'Principal ETF EM en PEA, expo Inde/Chine/Taiwan, ESG filter' },
+    { ticker:'PAEEM.PA',  name:'Amundi PEA MSCI EM ESG (cap)',     ter:0.30, index:'MSCI EM ESG',              provider:'Amundi',      cat:'Émergents',  note:'Principal ETF EM en PEA, expo Inde/Chine/Taiwan, ESG filter — frais courtage Boursobank : 1,99€ (<500€) ou 0,60% (≥500€)' },
     { ticker:'PEMS.PA',   name:'Amundi PEA MSCI EM ESG S-Acc',     ter:0.30, index:'MSCI EM ESG',              provider:'Amundi',      cat:'Émergents',  note:'Part S-Acc 5€ du PAEEM' },
     { ticker:'PLEM.PA',   name:'Amundi PEA MSCI EM EMEA ESG',      ter:0.55, index:'MSCI EM EMEA',             provider:'Amundi',      cat:'Émergents',  note:'EM zone EMEA (Europe Est, Moyen-Orient, Afrique)' },
     { ticker:'PALAT.PA',  name:'Amundi PEA MSCI Emerging Latam',   ter:0.55, index:'MSCI Emerging Latam',      provider:'Amundi',      cat:'Émergents',  note:'Amérique Latine émergente (Brésil, Mexique, Chili...)' },
@@ -6254,7 +6516,7 @@ const PEA_KB = {
     { ticker:'PAEJ.PA',   name:'Amundi PEA AsiePac ex Japan',       ter:0.20, index:'MSCI AsiaPac ex JP',       provider:'Amundi',      cat:'Asie',       note:'Asie-Pacifique hors Japon, mix EM + dev (Australie, HK...)' },
     // --- THÉMATIQUE MONDIAL ---
     { ticker:'AWAT.PA',   name:'Amundi PEA Eau (MSCI Water)',       ter:0.35, index:'MSCI Water',               provider:'Amundi',      cat:'Thématique', note:'Secteur eau mondial, thématique ressources rares long terme' },
-    { ticker:'PINR.PA',   name:'Amundi PEA Inde (MSCI India)',      ter:0.25, index:'MSCI India',               provider:'Amundi',      cat:'Thématique', note:'Inde pure play, forte croissance démographique/économique' },
+    { ticker:'PINR.PA',   name:'Amundi PEA Inde (MSCI India)',      ter:0.85, index:'MSCI India',               provider:'Amundi',      cat:'Thématique', note:'Inde pure play, forte croissance démographique/économique — TER élevé 0,85% (confirmé Boursobank)' },
     { ticker:'PASI.PA',   name:'Amundi PEA Chine MSCI China Scr',   ter:0.25, index:'MSCI China',               provider:'Amundi',      cat:'Thématique', note:'Chine, risque réglementaire/géopolitique, fort potentiel' },
     { ticker:'MLUX.PA',   name:'Amundi PEA Luxe Monde',             ter:0.35, index:'Solactive Global Luxury',  provider:'Amundi',      cat:'Thématique', note:'Luxe mondial (LVMH, Hermès, Kering...), résilient premium' },
     { ticker:'PMEH.PA',   name:'Amundi PEA Immobilier Europe',      ter:0.40, index:'FTSE EPRA/NAREIT EU',      provider:'Amundi',      cat:'Thématique', note:'SIIC/REITs européens en PEA, sensible aux taux longs' },
@@ -6318,7 +6580,27 @@ function buildKBContext() {
   const fiscLines = PEA_KB.fiscalite.map(f => `• ${f}`).join('\n');
   const stratLines = PEA_KB.strategies.map(s => `• ${s}`).join('\n');
   const indLines = PEA_KB.indicateurs.map(i => `• ${i}`).join('\n');
-  return `\nBASE DE CONNAISSANCES PEA (${PEA_KB.etfs.length} ETF Boursobank répertoriés):\n\nETF À 0€ FRAIS DE COURTAGE BOURSOBANK [priorité cost efficiency]:\n${zeroFeeLines}\n\nTOUS LES ETF PEA PAR CATÉGORIE ([0€] = 0€ frais courtage Boursobank):\n${etfLines}\n\nRÈGLES FISCALES PEA:\n${fiscLines}\n\nSTRATÉGIES D'INVESTISSEMENT:\n${stratLines}\n\nINDICATEURS CLÉS À SURVEILLER:\n${indLines}\n`;
+  const zeroFeeTickers = zeroFeeEtfs.map(e => e.ticker).join(', ');
+  const confusionWarnings = `\n⚠️ SUBSTITUTIONS TROMPEUSES — NE JAMAIS AFFIRMER QUE CES ETFs SONT ÉQUIVALENTS :\n• GUARD.PA (Bloomberg Europe Defense) ≠ CSX5.DE / CEMU.DE (EURO STOXX 50 / large-cap Eurozone) — GUARD cible UNIQUEMENT les industriels de défense (Rheinmetall, BAE, Thales, Airbus défense, Saab...) ; CSX5/CEMU couvrent 50 grandes capi Eurozone tous secteurs confondus (LVMH, SAP, ASML, TotalEnergies...). Exposition RADICALEMENT différente.\n• Si tu proposes CSX5 ou CEMU en remplacement de GUARD, tu DOIS mentionner que c'est un pivot stratégique majeur (abandon du thème défense).\n• Substitution ETF valide = même indice ou même thématique. Ex : GUARD.PA → autre ETF défense (s'il existe en PEA). CSX5.DE → autre ETF EURO STOXX 50.`;
+
+  // Profils ETF depuis justETF (source vérifiée — prioritaire sur données d'entraînement)
+  const terCache = S.data.terCache || {};
+  const profileLines = Object.entries(terCache)
+    .filter(([, p]) => p && (p.index || (p.sectors && p.sectors.length) || (p.holdings && p.holdings.length)))
+    .map(([ticker, p]) => {
+      const parts = [`• ${ticker}`];
+      if (p.isin) parts.push(`ISIN:${p.isin}`);
+      if (p.ter) parts.push(`TER:${p.ter}%`);
+      if (p.index) parts.push(`Indice:"${p.index}"`);
+      if (p.sectors && p.sectors.length) parts.push(`Secteurs:${p.sectors.map(s=>`${s.name} ${s.pct}%`).join(', ')}`);
+      if (p.holdings && p.holdings.length) parts.push(`Top holdings:${p.holdings.map(h=>`${h.name} ${h.pct}%`).join(', ')}`);
+      return parts.join(' | ');
+    });
+  const profilesSection = profileLines.length
+    ? `\nPROFILS ETF VÉRIFIÉS (source justETF — ces données priment sur tes données d'entraînement) :\n${profileLines.join('\n')}\n⚠️ Ces profils définissent l'exposition RÉELLE de chaque ETF. Utilise-les pour éviter toute confusion entre ETFs d'indices/thématiques différents.\n`
+    : '';
+
+  return `\nBASE DE CONNAISSANCES PEA (${PEA_KB.etfs.length} ETF Boursobank répertoriés):\n${confusionWarnings}\n\n⚠️ CONTRAINTES BOURSOBANK INVIOLABLES :\n• MINIMUM 200€ PAR ORDRE depuis avril 2026 — tout achat < 200€ est impossible. Ne jamais recommander un ordre inférieur à 200€.\n• PARTS ENTIÈRES UNIQUEMENT — PEA français = pas de fractions de parts. Toujours arrondir à l'entier.\n• BOURSOMARKETS 0€ — SEULEMENT ces tickers : ${zeroFeeTickers}. Les ETF .DE, .L et autres ont des frais standards (1,99€ ou 0,60%). Ne jamais affirmer qu'un .DE est à 0€.\n• SUBSTITUTION ETF = MÊME CATÉGORIE — proposer un remplacement d'exposition identique (défense→défense, Monde→Monde). Si l'exposition change, le signaler explicitement comme "changement stratégique".\n${profilesSection}\nETF À 0€ FRAIS DE COURTAGE BOURSOBANK [liste exhaustive] :\n${zeroFeeLines}\n\nTOUS LES ETF PEA PAR CATÉGORIE ([0€] = 0€ frais courtage Boursobank uniquement pour ces tickers) :\n${etfLines}\n\nRÈGLES FISCALES PEA:\n${fiscLines}\n\nSTRATÉGIES D'INVESTISSEMENT:\n${stratLines}\n\nINDICATEURS CLÉS À SURVEILLER:\n${indLines}\n`;
 }
 
 // ======================================================

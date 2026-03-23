@@ -3008,24 +3008,89 @@ function renderAnalysisCard(data, type) {
     else if (type==='valuation') html = renderValuationCard(data);
     else if (type==='plan')      html = renderPlanAnalysisCard(data);
     else if (type==='compare')   html = renderCompareCard(data);
-    if (data.plan_suggere?.items?.length) {
-      const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(data.plan_suggere))));
-      const nb = data.plan_suggere.items.length;
-      const sp = data.plan_suggere.score_preview;
-      const noteActuelle = data.note_globale ?? 0;
-      const spColor = sp >= 8 ? '#22c55e' : sp >= 6 ? '#f59e0b' : '#ef4444';
-      const scoreGain = sp && noteActuelle ? `+${(sp - noteActuelle).toFixed(1)}` : '';
-      html += `<div style="margin-top:12px;padding:12px 14px;background:var(--accent)11;border:1px solid var(--accent)44;border-radius:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <div style="flex:1;min-width:0">
-          <div style="font-size:0.72rem;color:var(--accent);font-weight:700;text-transform:uppercase;margin-bottom:2px">📋 Plan proposé par l'IA</div>
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <div style="font-size:0.83rem;font-weight:600">${esc(data.plan_suggere.name||'Plan IA')}</div>
-            ${sp != null ? `<span style="background:${spColor}22;color:${spColor};border:1px solid ${spColor}55;border-radius:4px;padding:1px 7px;font-size:0.72rem;font-weight:700">★ ${sp}/10${scoreGain ? ' ('+scoreGain+')' : ''}</span>` : ''}
-          </div>
-          <div style="font-size:0.72rem;color:var(--muted);margin-top:2px">${nb} titre${nb>1?'s':''} · ${data.plan_suggere.items.filter(i=>i.isEtf!==false).length} ETFs · ${data.plan_suggere.items.filter(i=>i.isEtf===false).length} direct${data.plan_suggere.items.filter(i=>i.isEtf===false).length>1?'s':''}</div>
-        </div>
-        <button onclick="applyAIStructuredPlanB64('${b64}')" class="btn btn-primary" style="font-size:0.82rem;white-space:nowrap">✅ Appliquer → Planning</button>
+    // === CHOIX INTERACTIFS (etfs_base + choix) ===
+    if (type === 'plan' && data.choix?.length) {
+      const budget = S.data.settings.monthlyBudget || 1800;
+      const basePct = (data.etfs_base||[]).reduce((s,e)=>s+(e.allocationPct||0),0);
+      const allAnswered = data.choix.every(c => S._planChoices?.[c.id] !== undefined);
+      html += `<div style="margin-top:14px">
+        <div style="font-size:0.75rem;color:var(--accent);font-weight:700;text-transform:uppercase;margin-bottom:10px;letter-spacing:0.5px">🎯 Personnalise ton plan — réponds à chaque question</div>
+        ${data.choix.map((c,ci) => {
+          const sel = S._planChoices?.[c.id];
+          return `<div style="background:var(--surface2);border-radius:10px;padding:12px 14px;margin-bottom:8px;border:1px solid ${sel!==undefined?'var(--accent)44':'var(--border)'}">
+            <div style="font-size:0.8rem;font-weight:700;margin-bottom:3px">${ci+1}. ${esc(c.question)}</div>
+            ${c.context?`<div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px">${esc(c.context)}</div>`:''}
+            <div style="display:flex;flex-direction:column;gap:5px">
+              ${c.options.map((opt,oi) => {
+                const isSel = sel===oi;
+                const optPct = (opt.items||[]).reduce((s,e)=>s+(e.allocationPct||0),0);
+                const totalPct = basePct + optPct;
+                const mois = opt.items?.length && totalPct>0 ? Math.round(optPct/totalPct*budget) : 0;
+                const moisTxt = opt.items?.length>0 ? ` · ~${mois}€/mois` : ' · renforce les ETFs existants';
+                const warnColor = mois>0 && mois<200 ? '#ef4444' : 'var(--muted)';
+                const warnTxt = mois>0 && mois<200 ? ' ⚠️ <200€' : '';
+                return `<div onclick="selectPlanChoix('${c.id}',${oi})" style="cursor:pointer;border-radius:8px;padding:9px 12px;border:2px solid ${isSel?'var(--accent)':'var(--border)'};background:${isSel?'var(--accent)0d':'var(--surface)'};display:flex;align-items:flex-start;gap:10px">
+                  <div style="width:18px;height:18px;border-radius:50%;border:2px solid ${isSel?'var(--accent)':'var(--muted)'};background:${isSel?'var(--accent)':'transparent'};flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center">${isSel?'<div style="width:8px;height:8px;border-radius:50%;background:#fff"></div>':''}</div>
+                  <div style="flex:1">
+                    <div style="font-size:0.8rem;font-weight:${isSel?700:600};color:${isSel?'var(--accent)':'var(--text)'}">${esc(opt.label)}<span style="color:${warnColor};font-size:0.72rem">${moisTxt}${warnTxt}</span></div>
+                    ${opt.rationale?`<div style="font-size:0.71rem;color:var(--muted);margin-top:2px">${esc(opt.rationale)}</div>`:''}
+                  </div>
+                </div>`;
+              }).join('')}
+            </div>
+          </div>`;
+        }).join('')}
+        ${allAnswered ? (()=>{
+          const plan = assemblePlanFromChoices(data);
+          const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(plan))));
+          const items = plan.items||[];
+          const tot = items.reduce((s,e)=>s+(e.allocationPct||0),0);
+          const tags = items.map(e=>{
+            const m = tot>0?Math.round(e.allocationPct/tot*budget):0;
+            return `<span style="font-size:0.73rem;background:var(--surface);border-radius:4px;padding:2px 7px;margin:2px">${esc(e.ticker)} ${e.allocationPct}% · ~${m}€</span>`;
+          }).join('');
+          return `<div style="background:var(--accent)0d;border:2px solid var(--accent)55;border-radius:10px;padding:12px 14px">
+            <div style="font-size:0.72rem;color:var(--accent);font-weight:700;text-transform:uppercase;margin-bottom:6px">✅ Ton plan personnalisé</div>
+            <div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:10px">${tags}</div>
+            <button onclick="applyAIStructuredPlanB64('${b64}')" class="btn btn-primary" style="width:100%;font-size:0.85rem">✅ Appliquer mon plan → Planning</button>
+          </div>`;
+        })() : `<div style="text-align:center;padding:8px;font-size:0.77rem;color:var(--muted)">Réponds à toutes les questions pour générer ton plan (${Object.keys(S._planChoices||{}).length}/${data.choix.length} répondu${Object.keys(S._planChoices||{}).length>1?'s':''})</div>`}
       </div>`;
+    }
+    // === VARIANTES DIRECTES (plan_variantes ou plan_suggere compat) ===
+    if (!data.choix?.length) {
+      const variantes = data.plan_variantes?.length ? data.plan_variantes
+        : data.plan_suggere?.items?.length ? [data.plan_suggere] : [];
+      if (variantes.length) {
+        const noteActuelle = data.note_globale ?? 0;
+        const budget = S.data.settings.monthlyBudget || 1800;
+        html += `<div style="margin-top:12px">
+          <div style="font-size:0.72rem;color:var(--accent);font-weight:700;text-transform:uppercase;margin-bottom:8px">📋 Plans proposés</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+          ${variantes.map((v,vi) => {
+            const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(v))));
+            const sp = v.score_preview;
+            const spColor = sp>=8?'#22c55e':sp>=6?'#f59e0b':'#ef4444';
+            const gain = sp&&noteActuelle?` (+${(sp-noteActuelle).toFixed(1)})`:'';
+            const etfs = (v.items||[]).filter(i=>i.isEtf!==false);
+            const totalPct = etfs.reduce((s,e)=>s+(e.allocationPct||0),0);
+            const etfLines = etfs.map(e=>{
+              const mois = totalPct>0?(e.allocationPct/totalPct*budget):0;
+              const warn = mois<200&&mois>0;
+              return `<span style="font-size:0.72rem;background:var(--surface);border-radius:3px;padding:1px 5px;margin:1px;${warn?'color:#ef4444':''}">${esc(e.ticker)} ${e.allocationPct}% ~${Math.round(mois)}€${warn?' ⚠️':''}</span>`;
+            }).join('');
+            return `<div style="background:var(--surface2);border-radius:10px;padding:12px 14px;border:1px solid var(--border)">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;gap:8px">
+                <div><div style="font-size:0.83rem;font-weight:700">${esc(v.name||'Variante '+(vi+1))}</div>${v.description?`<div style="font-size:0.75rem;color:var(--muted);margin-top:2px">${esc(v.description)}</div>`:''}</div>
+                ${sp!=null?`<span style="background:${spColor}22;color:${spColor};border:1px solid ${spColor}55;border-radius:4px;padding:2px 8px;font-size:0.75rem;font-weight:700;white-space:nowrap">★ ${sp}/10${gain}</span>`:''}
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:10px">${etfLines}</div>
+              <button onclick="applyAIStructuredPlanB64('${b64}')" class="btn btn-primary" style="font-size:0.8rem;width:100%">✅ Appliquer ce plan → Planning</button>
+            </div>`;
+          }).join('')}
+          </div>
+        </div>`;
+      }
     }
     return html;
   } catch(e) { return `<em style="color:var(--muted)">Erreur rendu: ${esc(e.message)}</em>`; }
@@ -3210,7 +3275,7 @@ async function aiRunStructured(fullPrompt, type, postProcess) {
 RÈGLES CRITIQUES INVIOLABLES :
 1. JSON UNIQUEMENT — pas de texte avant/après, pas de markdown, juste { ... }.
 2. PARTS ENTIÈRES — sur PEA français, on ne peut acheter que des parts entières. Tout nombre de parts dans tes recommandations DOIT être un entier ≥1 (jamais 1.5, jamais 0.7). Arrondir à l'entier le plus proche.
-3. MINIMUM 200€ PAR ORDRE (depuis avril 2026, Boursobank) — ne jamais recommander un achat < 200€. Si le montant est inférieur, conseiller d'attendre ou de grouper.
+3. MINIMUM 200€ PAR ORDRE ABSOLU (Boursobank avril 2026) — JAMAIS recommander un ETF dont l'allocation mensuelle serait < 200€ avec le budget disponible. Si une thématique intéressante ne peut pas atteindre 200€/mois, NE PAS l'inclure dans plan_variantes. JAMAIS de contournement type "acheter tous les 2-3 mois" — non applicable en DCA mensuel. Si besoin, augmenter l'allocationPct pour atteindre 200€/mois minimum.
 4. BOURSOMARKETS 0€ — uniquement les iShares .PA listés dans la KB. Les ETF .DE, .L et autres ont des frais standards. Ne jamais affirmer qu'un .DE est à 0€ chez Boursobank.
 5. SUBSTITUTION = MÊME CATÉGORIE — remplacer un ETF défense par un ETF EURO STOXX 50 n'est pas une substitution neutre, c'est un pivot stratégique. Toujours signaler explicitement si l'exposition change.`;
   try {
@@ -3304,7 +3369,7 @@ RÈGLES OBLIGATOIRES:
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
 Schéma exact (tous les champs requis):
 {"score":<integer 0-10>,"verdict":"<2-3 phrases directes>","etfs":[{"ticker":"","verdict":"renforcer|maintenir|surveiller|alléger","note":<0-10>,"ecart":"","action":"","raison":""}],"titres":[{"ticker":"","verdict":"continuer|pause|surveiller|sortie","note":<0-10>,"utilite":"","risque":"","rythme":""}],"macro":[{"force":"pour|contre","facteur":"","impact":""}],"manque":[{"ticker":"","raison":"","urgence":"haute|modérée|faible"}],"actions":[{"priorite":<1-5>,"action":"","montant":"","timing":""}],"plan_suggere":{"name":"<nom 4 mots>","items":[{"ticker":"TICKER.PA","name":"Nom","isEtf":true,"allocationPct":50}]}}
-RÈGLE plan_suggere : ETFs UNIQUEMENT (isEtf:true+allocationPct). JAMAIS de titres directs ni de cash/monétaire. Omettre si aucune amélioration ETF significative.`, 'analyze');
+RÈGLE plan_variantes : 1-2 variantes ETF uniquement si amélioration claire (score_preview >= 7). JAMAIS de titres directs, cash ou monétaire. JAMAIS d'ETF < 200€/mois avec le budget actuel. Omettre si aucune amélioration significative.`, 'analyze');
 }
 
 async function aiMonthly() {
@@ -3320,7 +3385,7 @@ RÈGLES OBLIGATOIRES:
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
 Schéma exact:
 {"budget_total":${S.data.settings.monthlyBudget},"timing":"bon|neutre|attendre","timing_detail":"<1 phrase>","etfs":[{"ticker":"","cours":"","cible_pct":<number>,"actuel_pct":<number>,"montant":"","parts":<number>,"priorite":<1-5>,"raison":""}],"titres":[{"ticker":"","cours":"","plan":"","recommandation":"maintenir|pause|augmenter|réduire","raison":""}],"actualites_impact":"<2-3 phrases>","actions":[{"priorite":<1-5>,"action":"","montant":"","condition":""}],"plan_suggere":{"name":"<nom>","items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
-RÈGLE plan_suggere : ETFs UNIQUEMENT (isEtf:true+allocationPct). JAMAIS de titres directs ni cash/monétaire. Omettre si allocations inchangées.`, 'monthly');
+RÈGLE plan_variantes : 1-2 variantes ETF uniquement (score_preview >= 7). JAMAIS titres directs, cash, monétaire, ETF < 200€/mois. Omettre si inchangé.`, 'monthly');
 }
 
 async function aiRisk() {
@@ -3435,6 +3500,8 @@ ${costs.lines.join('\n')}
 → Courtage annuel total : ${costs.courtage_annuel_eur}€/an
 → TER annuel total (sur versements) : ${costs.ter_annuel_eur}€/an
 → TOTAL FRAIS : ${costs.total_annuel_eur}€/an | TER moyen pondéré : ${costs.frais_etf_pct_moy}%\n`;
+  // Reset des choix interactifs
+  S._planChoices = {};
   // Contexte plan actuel pour score différentiel
   const currentPlanSummary = planItems.map(p => `${p.ticker}:${p.isEtf!==false?p.allocationPct+'%':p.monthlyShares+'parts'}`).join(',');
   await aiRunStructured(`${ctx}${planTxt}${costsNote}
@@ -3443,13 +3510,14 @@ NOTE_GLOBALE = qualité du plan mensuel proposé (choix ETFs, allocations, coût
 RAPPELS CRITIQUES: 1) Parts ENTIÈRES uniquement. 2) Minimum 200€/ordre Boursobank avril 2026. 3) Boursomarkets 0€ = iShares .PA listés. 4) Substitution ETF = même catégorie obligatoire.
 NE PAS recalculer les coûts — utiliser les chiffres fournis dans COÛTS CALCULÉS PAR L'APPLICATION.
 JSON UNIQUEMENT — schéma strict:
-{"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases sur la qualité des achats mensuels>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse concise>","risque":"<risque principal>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse concise>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan concis>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":${costs.total_annuel_eur},"courtage_annuel_eur":${costs.courtage_annuel_eur},"ter_annuel_eur":${costs.ter_annuel_eur},"frais_etf_pct_moy":${costs.frais_etf_pct_moy},"detail":"${costs.detail}"},"points_forts":["<point>"],"risques_plan":["<risque lié au plan mensuel>"],"optimisations":[{"priorite":<1-5>,"action":"<action concrète et différente du plan actuel>","impact":"<impact chiffré si possible>","effort":"facile|moyen|complexe"}],"synthese":"<synthèse 3-4 phrases>","plan_suggere":{"name":"<nom court>","score_preview":<note estimée 0-10 si ce plan est appliqué>,"items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
-RÈGLES plan_suggere :
-1. Inclure SEULEMENT si score_preview >= note_globale + 1.5 ET score_preview >= 7. Si impossible, omettre et expliquer dans synthese.
-2. ETFs UNIQUEMENT dans plan_suggere (isEtf:true + allocationPct). JAMAIS de titres directs (l'app les préserve automatiquement).
-3. JAMAIS de cash tactique, monétaire, obligations ni fonds d'attente dans plan_suggere — PEA long terme uniquement.
-4. Le plan doit être SUBSTANTIELLEMENT différent du plan actuel : ${currentPlanSummary}
-5. allocationPct = % parmi les ETFs uniquement (somme libre 0-100, les titres directs sont hors calcul).`,
+{"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse concise>","risque":"<risque principal>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse concise>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan concis>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":${costs.total_annuel_eur},"courtage_annuel_eur":${costs.courtage_annuel_eur},"ter_annuel_eur":${costs.ter_annuel_eur},"frais_etf_pct_moy":${costs.frais_etf_pct_moy},"detail":"${costs.detail}"},"points_forts":["<point>"],"risques_plan":["<risque>"],"optimisations":[{"priorite":<1-5>,"action":"<action>","impact":"<impact>","effort":"facile|moyen|complexe"}],"synthese":"<synthèse 3-4 phrases>","etfs_base":[{"ticker":"","name":"","allocationPct":<n>}],"choix":[{"id":"<id_court>","question":"<question claire>","context":"<1 phrase de contexte>","options":[{"label":"<label court>","items":[{"ticker":"","name":"","allocationPct":<n>}],"rationale":"<1 phrase pourquoi>"}]}]}
+RÈGLES etfs_base + choix (PRIORITÉ sur plan_variantes) :
+- etfs_base = ETFs qui restent dans TOUS les cas (pas de décision à prendre). allocationPct relatif entre eux.
+- choix = liste des décisions où l'utilisateur doit choisir entre 2-3 options. Chaque option a items=[] si elle supprime un poste (ex: "Ne pas ajouter").
+- JAMAIS d'ETF avec allocation mensuelle < 200€ dans les options. Budget: ${S.data.settings.monthlyBudget}€. Vérifier: allocationPct/(sum_base_pct+option_pct)×budget ≥ 200€.
+- JAMAIS de cash, monétaire, obligations. ETFs uniquement. Titres directs préservés automatiquement.
+- Si aucune décision binaire pertinente : omettre choix et etfs_base, utiliser plan_variantes à la place.
+- Plan actuel : ${currentPlanSummary}`,
   'plan',
   (d) => { d.couts = { total_annuel_eur: costs.total_annuel_eur, courtage_annuel_eur: costs.courtage_annuel_eur, ter_annuel_eur: costs.ter_annuel_eur, frais_etf_pct_moy: costs.frais_etf_pct_moy, detail: costs.detail }; return d; });
 }
@@ -3479,7 +3547,7 @@ MISSION — COMPARAISON DÉTAILLÉE DE DEUX PLANS D'INVESTISSEMENT MENSUEL.
 Compare ces deux plans sur tous les axes : diversification, coûts annuels estimés, potentiel de rendement, niveau de risque, simplicité de gestion, adéquation avec le portefeuille actuel et les objectifs PEA long terme.
 Réponds UNIQUEMENT avec un objet JSON valide.
 Schéma exact:{"plan_a":"${labelA.replace(/"/g,"'")}","plan_b":"${labelB.replace(/"/g,"'")}","verdict_global":"<2 phrases>","gagnant":"A|B|ex-aequo","axes":[{"nom":"","score_a":<0-10>,"score_b":<0-10>,"detail":""}],"differences_cles":[""],"avantages_a":[""],"avantages_b":[""],"risques_a":[""],"risques_b":[""],"recommandation":"<2-3 phrases directes sur lequel choisir et pourquoi>","plan_suggere":{"name":"<Plan gagnant amélioré>","items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
-RÈGLE plan_suggere : ETFs UNIQUEMENT du plan gagnant (isEtf:true+allocationPct). JAMAIS de titres directs ni cash/monétaire.`, 'compare');
+RÈGLE plan_variantes : le plan gagnant en 1-2 variantes ETF (score_preview >= 7). JAMAIS titres directs, cash, monétaire, ETF < 200€/mois.`, 'compare');
 }
 
 function renderPlanAnalysisCard(d) {
@@ -4487,6 +4555,28 @@ function applyAIChatPlan(msgIdx) {
 function applyAIStructuredPlanB64(b64) {
   try { applyAIStructuredPlan(JSON.parse(decodeURIComponent(escape(atob(b64))))); }
   catch(e) { toast('Erreur lecture plan IA', 'error'); }
+}
+
+// ── Choix interactifs ──────────────────────────────────────────
+function selectPlanChoix(choixId, optionIdx) {
+  if (!S._planChoices) S._planChoices = {};
+  S._planChoices[choixId] = optionIdx;
+  renderAI();
+}
+
+function assemblePlanFromChoices(data) {
+  const base  = (data.etfs_base || []).map(e => ({...e, isEtf:true}));
+  const extra = [];
+  for (const c of (data.choix || [])) {
+    const idx = S._planChoices?.[c.id];
+    if (idx !== undefined && c.options[idx]) {
+      for (const item of (c.options[idx].items || [])) {
+        extra.push({...item, isEtf:true});
+      }
+    }
+  }
+  return { name:'Plan personnalisé', items:[...base, ...extra] };
+}
 }
 function applyAIStructuredPlan(plan) {
   if (!plan?.items?.length) { toast('Plan vide', 'error'); return; }

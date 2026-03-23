@@ -2120,7 +2120,7 @@ function renderPlanning() {
     const feePct     = item.feePct ?? 0;
     const feeMul     = 1 + feePct / 100;
     const idealBuyCash = idealBuy * feeMul;                      // cash total à débourser
-    const minAmt     = item.minAmount ?? 200;                    // minimum en cash (BoursoBank)
+    const minAmt     = Math.max(item.minAmount ?? 200, 200);     // minimum en cash — Boursobank: 200€ min depuis avr. 2026
     const price      = S.data.priceCache[item.ticker]?.price ?? null;
     let status, amount;
     if (idealBuy <= 0.01)             { status = 'overweight'; amount = 0; }
@@ -2147,7 +2147,7 @@ function renderPlanning() {
       etfResults = etfResults.map(r => {
         if (r.status !== 'ok') return r;
         const sc = r.amount * scale;
-        const na = sc < (r.minAmount ?? 200) ? 0 : sc;
+        const na = sc < Math.max(r.minAmount ?? 200, 200) ? 0 : sc;
         return { ...r, amount: na, status: na > 0 ? 'ok' : 'below-min' };
       });
     } else {
@@ -2156,7 +2156,7 @@ function renderPlanning() {
       etfResults = etfResults.map(r => {
         if (r.amount === 0) return r;
         const sc = r.amount * scale;
-        const na = sc < (r.minAmount ?? 200) ? 0 : sc;
+        const na = sc < Math.max(r.minAmount ?? 200, 200) ? 0 : sc;
         return { ...r, amount: na, status: na > 0 ? r.status : 'below-min' };
       });
     }
@@ -2210,7 +2210,7 @@ function renderPlanning() {
       const newDfCash = newDfNet * dfCur.feeMul;
       // Si montant résiduel < minimum → annuler entièrement l'achat df
       let finalDfNet = newDfNet, finalDfCash = newDfCash, actualTakeNet = takeNet;
-      if (newDfCash > 0 && newDfCash < (dfCur.minAmount ?? 200)) {
+      if (newDfCash > 0 && newDfCash < Math.max(dfCur.minAmount ?? 200, 200)) {
         actualTakeNet = dfCur.netInvestment; finalDfNet = 0; finalDfCash = 0;
       }
       etfResults[dfIdx] = { ...dfCur, amount: finalDfCash, netInvestment: finalDfNet,

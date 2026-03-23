@@ -3571,7 +3571,8 @@ function renderPlanAnalysisCard(d) {
             const optPct = (!isNoChange && opt.items?.length) ? (opt.items||[]).reduce((s,e)=>s+(e.allocationPct||0),0) : 0;
             const totPct = basePct + optPct || 100;
             const mois = optPct > 0 ? Math.round(optPct/totPct*budget) : 0;
-            const moisStr = isNoChange ? '' : optPct>0 ? ` · ~${mois}€/mois` : (opt.items?.length===0 ? ' · supprime ce poste' : '');
+            const hasUnder200 = !isNoChange && (opt.items||[]).some(e => { const m=(e.allocationPct||0)/totPct*budget; return m>0&&m<200; });
+            const moisStr = isNoChange ? '' : optPct>0 ? ` · ~${mois}€/mois${hasUnder200?' ⚠️ <200€ min':''}` : (opt.items?.length===0 ? ' · supprime ce poste' : '');
             return `<div data-opt-idx="${oi}" onclick="selectPlanChoix('${o.choix_id}',${oi})" style="cursor:pointer;border-radius:7px;padding:8px 11px;border:2px solid ${isSel?'var(--accent)':'var(--border)'};background:${isSel?'var(--accent)11':'transparent'};transition:all 0.15s;display:flex;align-items:center;gap:8px">
               <div class="choix-radio" style="width:14px;height:14px;border-radius:50%;border:2px solid ${isSel?'var(--accent)':'var(--muted)'};background:${isSel?'var(--accent)':'transparent'};flex-shrink:0;transition:all 0.15s"></div>
               <div><div class="choix-label" style="font-size:0.8rem;font-weight:${isSel?'700':'500'};color:${isSel?'var(--accent)':isNoChange?'var(--muted)':'var(--text)'}">${esc(opt.label)}${moisStr}</div>${opt.rationale?`<div style="font-size:0.71rem;color:var(--muted)">${esc(opt.rationale)}</div>`:''}</div>
@@ -4607,6 +4608,28 @@ function selectPlanChoix(choixId, optionIdx) {
   }
 }
 
+// Retire les ETFs dont l'allocation mensuelle < 200€ et redistribue proportionnellement
+function enforceMin200(items, budget) {
+  let result = items.filter(e => (e.allocationPct || 0) > 0);
+  const removed = [];
+  let changed = true;
+  while (changed && result.length > 1) {
+    changed = false;
+    const totalPct = result.reduce((s, e) => s + (e.allocationPct || 0), 0);
+    if (!totalPct) break;
+    const toRemove = result.filter(e => (e.allocationPct / totalPct) * budget < 200);
+    if (!toRemove.length) break;
+    removed.push(...toRemove.map(e => e.ticker));
+    result = result.filter(e => !toRemove.includes(e));
+    if (!result.length) { result = toRemove; break; } // garde au moins 1
+    const newTotal = result.reduce((s, e) => s + (e.allocationPct || 0), 0);
+    const scale = totalPct / newTotal;
+    result = result.map(e => ({ ...e, allocationPct: Math.round(e.allocationPct * scale * 10) / 10 }));
+    changed = true;
+  }
+  return { items: result, removed };
+}
+
 function assemblePlanFromChoices(data) {
   // Base (ETFs fixes)
   const merged = (data.etfs_base || []).map(e => ({...e, isEtf:true}));
@@ -4625,7 +4648,10 @@ function assemblePlanFromChoices(data) {
       else merged.push({...item, isEtf:true});                     // ajoute
     }
   }
-  return { name:'Plan personnalisé', items: merged.filter(e => e.allocationPct > 0) };
+  const budget = S.data.settings.monthlyBudget || 1800;
+  const { items: filtered, removed } = enforceMin200(merged.filter(e => e.allocationPct > 0), budget);
+  if (removed.length) toast(`⚠️ ETF(s) retirés car < 200€/mois : ${removed.join(', ')}. Allocation redistribuée.`, 'warning', 5000);
+  return { name:'Plan personnalisé', items: filtered };
 }
 
 function applyAIStructuredPlan(plan) {
@@ -4636,8 +4662,12 @@ function applyAIStructuredPlan(plan) {
   }
   // Titres directs = convictions → toujours préservés, jamais remplacés par l'IA
   const existingStocks = S.data.planItems.filter(p => p.isEtf === false && p.active);
-  // ETFs uniquement depuis le plan IA
-  const newEtfs = plan.items.filter(item => item.isEtf !== false).map((item, idx) => {
+  // ETFs uniquement depuis le plan IA — filtre < 200€/mois
+  const budget = S.data.settings.monthlyBudget || 1800;
+  const rawEtfs = plan.items.filter(item => item.isEtf !== false);
+  const { items: validEtfs, removed: removedEtfs } = enforceMin200(rawEtfs, budget);
+  if (removedEtfs.length) toast(`⚠️ ETF(s) retirés car < 200€/mois : ${removedEtfs.join(', ')}`, 'warning', 5000);
+  const newEtfs = validEtfs.map((item, idx) => {
     const feePct = NO_COURTAGE.has(item.ticker) ? 0 : BOURSO_ETF_FEE_PCT;
     const ter = item.ter ?? PEA_KB?.etfs?.find(e => e.ticker === item.ticker)?.ter ?? undefined;
     const existing = S.data.planItems.find(p => p.ticker === item.ticker);

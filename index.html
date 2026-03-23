@@ -3304,7 +3304,7 @@ RÈGLES OBLIGATOIRES:
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
 Schéma exact (tous les champs requis):
 {"score":<integer 0-10>,"verdict":"<2-3 phrases directes>","etfs":[{"ticker":"","verdict":"renforcer|maintenir|surveiller|alléger","note":<0-10>,"ecart":"","action":"","raison":""}],"titres":[{"ticker":"","verdict":"continuer|pause|surveiller|sortie","note":<0-10>,"utilite":"","risque":"","rythme":""}],"macro":[{"force":"pour|contre","facteur":"","impact":""}],"manque":[{"ticker":"","raison":"","urgence":"haute|modérée|faible"}],"actions":[{"priorite":<1-5>,"action":"","montant":"","timing":""}],"plan_suggere":{"name":"<nom 4 mots>","items":[{"ticker":"TICKER.PA","name":"Nom","isEtf":true,"allocationPct":50}]}}
-RÈGLE plan_suggere : inclure UNIQUEMENT si tu proposes des changements concrets d'allocation. ETFs→allocationPct(0-100,somme libre). Titres directs→isEtf:false+monthlyShares. Omettre si le plan actuel est bon tel quel.`, 'analyze');
+RÈGLE plan_suggere : ETFs UNIQUEMENT (isEtf:true+allocationPct). JAMAIS de titres directs ni de cash/monétaire. Omettre si aucune amélioration ETF significative.`, 'analyze');
 }
 
 async function aiMonthly() {
@@ -3320,7 +3320,7 @@ RÈGLES OBLIGATOIRES:
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
 Schéma exact:
 {"budget_total":${S.data.settings.monthlyBudget},"timing":"bon|neutre|attendre","timing_detail":"<1 phrase>","etfs":[{"ticker":"","cours":"","cible_pct":<number>,"actuel_pct":<number>,"montant":"","parts":<number>,"priorite":<1-5>,"raison":""}],"titres":[{"ticker":"","cours":"","plan":"","recommandation":"maintenir|pause|augmenter|réduire","raison":""}],"actualites_impact":"<2-3 phrases>","actions":[{"priorite":<1-5>,"action":"","montant":"","condition":""}],"plan_suggere":{"name":"<nom>","items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
-RÈGLE plan_suggere : inclure si tu ajustes les cibles. ETFs→allocationPct. Titres directs→isEtf:false+monthlyShares. Omettre si plan inchangé.`, 'monthly');
+RÈGLE plan_suggere : ETFs UNIQUEMENT (isEtf:true+allocationPct). JAMAIS de titres directs ni cash/monétaire. Omettre si allocations inchangées.`, 'monthly');
 }
 
 async function aiRisk() {
@@ -3444,7 +3444,12 @@ RAPPELS CRITIQUES: 1) Parts ENTIÈRES uniquement. 2) Minimum 200€/ordre Bourso
 NE PAS recalculer les coûts — utiliser les chiffres fournis dans COÛTS CALCULÉS PAR L'APPLICATION.
 JSON UNIQUEMENT — schéma strict:
 {"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases sur la qualité des achats mensuels>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse concise>","risque":"<risque principal>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse concise>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan concis>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":${costs.total_annuel_eur},"courtage_annuel_eur":${costs.courtage_annuel_eur},"ter_annuel_eur":${costs.ter_annuel_eur},"frais_etf_pct_moy":${costs.frais_etf_pct_moy},"detail":"${costs.detail}"},"points_forts":["<point>"],"risques_plan":["<risque lié au plan mensuel>"],"optimisations":[{"priorite":<1-5>,"action":"<action concrète et différente du plan actuel>","impact":"<impact chiffré si possible>","effort":"facile|moyen|complexe"}],"synthese":"<synthèse 3-4 phrases>","plan_suggere":{"name":"<nom court>","score_preview":<note estimée 0-10 si ce plan est appliqué>,"items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
-RÈGLE plan_suggere : Inclure SEULEMENT si score_preview >= note_globale + 1.5 ET score_preview >= 7. Le plan doit appliquer tes optimisations prioritaires et être SUBSTANTIELLEMENT différent du plan actuel (${currentPlanSummary}). ETFs→allocationPct. Titres→isEtf:false+monthlyShares. Si impossible d'améliorer significativement, omettre plan_suggere et expliquer pourquoi dans synthese.`,
+RÈGLES plan_suggere :
+1. Inclure SEULEMENT si score_preview >= note_globale + 1.5 ET score_preview >= 7. Si impossible, omettre et expliquer dans synthese.
+2. ETFs UNIQUEMENT dans plan_suggere (isEtf:true + allocationPct). JAMAIS de titres directs (l'app les préserve automatiquement).
+3. JAMAIS de cash tactique, monétaire, obligations ni fonds d'attente dans plan_suggere — PEA long terme uniquement.
+4. Le plan doit être SUBSTANTIELLEMENT différent du plan actuel : ${currentPlanSummary}
+5. allocationPct = % parmi les ETFs uniquement (somme libre 0-100, les titres directs sont hors calcul).`,
   'plan',
   (d) => { d.couts = { total_annuel_eur: costs.total_annuel_eur, courtage_annuel_eur: costs.courtage_annuel_eur, ter_annuel_eur: costs.ter_annuel_eur, frais_etf_pct_moy: costs.frais_etf_pct_moy, detail: costs.detail }; return d; });
 }
@@ -3474,7 +3479,7 @@ MISSION — COMPARAISON DÉTAILLÉE DE DEUX PLANS D'INVESTISSEMENT MENSUEL.
 Compare ces deux plans sur tous les axes : diversification, coûts annuels estimés, potentiel de rendement, niveau de risque, simplicité de gestion, adéquation avec le portefeuille actuel et les objectifs PEA long terme.
 Réponds UNIQUEMENT avec un objet JSON valide.
 Schéma exact:{"plan_a":"${labelA.replace(/"/g,"'")}","plan_b":"${labelB.replace(/"/g,"'")}","verdict_global":"<2 phrases>","gagnant":"A|B|ex-aequo","axes":[{"nom":"","score_a":<0-10>,"score_b":<0-10>,"detail":""}],"differences_cles":[""],"avantages_a":[""],"avantages_b":[""],"risques_a":[""],"risques_b":[""],"recommandation":"<2-3 phrases directes sur lequel choisir et pourquoi>","plan_suggere":{"name":"<Plan gagnant amélioré>","items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
-RÈGLE plan_suggere : inclure le plan gagnant (ou un mix des deux si ex-aequo). ETFs→allocationPct. Titres directs→isEtf:false+monthlyShares.`, 'compare');
+RÈGLE plan_suggere : ETFs UNIQUEMENT du plan gagnant (isEtf:true+allocationPct). JAMAIS de titres directs ni cash/monétaire.`, 'compare');
 }
 
 function renderPlanAnalysisCard(d) {
@@ -4460,14 +4465,17 @@ function applyAIChatPlan(msgIdx) {
     if (!S.data.savedPlans) S.data.savedPlans = [];
     S.data.savedPlans.push({ id: uid(), name: 'Avant IA chat — ' + today(), date: today(), source: 'manual', aiColor: null, items: S.data.planItems.map(p => ({...p})) });
   }
-  const newItems = plan.items.map((item, idx) => ({
-    id: uid(), ticker: item.ticker, name: item.name,
-    isEtf: item.isEtf !== false,
-    allocationPct: item.isEtf !== false ? (item.allocationPct || 0) : 0,
-    monthlyShares: item.isEtf === false ? (item.monthlyShares || 1) : 0,
-    monthlyAmount: 0, minAmount: 200, feePct: item.isEtf !== false ? 0.5 : 0.9,
-    priority: idx + 1, active: true, notes: ''
-  }));
+  const existingStocks = S.data.planItems.filter(p => p.isEtf === false && p.active);
+  const newEtfs = plan.items.filter(i => i.isEtf !== false).map((item, idx) => {
+    const feePct = NO_COURTAGE.has(item.ticker) ? 0 : BOURSO_ETF_FEE_PCT;
+    const ter = item.ter ?? PEA_KB?.etfs?.find(e => e.ticker === item.ticker)?.ter ?? undefined;
+    const existing = S.data.planItems.find(p => p.ticker === item.ticker);
+    return { id:uid(), ticker:item.ticker, name:item.name||existing?.name||item.ticker,
+      isEtf:true, allocationPct:item.allocationPct||0, monthlyShares:0, monthlyAmount:0, minAmount:200, feePct,
+      ...(ter!==undefined?{ter}:{}), priority:idx+1, active:true, notes:existing?.notes||'' };
+  });
+  const stockItems = existingStocks.map((s, idx) => ({ ...s, priority: newEtfs.length + idx + 1 }));
+  const newItems = [...newEtfs, ...stockItems];
   if (!S.data.savedPlans) S.data.savedPlans = [];
   S.data.savedPlans.push({ id: uid(), name: plan.name || 'Plan IA chat', date: today(), source: 'ai', aiColor: '#3b82f6', items: newItems });
   S.data.planItems = newItems;
@@ -4486,29 +4494,31 @@ function applyAIStructuredPlan(plan) {
     if (!S.data.savedPlans) S.data.savedPlans = [];
     S.data.savedPlans.push({ id:uid(), name:'Avant IA — '+today(), date:today(), source:'manual', aiColor:null, items:S.data.planItems.map(p=>({...p})) });
   }
-  const newItems = plan.items.map((item,idx) => {
-    const isEtf = item.isEtf !== false;
-    // feePct correct : 0€ Boursomarkets, 0.9% action, 0.60% ETF sinon
-    const feePct = NO_COURTAGE.has(item.ticker) ? 0 : isEtf ? BOURSO_ETF_FEE_PCT : 0.9;
-    // ter depuis l'item IA → PEA_KB → 0
+  // Titres directs = convictions → toujours préservés, jamais remplacés par l'IA
+  const existingStocks = S.data.planItems.filter(p => p.isEtf === false && p.active);
+  // ETFs uniquement depuis le plan IA
+  const newEtfs = plan.items.filter(item => item.isEtf !== false).map((item, idx) => {
+    const feePct = NO_COURTAGE.has(item.ticker) ? 0 : BOURSO_ETF_FEE_PCT;
     const ter = item.ter ?? PEA_KB?.etfs?.find(e => e.ticker === item.ticker)?.ter ?? undefined;
-    // Récupère les champs existants du plan actuel si le ticker est déjà présent
     const existing = S.data.planItems.find(p => p.ticker === item.ticker);
     return {
       id:uid(), ticker:item.ticker, name:item.name || existing?.name || item.ticker,
-      isEtf,
-      allocationPct: isEtf ? (item.allocationPct || existing?.allocationPct || 0) : 0,
-      monthlyShares: !isEtf ? (item.monthlyShares || existing?.monthlyShares || 1) : 0,
-      monthlyAmount:0, minAmount:200, feePct,
+      isEtf:true,
+      allocationPct: item.allocationPct || existing?.allocationPct || 0,
+      monthlyShares:0, monthlyAmount:0, minAmount:200, feePct,
       ...(ter !== undefined ? {ter} : {}),
-      priority:idx+1, active:true, notes: existing?.notes || ''
+      priority:idx+1, active:true, notes:existing?.notes || ''
     };
   });
+  // Titres directs conservés après les ETFs
+  const stockItems = existingStocks.map((s, idx) => ({ ...s, priority: newEtfs.length + idx + 1 }));
+  const newItems = [...newEtfs, ...stockItems];
   if (!S.data.savedPlans) S.data.savedPlans = [];
   S.data.savedPlans.push({ id:uid(), name:plan.name||'Plan IA', date:today(), source:'ai', aiColor:'#3b82f6', items:newItems });
   S.data.planItems = newItems;
   saveData();
-  toast(`✅ Plan "${plan.name||'Plan IA'}" appliqué — redirection vers Planning…`, 'success', 4000);
+  const stockMsg = stockItems.length ? ` · ${stockItems.length} titre(s) direct(s) conservé(s)` : '';
+  toast(`✅ Plan "${plan.name||'Plan IA'}" appliqué${stockMsg} — redirection vers Planning…`, 'success', 4000);
   setTimeout(() => navigate('planning'), 1200);
 }
 

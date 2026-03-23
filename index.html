@@ -221,6 +221,10 @@
       .page-actions{flex-wrap:wrap}
     }
 
+    /* ===== PLAN MOBILE / DESKTOP SWITCH ===== */
+    .plan-desktop{display:block}.plan-mobile{display:none}
+    @media(max-width:768px){.plan-desktop{display:none}.plan-mobile{display:block}}
+
     /* — iPad portrait / tablettes (≤768px) — */
     @media(max-width:768px){
       .grid-4{grid-template-columns:repeat(2,1fr)}
@@ -2416,7 +2420,8 @@ function renderPlanning() {
         ${outOf3.length > 0
           ? `<div class="info-box info-warning" style="margin-bottom:10px">⚠ ${outOf3.length} ETF${outOf3.length>1?'s':''} hors règle ±${REBAL_TOL}% après achat : ${outOf3.map(r=>`<strong>${r.ticker}</strong> (${r.devAfter>0?'+':''}${r.devAfter.toFixed(1)}%)`).join(', ')} — budget insuffisant pour rééquilibrer complètement</div>`
           : `<div class="info-box info-success" style="margin-bottom:10px">✓ Tous les ETF seront dans la règle ±${REBAL_TOL}% après les achats suggérés</div>`}
-        <div class="table-wrap"><table>
+        <!-- TABLE DESKTOP -->
+        <div class="plan-desktop table-wrap"><table>
           <thead><tr>
             <th>Ticker</th><th>Nom</th>
             <th title="% souhaité dans le bucket ETF uniquement (hors titres directs)">% cible</th>
@@ -2497,6 +2502,58 @@ function renderPlanning() {
             </tr>`;
           }).join('')}</tbody>
         </table></div>
+
+        <!-- CARDS MOBILE -->
+        <div class="plan-mobile">${etfResults.map(r => {
+          const devColor = Math.abs(r.devAfter) <= REBAL_TOL ? '#22c55e' : Math.abs(r.devAfter) <= 6 ? '#f59e0b' : '#ef4444';
+          const terVal = r.ter ?? S.data.terCache?.[r.ticker]?.ter ?? null;
+          const amtColor = r.status==='ok'||r.status==='boosted' ? '#22c55e' : r.status==='overweight'||r.status==='deferred' ? 'var(--muted)' : '#f59e0b';
+          const statusLabel = r.status==='ok'?'✓ OK':r.status==='overweight'?'≈ Équilibré':r.status==='min-forced'?'⚡ Min. forcé':r.status==='deferred'?'⏭ Différé':r.status==='reduced'?'↓ Réduit':r.status==='boosted'?'↑ Renforcé':'< Min.';
+          const statusColor = r.status==='ok'||r.status==='boosted'?'#22c55e':r.status==='overweight'||r.status==='deferred'?'var(--muted)':'#f59e0b';
+          const allocMois = totalEtfPct>0?Math.round(r.allocationPct/totalEtfPct*etfBudget):0;
+          return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:8px">
+            <!-- Ligne 1 : ticker + nom + statut + suppr -->
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:8px">
+              <div style="display:flex;align-items:center;gap:7px;min-width:0;flex:1">
+                <span class="chip" style="flex-shrink:0">${esc(r.ticker)}</span>
+                <span style="font-size:0.82rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:5px;flex-shrink:0">
+                <span style="font-size:0.72rem;font-weight:700;color:${statusColor};white-space:nowrap">${statusLabel}</span>
+                <button class="btn-icon" onclick="delPlan('${r.id}')" title="Supprimer">🗑</button>
+              </div>
+            </div>
+            <!-- Ligne 2 : montant + % cible -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+              <div style="background:var(--bg);border-radius:8px;padding:9px 10px">
+                <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;margin-bottom:3px">Montant ce mois</div>
+                <div style="font-size:1.15rem;font-weight:800;color:${amtColor}">${r.amount>0?fc(r.amount):'—'}</div>
+                <div style="font-size:0.7rem;color:var(--muted)">${r.parts&&r.parts>0?r.parts+' part'+(r.parts>1?'s':''):'—'}${r.feePct>0&&r.amount>0?` · frais ${fc(r.feeAmt)}`:''}
+                </div>
+              </div>
+              <div style="background:var(--bg);border-radius:8px;padding:9px 10px">
+                <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;margin-bottom:3px">% Cible</div>
+                <div style="display:flex;align-items:center;gap:4px">
+                  <input type="number" value="${r.allocationPct}" min="0" max="100" step="0.1"
+                    style="width:54px;padding:4px 6px;font-size:0.85rem;min-height:36px" onchange="updPlanPct('${r.id}',this.value)">
+                  <span style="font-size:0.8rem;color:var(--muted)">%</span>
+                </div>
+                <div style="font-size:0.68rem;color:${allocMois<200&&allocMois>0?'#f59e0b':'var(--muted)'};margin-top:2px">~${allocMois}€/mois${allocMois<200&&allocMois>0?' ⚡':''}</div>
+              </div>
+            </div>
+            <!-- Ligne 3 : poids actuel → projeté + valeur -->
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;padding-top:8px;border-top:1px solid var(--border)">
+              <div style="font-size:0.75rem">
+                <span style="color:var(--muted)">${r.currentPct.toFixed(1)}%</span>
+                <span style="color:var(--muted)"> → </span>
+                <span style="color:${devColor};font-weight:600">${r.projPct.toFixed(1)}%</span>
+                <span style="color:var(--muted);font-size:0.68rem"> (cible ${r.targetPct.toFixed(1)}%)</span>
+              </div>
+              <div style="font-size:0.75rem;color:var(--muted)">${fc(r.currentVal)}${terVal!==null?` · TER ${terVal}%`:''}</div>
+            </div>
+            ${r.amount>0?`<button class="btn btn-success w-full" style="margin-top:10px;justify-content:center" onclick="execPlan('${r.id}',${r.amount.toFixed(2)},${r.parts??0})">✓ Acheter ${fc(r.amount)}</button>`:''}
+          </div>`;
+        }).join('')}</div>
         <div style="margin-top:10px;font-size:0.78rem;display:flex;gap:16px;flex-wrap:wrap">
           <span>Budget ETF utilisé: <strong class="${totalEtfUsed>etfBudget+0.01?'negative':'positive'}">${fc(totalEtfUsed)}</strong> / ${fc(etfBudget)}</span>
           ${totalEtfUsed < etfBudget - 0.5 ? `<span class="neutral">Non utilisé: ${fc(etfBudget-totalEtfUsed)}</span>` : ''}
@@ -2509,7 +2566,8 @@ function renderPlanning() {
     <div class="card">
       <div class="section-title mb16">Titres directs — Nombre de parts mensuel</div>
       ${stockItems.length ? `
-        <div class="table-wrap"><table>
+        <!-- TABLE DESKTOP -->
+        <div class="plan-desktop table-wrap"><table>
           <thead><tr>
             <th>Ticker</th><th>Nom</th><th>Parts/mois</th><th>Cours actuel</th><th title="Cash total débité (net + frais)">Montant total</th><th title="Frais de courtage en % du montant brut">Frais %</th><th>Notes</th><th></th>
           </tr></thead>
@@ -2550,6 +2608,44 @@ function renderPlanning() {
             </tr>`;
           }).join('')}</tbody>
         </table></div>
+
+        <!-- CARDS MOBILE — Titres directs -->
+        <div class="plan-mobile">${stockItems.map(item => {
+          const price  = S.data.priceCache[item.ticker]?.price ?? null;
+          const shares = item.monthlyShares ?? 0;
+          const feePct = item.feePct ?? 0;
+          const feeMul = 1 + feePct / 100;
+          const netAmt = price && shares > 0 ? shares * price : null;
+          const cashAmt = netAmt !== null ? netAmt * feeMul : null;
+          const feeAmt  = cashAmt !== null ? cashAmt - netAmt : null;
+          return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">
+              <div style="display:flex;align-items:center;gap:7px;min-width:0;flex:1">
+                <span class="chip" style="flex-shrink:0">${esc(item.ticker)}</span>
+                <span style="font-size:0.82rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.name)}</span>
+              </div>
+              <button class="btn-icon" onclick="delPlan('${item.id}')" title="Supprimer" style="flex-shrink:0">🗑</button>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+              <div style="background:var(--bg);border-radius:8px;padding:9px 10px">
+                <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Parts / mois</div>
+                <div style="display:flex;align-items:center;gap:5px">
+                  <input type="number" value="${shares}" min="0" step="1"
+                    style="width:64px;padding:4px 6px;font-size:0.85rem;min-height:36px" onchange="updPlanShares('${item.id}',this.value)">
+                  <span style="font-size:0.75rem;color:var(--muted)">parts</span>
+                </div>
+                ${price!==null?`<div style="font-size:0.68rem;color:var(--muted);margin-top:3px">Cours: ${fc(price)}</div>`:''}
+              </div>
+              <div style="background:var(--bg);border-radius:8px;padding:9px 10px">
+                <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Montant total</div>
+                <div style="font-size:1.05rem;font-weight:700;color:var(--accent)">${cashAmt!==null?fc(cashAmt):'—'}</div>
+                ${feePct>0&&feeAmt!==null?`<div style="font-size:0.68rem;color:var(--muted)">frais ${fc(feeAmt)}</div>`:''}
+              </div>
+            </div>
+            ${shares>0?`<button class="btn btn-success w-full" style="justify-content:center" onclick="execPlanShares('${item.id}',${shares})">✓ Acheter ${shares} part${shares>1?'s':''}</button>`:''}
+          </div>`;
+        }).join('')}</div>
+
         <div style="margin-top:10px;font-size:0.78rem">
           Total titres directs: <strong style="color:var(--accent)">${fc(stockBudget)}</strong>
         </div>

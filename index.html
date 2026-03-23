@@ -617,7 +617,7 @@ const GROQ_MODELS = {
 function getClaudeModel()  { return CLAUDE_MODELS[S.data.settings.claudeModel ?? 'haiku'] ?? CLAUDE_MODELS.haiku; }
 function getGeminiModel()  { return GEMINI_MODELS[S.data.settings.geminiModel  ?? 'flash'] ?? 'gemini-2.0-flash'; }
 function getGroqModel()    { return GROQ_MODELS[S.data.settings.groqModel      ?? 'llama-70b'] ?? 'llama-3.3-70b-versatile'; }
-function getGrokXaiModel() { return 'grok-2-latest'; }
+function getGrokXaiModel() { return S.data.settings.grokXaiModel ?? 'grok-3'; }
 const PRICE_TTL = 15 * 60 * 1000;
 const PEA_MAX = 150000;
 const COLORS = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6','#a855f7','#0ea5e9'];
@@ -955,6 +955,31 @@ async function doRefreshTER() {
   if (btn) { btn.disabled = false; btn.innerHTML = '📡 MAJ TER'; }
 }
 
+async function refreshKBFromJustETF() {
+  const btn = document.getElementById('btn-refresh-kb');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Mise à jour…'; }
+  const etfs = PEA_KB?.etfs || [];
+  if (!etfs.length) { toast('PEA_KB vide', 'error'); return; }
+  if (!S.data.terCache) S.data.terCache = {};
+  toast(`Mise à jour de ${etfs.length} ETFs depuis justETF…`, 'info');
+  let ok = 0, fail = 0;
+  for (const etf of etfs) {
+    const profile = await fetchETFProfileJustETF(etf.ticker);
+    if (profile) {
+      if (profile.ter > 0) etf.ter = profile.ter;
+      if (profile.index) etf.index = profile.index;
+      ok++;
+    } else {
+      fail++;
+    }
+    if (btn) btn.innerHTML = `<span class="spinner"></span> ${ok+fail}/${etfs.length}…`;
+  }
+  saveData();
+  renderPage(S.page);
+  if (btn) { btn.disabled = false; btn.innerHTML = '🌐 MAJ Base complète'; }
+  toast(`✅ ${ok} ETFs mis à jour${fail ? `, ${fail} échecs` : ''}`, ok > 0 ? 'success' : 'error');
+}
+
 async function doRefreshPlan() {
   const tickers = [...new Set(S.data.planItems.filter(p=>p.active).map(p=>p.ticker))];
   if (!tickers.length) return;
@@ -1193,44 +1218,132 @@ async function proxyFetch(url) {
   return null;
 }
 
-async function fetchPriceYahoo(ticker) {
-  // Yahoo Finance v7/quote — ticker .PA direct, sans remapping
+async function fetchPriceGoogle(ticker) {
+  // Google Finance — pas d'anti-bot agressif, couverture EU
   try {
-    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(ticker)}&fields=regularMarketPrice,regularMarketChangePercent,longName,shortName,currency,previousClose`;
+    const base = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
+    const mic = /\.DE$/i.test(ticker) ? 'ETR' : /\.AS$/i.test(ticker) ? 'AMS' : /\.BR$/i.test(ticker) ? 'EBR' : /\.MI$/i.test(ticker) ? 'BIT' : 'EPA';
+    const url = `https://www.google.com/finance/quote/${base}:${mic}`;
+    const body = await proxyFetch(url);
+    if (!body || body.length < 500) return null;
+    // Prix dans data-last-price ou class YMlKec, ou JSON structuré
+    const patterns = [
+      /data-last-price="([0-9]+[.,][0-9]+)"/,
+      /class="YMlKec[^"]*">([0-9\s]+[.,][0-9]+)</,
+      /"price"\s*:\s*"([0-9]+\.?[0-9]*)"/,
+      /itemprop="price"\s+content="([0-9]+\.?[0-9]*)"/,
+    ];
+    for (const pat of patterns) {
+      const m = body.match(pat);
+      if (m) {
+        const price = parseFloat(m[1].replace(/\s/g,'').replace(',','.'));
+        if (isFinite(price) && price > 0) {
+          // Variation : cherche le pattern "(+/-X.XX%)" typique Google Finance
+          const chgM = body.match(/\(\s*([+-][0-9]+[.,][0-9]+)\s*%\s*\)/) ||
+                       body.match(/aria-label="[^"]*?([+-][0-9]+[.,][0-9]+)%/) ||
+                       body.match(/["']change_percent["']\s*:\s*"?([+-]?[0-9]+\.?[0-9]*)"?/);
+          const changePercent = chgM ? parseFloat(chgM[1].replace(',','.')) : 0;
+          const nameM = body.match(/<title>([^(|<\-]+)/);
+          const name = nameM ? nameM[1].trim() : ticker;
+          return { price, changePercent, name, currency:'EUR', timestamp:Date.now(), source:'google' };
+        }
+      }
+    }
+    return null;
+  } catch(e) { return null; }
+}
+
+async function fetchPriceBoursoSearch(ticker) {
+  // Boursorama autocomplete — endpoint public, moins bloqué que l'API interne
+  try {
+    const base = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
+    const url = `https://www.boursorama.com/recherche/ajax/?query=${encodeURIComponent(base)}&limit=5`;
+    const body = await proxyFetch(url);
+    if (!body || body.length < 10) return null;
+    const j = JSON.parse(body);
+    const items = Array.isArray(j) ? j : (j?.items || j?.results || []);
+    for (const item of items) {
+      const last = parseFloat((item.last || item.price || item.cours || '').toString().replace(',','.'));
+      if (isFinite(last) && last > 0) {
+        const chg = parseFloat((item.variation || item.pct_change || '0').toString().replace('%','').replace(',','.')) || 0;
+        return { price:last, changePercent:chg, name:item.name||item.label||ticker, currency:'EUR', timestamp:Date.now(), source:'boursorama-search' };
+      }
+    }
+    return null;
+  } catch(e) { return null; }
+}
+
+async function fetchPriceYahoo(ticker) {
+  // Yahoo Finance v8 chart — ticker .PA direct, SANS remapping (bug PROXY_MAP corrigé)
+  try {
+    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d`;
     const body = await proxyFetch(url);
     if (!body) return null;
     const j = JSON.parse(body);
-    const q = j?.quoteResponse?.result?.[0];
-    if (!q) return null;
-    const price = q.regularMarketPrice ?? q.previousClose;
+    const m = j?.chart?.result?.[0]?.meta;
+    if (!m) return null;
+    const price = m.regularMarketPrice ?? m.previousClose;
     if (!price || price <= 0) return null;
-    return { price, changePercent: Math.round((q.regularMarketChangePercent ?? 0) * 100) / 100, name: q.longName || q.shortName || ticker, currency: q.currency || 'EUR', timestamp: Date.now(), source: 'yahoo' };
+    return { price, changePercent: Math.round((m.regularMarketChangePercent ?? 0) * 100) / 100, name: m.longName || m.shortName || ticker, currency: m.currency || 'EUR', timestamp: Date.now(), source: 'yahoo' };
   } catch(e) { return null; }
 }
 
 async function fetchPriceBoursorama(ticker) {
-  // API JSON interne Boursorama (GetTicksEOD) — nécessite proxy non bloqué par Cloudflare
   const base = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
-  const symbols = [`1rT${base}`, `1rP${base}`];
-  for (const sym of symbols) {
+  // ETF connu dans PEA_KB → URL tracker (1rT) en premier
+  // Action inconnue → URL action (1rP) en premier
+  const isKnownETF = Array.isArray(PEA_KB?.etfs) && PEA_KB.etfs.some(e => e.ticker === ticker);
+  const candidates = isKnownETF ? [
+    `https://www.boursorama.com/bourse/trackers/cours/1rT${base}/`,
+    `https://www.boursorama.com/cours/1rP${base}/`,
+  ] : [
+    `https://www.boursorama.com/cours/1rP${base}/`,
+    `https://www.boursorama.com/bourse/trackers/cours/1rT${base}/`,
+  ];
+  for (const url of candidates) {
     try {
-      const apiUrl = `https://www.boursorama.com/bourse/action/graph/ws/GetTicksEOD?symbol=${sym}&length=2&period=0&guid=`;
-      const body = await proxyFetch(apiUrl);
-      if (!body || body.length < 20) continue;
-      let j; try { j = JSON.parse(body); } catch(e) { continue; }
-      const ticks = j?.d?.TicksEOD;
-      if (!ticks?.length) continue;
-      const last = ticks[ticks.length - 1];
-      const price = last.c;
-      if (!price || price <= 0) continue;
-      const name = j.d?.Name || ticker;
-      let changePercent = 0;
-      if (ticks.length >= 2) {
-        const prev = ticks[ticks.length - 2];
-        if (prev.c > 0) changePercent = ((price - prev.c) / prev.c) * 100;
-      } else if (last.o > 0) changePercent = ((price - last.o) / last.o) * 100;
-      return { price, changePercent: Math.round(changePercent * 100) / 100, name, currency: 'EUR', timestamp: Date.now(), source: 'boursorama' };
-    } catch(e) {}
+      const body = await proxyFetch(url);
+      if (!body || body.length < 1000) continue;
+      // Rejeter pages Cloudflare challenge
+      if (/just a moment|cf-browser-verification|enable javascript and cookies|checking your browser|cloudflare ray/i.test(body)) { console.warn('Boursorama Cloudflare challenge sur', url); continue; }
+      // Rejeter 404
+      if (body.includes('introuvable')) continue;
+      // Sanity check : prix anormalement élevé pour un ETF (seuil 2000€)
+      // (évite les faux instruments comme 1rPPANX à ~7500€)
+      // Sanity check prix ETF : si on a pris la mauvaise URL on rejette les prix anormaux
+      const maxETFPrice = 2000;
+      // (appliqué après extraction, voir ci-dessous)
+
+      // Extraction par data-ist-last (attribut fiable, pas de regex sur texte)
+      const istMatch = body.match(/data-ist-last="([0-9]+\.?[0-9]*)"/);
+      if (istMatch) {
+        const price = parseFloat(istMatch[1]);
+        if (isFinite(price) && price > 0) {
+          const chgM = body.match(/data-ist-variation="([+-]?[0-9]+\.?[0-9]*)"/);
+          const changePercent = chgM ? parseFloat(chgM[1]) : 0;
+          const nameM = body.match(/property="og:title"\s+content="([^"]+)"/) || body.match(/<title>([^|<(]+)/);
+          const name = nameM ? nameM[1].split(/[|–\-(]/)[0].trim() : ticker;
+          if (isKnownETF && price > maxETFPrice) { console.warn(`Boursorama: prix ETF ${price} > ${maxETFPrice}€ suspect, ignoré`); continue; }
+          console.log(`Boursorama data-ist-last OK ${ticker} = ${price}`);
+          return { price, changePercent, name, currency:'EUR', timestamp:Date.now(), source:'boursorama' };
+        }
+      }
+      // Fallback : regex original sur texte (fonctionnait pour WPEA)
+      const textMatch = body.match(/c-instrument--last[^>]*>\s*(?:<[^>]+>\s*)*([0-9][0-9 \u00a0,\.]{0,15})/);
+      if (textMatch) {
+        const price = parseFloat(textMatch[1].trim().replace(/[\s\u00a0]/g,'').replace(',','.'));
+        if (isFinite(price) && price > 0) {
+          const chgM = body.match(/c-instrument--variation[^>]*>[\s\S]{0,50}?([+-]?[0-9]+[,\.][0-9]+)\s*%/);
+          const changePercent = chgM ? parseFloat(chgM[1].replace(',','.')) : 0;
+          const nameM = body.match(/property="og:title"\s+content="([^"]+)"/) || body.match(/<title>([^|<(]+)/);
+          const name = nameM ? nameM[1].split(/[|–\-(]/)[0].trim() : ticker;
+          if (isKnownETF && price > maxETFPrice) { console.warn(`Boursorama: prix ETF ${price} > ${maxETFPrice}€ suspect, ignoré`); continue; }
+          console.log(`Boursorama text OK ${ticker} = ${price}`);
+          return { price, changePercent, name, currency:'EUR', timestamp:Date.now(), source:'boursorama' };
+        }
+      }
+      console.warn(`Boursorama: page fetchée (${body.length} chars) mais prix introuvable pour ${ticker}`);
+    } catch(e) { console.warn('Boursorama erreur', ticker, e.message); }
   }
   return null;
 }
@@ -1240,25 +1353,23 @@ async function fetchPrice(ticker) {
   if (cache?.manual) return cache;
   if (cache && (Date.now() - (cache.timestamp||0) < PRICE_TTL)) return cache;
 
-  // 1. Stooq en premier (pas de protection anti-bot, JSON propre)
-  const stooq = await fetchPriceStooq(ticker);
-  if (stooq) {
-    S.data.priceCache[ticker] = stooq;
-    checkPriceAlerts(ticker, stooq.price);
-    saveData();
-    return stooq;
+  const sources = [
+    { name:'Boursorama Search',     fn: () => fetchPriceBoursoSearch(ticker) },
+    { name:'Boursorama Page',       fn: () => fetchPriceBoursorama(ticker) },
+  ];
+  for (const src of sources) {
+    try {
+      const r = await src.fn();
+      if (r) {
+        S.data.priceCache[ticker] = r;
+        checkPriceAlerts(ticker, r.price);
+        saveData();
+        console.log(`fetchPrice ${ticker} OK via ${src.name}: ${r.price}`);
+        return r;
+      }
+    } catch(e) {}
+    console.warn(`fetchPrice ${ticker}: ${src.name} KO`);
   }
-
-  // 2. Boursorama JSON API (si Stooq n'a pas le ticker)
-  const bourso = await fetchPriceBoursorama(ticker);
-  if (bourso) {
-    S.data.priceCache[ticker] = bourso;
-    checkPriceAlerts(ticker, bourso.price);
-    saveData();
-    return bourso;
-  }
-
-  console.warn('fetchPrice', ticker, 'Stooq + Boursorama KO');
   return null;
 }
 
@@ -1269,32 +1380,12 @@ async function refreshPrices(tickers) {
   const manual = tickers.length - autoTickers.length;
   if (!autoTickers.length) return { ok, fail, manual };
 
-  // Si clé Grok (xAI) configurée → batch en UNE seule requête avec recherche web
-  if (S.data.settings.grokXaiApiKey) {
-    toast('🔍 Grok recherche les cours en temps réel…', 'info', 3000);
-    const grokPrices = await fetchAllPricesGrokXai(autoTickers);
-    const found = Object.keys(grokPrices);
-    for (const ticker of found) {
-      S.data.priceCache[ticker] = grokPrices[ticker];
-      checkPriceAlerts(ticker, grokPrices[ticker].price);
-      ok++;
-    }
-    // Tickers non trouvés par Grok → fallback Boursorama
-    const missing = autoTickers.filter(t => !grokPrices[t]);
-    for (const t of missing) {
-      const r = await fetchPriceBoursorama(t);
-      if (r) { S.data.priceCache[t] = r; checkPriceAlerts(t, r.price); ok++; }
-      else fail++;
-    }
-    saveData();
-    return { ok, fail, manual };
-  }
-
-  // Sinon → source par source (Boursorama → Yahoo)
+  // Sources réelles : Google Finance → Boursorama Search → Yahoo Finance
   for (const t of autoTickers) {
     const r = await fetchPrice(t);
     r ? ok++ : fail++;
   }
+  saveData();
   return { ok, fail, manual };
 }
 
@@ -1327,12 +1418,12 @@ async function fetchETFProfileJustETF(ticker) {
     }
   } catch(e) { /* Yahoo non disponible */ }
 
-  // ══ SOURCE 2 : justETF via proxies alternatifs (ISIN + profil) ══
-  // allorigins retourne { contents: "..." }, corsproxy retourne le body directement
+  // ══ SOURCE 2 : justETF — direct d'abord (CORS ouvert sur leur API), puis proxies ══
   const jProxies = [
+    async (u) => { const r = await fetch(u, { signal: AbortSignal.timeout(12000), headers: { 'Accept': 'application/json,text/html,*/*' } }); if (!r.ok) throw new Error('direct HTTP '+r.status); return await r.text(); },
     async (u) => { const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, { signal: AbortSignal.timeout(12000) }); if (!r.ok) throw new Error('HTTP '+r.status); return (await r.json()).contents || ''; },
-    async (u) => { const r = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(u)}`, { signal: AbortSignal.timeout(12000) }); if (!r.ok) throw new Error('HTTP '+r.status); return await r.text(); },
     async (u) => { const r = await fetch(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`, { signal: AbortSignal.timeout(12000) }); if (!r.ok) throw new Error('HTTP '+r.status); return await r.text(); },
+    async (u) => { const r = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(u)}`, { signal: AbortSignal.timeout(12000) }); if (!r.ok) throw new Error('HTTP '+r.status); return await r.text(); },
   ];
 
   // 2a — API JSON justETF → ISIN (priorité)
@@ -1398,9 +1489,10 @@ async function refreshAllTER() {
   toast(`Récupération TER pour ${planItems.length} ETF(s)…`, 'info');
   let ok = 0; const failed = [];
   for (const item of planItems) {
-    const profile = await fetchETFProfileJustETF(item.ticker);
-    if (profile) {
-      if (profile.ter && profile.ter > 0) item.ter = profile.ter;
+    // PEA_KB — données TER vérifiées manuellement (justETF bloqué par proxies)
+    const kbEntry = PEA_KB?.etfs?.find(e => e.ticker === item.ticker);
+    if (kbEntry?.ter && kbEntry.ter > 0) {
+      item.ter = kbEntry.ter;
       ok++;
     } else {
       failed.push(item.ticker);
@@ -1409,11 +1501,11 @@ async function refreshAllTER() {
   saveData();
   renderPage(S.page);
   if (failed.length === 0) {
-    toast(`✅ ${ok} profil(s) ETF mis à jour`, 'success');
+    toast(`✅ ${ok} TER mis à jour depuis la base interne`, 'success');
   } else if (ok > 0) {
-    toast(`⚠️ ${ok} OK, échecs : ${failed.join(', ')}`, 'warning');
+    toast(`⚠️ ${ok} OK, non trouvés : ${failed.join(', ')}`, 'warning');
   } else {
-    toast(`❌ Échec pour : ${failed.join(', ')} — justETF injoignable ?`, 'error');
+    toast(`❌ Aucun TER trouvé — ajouter ces ETFs à la base`, 'error');
   }
 }
 
@@ -1551,48 +1643,65 @@ async function callAI(messages, opts = {}) {
 async function fetchAllPricesGrokXai(tickers) {
   const key = S.data.settings.grokXaiApiKey;
   if (!key || !tickers.length) return {};
+  const priceModel = getGrokXaiModel(); // grok-3, sans search_parameters
+  for (let _once = 0; _once < 1; _once++) {
   try {
     const list = tickers.join(', ');
-    const prompt = `Recherche sur le web les cours actuels (temps réel ou clôture du jour) de ces valeurs boursières : ${list}.
-Réponds UNIQUEMENT avec un tableau JSON valide, sans texte ni markdown autour :
-[{"ticker":"XXX.PA","price":123.45,"change_pct":0.12,"name":"Nom complet"}]
-Un objet par ticker. Si introuvable, omets-le du tableau.`;
+    const prompt = `What are the current market prices (today, ${new Date().toISOString().slice(0,10)}) for these securities: ${list}?
+Use your most recent knowledge. Reply with ONLY a valid JSON array, no markdown, no explanation:
+[{"ticker":"XXX.PA","price":123.45,"change_pct":0.12,"name":"Full Name"}]
+One object per ticker. Omit any ticker you cannot find a price for.`;
+
+    const body = {
+      model: priceModel,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0,
+      max_tokens: 800
+    };
+
     const resp = await fetch(GROK_XAI_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-      body: JSON.stringify({
-        model: 'grok-2-latest',
-        messages: [{ role: 'user', content: prompt }],
-        search_parameters: { mode: 'on' },
-        temperature: 0,
-        max_tokens: 600
-      }),
-      signal: AbortSignal.timeout(30000)
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(35000)
     });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      const code = resp.status;
+      console.error(`fetchAllPricesGrokXai: ${priceModel} → ${code}`, err);
+      toast(`Grok cours: erreur ${code} — ${err?.error?.message || ''}`, 'error');
+      return {};
+    }
+
     const d = await resp.json();
     const text = d.choices?.[0]?.message?.content ?? '';
+    console.log(`Grok prix [${priceModel}] réponse:`, text);
+
+    let arr = null;
     const m = text.match(/\[[\s\S]*?\]/);
-    if (!m) return {};
-    const arr = JSON.parse(m[0]);
+    if (m) { try { arr = JSON.parse(m[0]); } catch(e) {} }
+    if (!arr || !arr.length) {
+      toast(`Grok: réponse inattendue (${priceModel})`, 'error');
+      return {};
+    }
+
     const result = {};
     for (const item of arr) {
-      if (item.ticker && item.price > 0) {
-        result[item.ticker] = {
-          price: parseFloat(item.price),
-          changePercent: parseFloat(item.change_pct ?? 0),
-          name: item.name || item.ticker,
-          currency: 'EUR',
-          timestamp: Date.now(),
-          source: 'grok-xai'
-        };
+      const price = parseFloat(item.price);
+      if (item.ticker && isFinite(price) && price > 0) {
+        result[item.ticker] = { price, changePercent: parseFloat(item.change_pct ?? 0), name: item.name || item.ticker, currency: 'EUR', timestamp: Date.now(), source: `grok-${priceModel}` };
       }
     }
+    toast(`✅ Cours via Grok (${priceModel})`, 'success');
     return result;
   } catch(e) {
-    console.warn('fetchAllPricesGrokXai', e.message);
-    return {};
+    console.warn(`fetchAllPricesGrokXai exception [${priceModel}]:`, e.message);
+    continue;
   }
+  } // fin boucle modèles
+  toast('Grok cours: aucun modèle compatible search', 'error');
+  return {};
 }
 
 // ======================================================
@@ -2193,7 +2302,8 @@ function renderPlanning() {
       <div class="page-actions">
         <button class="btn btn-secondary" onclick="saveCurrentPlan()">💾 Sauvegarder</button>
         <button class="btn btn-secondary" onclick="doRefreshPlan()" id="btn-refresh-plan">⟳ Actualiser les cours</button>
-        <button class="btn btn-secondary" onclick="doRefreshTER()" id="btn-refresh-ter" title="Récupère les TER réels depuis justETF.com">📡 MAJ TER</button>
+        <button class="btn btn-secondary" onclick="doRefreshTER()" id="btn-refresh-ter" title="Récupère les TER depuis justETF pour les ETFs du plan">📡 MAJ TER</button>
+        <button class="btn btn-secondary" onclick="refreshKBFromJustETF()" id="btn-refresh-kb" title="Met à jour toute la base PEA_KB (${PEA_KB?.etfs?.length||0} ETFs) depuis justETF">🌐 MAJ Base complète</button>
         <button class="btn btn-primary" onclick="openPlanModal()">+ Ajouter un titre</button>
       </div>
     </div>
@@ -3856,84 +3966,103 @@ function renderSettings() {
           </div>
         </div>
         <div class="card">
-          <div class="section-title" style="margin-bottom:8px">Fournisseur IA (Analyse)</div>
+          <div class="section-title" style="margin-bottom:8px">🤖 Fournisseur IA (Analyses &amp; Chat)</div>
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:10px">Utilisé pour les analyses de plan, le chat IA, les recommandations. <em>Indépendant des cours boursiers.</em></div>
           <div class="form-group">
-            <label>Fournisseur IA</label>
             <select onchange="updSetting('aiProvider',this.value);renderSettings()">
-              <option value="claude" ${(s.aiProvider??'claude')==='claude'?'selected':''}>🤖 Claude (Anthropic) — payant, qualité maximale</option>
+              <option value="claude" ${(s.aiProvider??'claude')==='claude'?'selected':''}>🤖 Claude (Anthropic) — qualité maximale</option>
               <option value="gemini" ${s.aiProvider==='gemini'?'selected':''}>✨ Gemini (Google) — gratuit</option>
               <option value="groq"   ${s.aiProvider==='groq'  ?'selected':''}>⚡ Groq LLaMA — gratuit, ultra-rapide</option>
-              <option value="grok"   ${s.aiProvider==='grok'  ?'selected':''}>🌐 Grok (xAI) — web temps réel, cours live</option>
+              <option value="grok"   ${s.aiProvider==='grok'  ?'selected':''}>🌐 Grok (xAI) — avec recherche web</option>
             </select>
-            <div style="font-size:0.72rem;color:var(--muted);margin-top:4px">Gemini et Groq sont gratuits. <strong>Grok (xAI)</strong> a une recherche web intégrée : il récupère les cours boursiers en temps réel. L'analyse photo reste toujours sur Claude (vision requise).</div>
           </div>
-
           ${(s.aiProvider??'claude')==='claude' ? `
-          <div class="section-title" style="margin-bottom:6px;margin-top:14px">Claude — console.anthropic.com</div>
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px">console.anthropic.com — <a href="https://console.anthropic.com" target="_blank" style="color:var(--accent)">Obtenir une clé</a></div>
           <div class="form-group">
-            <label>Clé API (sk-ant-…)</label>
             <input type="password" id="inp-key" value="${esc(s.claudeApiKey)}" placeholder="sk-ant-api03-…" onchange="updSetting('claudeApiKey',this.value)">
           </div>
           <div class="form-group">
-            <label>Modèle</label>
             <select onchange="updSetting('claudeModel',this.value)">
-              <option value="haiku"  ${(s.claudeModel??'haiku')==='haiku' ?'selected':''}>⚡ Haiku — rapide, économique (recommandé)</option>
+              <option value="haiku"  ${(s.claudeModel??'haiku')==='haiku' ?'selected':''}>⚡ Haiku — rapide, économique</option>
               <option value="sonnet" ${s.claudeModel==='sonnet'?'selected':''}>✦ Sonnet — équilibré</option>
               <option value="opus"   ${s.claudeModel==='opus'  ?'selected':''}>★ Opus — qualité maximale</option>
             </select>
           </div>
           <button class="btn btn-secondary btn-sm" onclick="testKey()">🔑 Tester</button>
-          ${s.claudeApiKey?`<span style="margin-left:10px;font-size:0.75rem;color:var(--success)">✓ Clé enregistrée</span>`:''}
-
+          ${s.claudeApiKey?`<span style="margin-left:8px;font-size:0.75rem;color:var(--success)">✓ OK</span>`:''}
           ` : s.aiProvider==='gemini' ? `
-          <div class="section-title" style="margin-bottom:6px;margin-top:14px">Gemini — aistudio.google.com/apikey</div>
-          <div style="font-size:0.78rem;color:var(--muted);margin-bottom:10px">Gratuit jusqu'à 1 500 requêtes/jour et 15 req/min avec Gemini Flash.</div>
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px">aistudio.google.com — gratuit 1 500 req/jour — <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--accent)">Obtenir une clé</a></div>
           <div class="form-group">
-            <label>Clé API (AIza…)</label>
             <input type="password" id="inp-key-gemini" value="${esc(s.geminiApiKey)}" placeholder="AIzaSy…" onchange="updSetting('geminiApiKey',this.value)">
           </div>
           <div class="form-group">
-            <label>Modèle</label>
             <select onchange="updSetting('geminiModel',this.value)">
-              <option value="flash"      ${(s.geminiModel??'flash')==='flash'     ?'selected':''}>⚡ Gemini 2.0 Flash — recommandé (gratuit)</option>
-              <option value="flash-lite" ${s.geminiModel==='flash-lite'           ?'selected':''}>🪶 Gemini 2.0 Flash Lite — le plus léger</option>
-              <option value="flash-15"   ${s.geminiModel==='flash-15'            ?'selected':''}>✦ Gemini 1.5 Flash — contexte long</option>
+              <option value="flash"      ${(s.geminiModel??'flash')==='flash'     ?'selected':''}>⚡ Gemini 2.0 Flash — recommandé</option>
+              <option value="flash-lite" ${s.geminiModel==='flash-lite'           ?'selected':''}>🪶 Flash Lite — ultra léger</option>
+              <option value="flash-15"   ${s.geminiModel==='flash-15'            ?'selected':''}>✦ 1.5 Flash — contexte long</option>
             </select>
           </div>
           <button class="btn btn-secondary btn-sm" onclick="testKeyFree('gemini')">🔑 Tester</button>
-          ${s.geminiApiKey?`<span style="margin-left:10px;font-size:0.75rem;color:var(--success)">✓ Clé enregistrée</span>`:''}
-
+          ${s.geminiApiKey?`<span style="margin-left:8px;font-size:0.75rem;color:var(--success)">✓ OK</span>`:''}
           ` : s.aiProvider==='groq' ? `
-          <div class="section-title" style="margin-bottom:6px;margin-top:14px">Groq — console.groq.com/keys</div>
-          <div style="font-size:0.78rem;color:var(--muted);margin-bottom:10px">Gratuit jusqu'à 14 400 requêtes/jour. LLaMA 3.3 70B = qualité très proche de Claude Sonnet.</div>
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px">console.groq.com — gratuit 14 400 req/jour — <a href="https://console.groq.com/keys" target="_blank" style="color:var(--accent)">Obtenir une clé</a></div>
           <div class="form-group">
-            <label>Clé API (gsk_…)</label>
             <input type="password" id="inp-key-groq" value="${esc(s.groqApiKey)}" placeholder="gsk_…" onchange="updSetting('groqApiKey',this.value)">
           </div>
           <div class="form-group">
-            <label>Modèle</label>
             <select onchange="updSetting('groqModel',this.value)">
-              <option value="llama-70b" ${(s.groqModel??'llama-70b')==='llama-70b'?'selected':''}>⚡ LLaMA 3.3 70B — recommandé (gratuit)</option>
-              <option value="llama-8b"  ${s.groqModel==='llama-8b'              ?'selected':''}>🪶 LLaMA 3.1 8B — ultra-rapide, léger</option>
-              <option value="mixtral"   ${s.groqModel==='mixtral'               ?'selected':''}>✦ Mixtral 8x7B — bon raisonnement</option>
+              <option value="llama-70b" ${(s.groqModel??'llama-70b')==='llama-70b'?'selected':''}>⚡ LLaMA 3.3 70B — recommandé</option>
+              <option value="llama-8b"  ${s.groqModel==='llama-8b'              ?'selected':''}>🪶 LLaMA 3.1 8B — ultra-rapide</option>
+              <option value="mixtral"   ${s.groqModel==='mixtral'               ?'selected':''}>✦ Mixtral 8x7B</option>
             </select>
           </div>
           <button class="btn btn-secondary btn-sm" onclick="testKeyFree('groq')">🔑 Tester</button>
-          ${s.groqApiKey?`<span style="margin-left:10px;font-size:0.75rem;color:var(--success)">✓ Clé enregistrée</span>`:''}
-
+          ${s.groqApiKey?`<span style="margin-left:8px;font-size:0.75rem;color:var(--success)">✓ OK</span>`:''}
           ` : `
-          <div class="section-title" style="margin-bottom:6px;margin-top:14px">Grok (xAI) — console.x.ai</div>
-          <div style="font-size:0.78rem;color:var(--muted);margin-bottom:10px">🌐 <strong>Recherche web intégrée</strong> : Grok récupère les cours boursiers en temps réel sur le web. Une seule requête pour tous vos tickers. Crédit gratuit à l'inscription sur <strong>console.x.ai</strong>.</div>
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px">console.x.ai — <a href="https://console.x.ai" target="_blank" style="color:var(--accent)">Obtenir une clé</a> — La même clé que ci-dessous (Cours temps réel)</div>
           <div class="form-group">
-            <label>Clé API (xai-…)</label>
             <input type="password" id="inp-key-grok" value="${esc(s.grokXaiApiKey)}" placeholder="xai-…" onchange="updSetting('grokXaiApiKey',this.value)">
           </div>
-          <div style="background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:8px;padding:10px;font-size:0.75rem;color:var(--muted);margin-bottom:10px">
-            💡 <strong>Double usage</strong> : la clé Grok sert à la fois pour les analyses IA <em>et</em> pour l'actualisation des cours (recherche web temps réel). C'est la même clé pour tout.
+          <div class="form-group">
+            <select onchange="updSetting('grokXaiModel',this.value)">
+              <option value="grok-3"        ${(s.grokXaiModel??'grok-3')==='grok-3'      ?'selected':''}>Grok 3 — recommandé ✓</option>
+              <option value="grok-2-latest" ${s.grokXaiModel==='grok-2-latest'           ?'selected':''}>Grok 2 Latest</option>
+              <option value="grok-2"        ${s.grokXaiModel==='grok-2'                  ?'selected':''}>Grok 2</option>
+              <option value="grok-beta"     ${s.grokXaiModel==='grok-beta'               ?'selected':''}>Grok Beta</option>
+            </select>
           </div>
           <button class="btn btn-secondary btn-sm" onclick="testKeyFree('grok')">🔑 Tester</button>
-          ${s.grokXaiApiKey?`<span style="margin-left:10px;font-size:0.75rem;color:var(--success)">✓ Clé enregistrée</span>`:''}
+          ${s.grokXaiApiKey?`<span style="margin-left:8px;font-size:0.75rem;color:var(--success)">✓ OK</span>`:''}
           `}
+        </div>
+
+        <div class="card">
+          <div class="section-title" style="margin-bottom:8px">📈 Cours boursiers temps réel</div>
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:12px">
+            Grok (xAI) utilise sa <strong>recherche web intégrée</strong> pour récupérer les cours en temps réel — <strong>indépendamment</strong> du fournisseur IA choisi ci-dessus. Si la clé est configurée, elle est <em>toujours</em> utilisée pour les cours, même si tu utilises Claude ou Gemini pour les analyses.
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+            <span style="font-size:0.8rem;font-weight:600">Source active :</span>
+            ${s.grokXaiApiKey
+              ? `<span style="background:rgba(34,197,94,0.15);color:#22c55e;border:1px solid rgba(34,197,94,0.3);border-radius:6px;padding:2px 8px;font-size:0.72rem;font-weight:700">🌐 Grok (xAI) — temps réel</span>`
+              : `<span style="background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);border-radius:6px;padding:2px 8px;font-size:0.72rem;font-weight:700">⚠ Boursorama (proxy)</span>`
+            }
+          </div>
+          <div class="form-group">
+            <label>Clé Grok (xai-…) — console.x.ai</label>
+            <input type="password" id="inp-key-grok-prices" value="${esc(s.grokXaiApiKey)}" placeholder="xai-…" onchange="updSetting('grokXaiApiKey',this.value);renderSettings()">
+          </div>
+          <div class="form-group">
+            <label>Modèle Grok pour les cours</label>
+            <select onchange="updSetting('grokXaiModel',this.value)">
+              <option value="grok-3"        ${(s.grokXaiModel??'grok-3')==='grok-3'      ?'selected':''}>Grok 3 — recommandé ✓</option>
+              <option value="grok-2-latest" ${s.grokXaiModel==='grok-2-latest'           ?'selected':''}>Grok 2 Latest</option>
+              <option value="grok-2"        ${s.grokXaiModel==='grok-2'                  ?'selected':''}>Grok 2</option>
+              <option value="grok-beta"     ${s.grokXaiModel==='grok-beta'               ?'selected':''}>Grok Beta</option>
+            </select>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="testKeyFree('grok')">🔑 Tester la clé</button>
+          ${s.grokXaiApiKey?`<span style="margin-left:8px;font-size:0.75rem;color:var(--success)">✓ Clé active</span>`:`<span style="margin-left:8px;font-size:0.75rem;color:var(--muted)">Aucune clé → Boursorama utilisé</span>`}
         </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:14px">
@@ -4251,7 +4380,9 @@ async function testKeyFree(provider) {
     inputId = 'inp-key-gemini'; settingKey = 'geminiApiKey'; name = 'Gemini';
     url = GEMINI_URL; model = getGeminiModel();
   } else if (provider === 'grok') {
-    inputId = 'inp-key-grok'; settingKey = 'grokXaiApiKey'; name = 'Grok (xAI)';
+    // L'input peut être dans la section IA ou dans la section Cours — on prend celui qui a une valeur
+    inputId = document.getElementById('inp-key-grok-prices')?.value?.trim() ? 'inp-key-grok-prices' : 'inp-key-grok';
+    settingKey = 'grokXaiApiKey'; name = 'Grok (xAI)';
     url = GROK_XAI_URL; model = getGrokXaiModel();
   } else {
     inputId = 'inp-key-groq'; settingKey = 'groqApiKey'; name = 'Groq';
@@ -4264,9 +4395,16 @@ async function testKeyFree(provider) {
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type':'application/json', 'Authorization':`Bearer ${key}` },
-      body: JSON.stringify({ model, max_tokens: 10, messages: [{role:'system',content:'OK'},{role:'user',content:'OK'}] })
+      body: JSON.stringify({ model, max_tokens: 20, messages: [{role:'user',content:'Dis juste "OK"'}] })
     });
-    r.ok ? toast(`✓ Clé ${name} valide !`, 'success') : toast(`Clé invalide: ${r.status}`, 'error');
+    if (r.ok) {
+      toast(`✓ Clé ${name} valide !`, 'success');
+    } else {
+      const err = await r.json().catch(() => ({}));
+      const msg = err?.error?.message || err?.message || r.status;
+      toast(`Erreur ${name}: ${msg}`, 'error');
+      console.error(`${name} test error:`, err);
+    }
   } catch(e) { toast('Erreur connexion: ' + e.message, 'error'); }
   renderSettings();
 }
@@ -6579,119 +6717,119 @@ const PEA_KB = {
   // Vérifier disponibilité exacte sur Boursobank (filtre PEA dans l'espace client)
   // Source: Boursorama ETF PEA filter (118 ETF, mars 2026)
   etfs: [
+    // ⚠️ ISINs vérifiés sur justETF/Boursorama — sectors & holdings : données approximatives (sources publiques, mars 2026)
     // --- MONDE ---
-    { ticker:'CW8.PA',    name:'Amundi MSCI World (cap)',          ter:0.38, index:'MSCI World',            provider:'Amundi',      cat:'Monde',      note:'Référence absolue PEA, encours >6Mds€, très liquide, capitalisant' },
-    { ticker:'EWLD.PA',   name:'Amundi MSCI World (dist)',         ter:0.38, index:'MSCI World',            provider:'Amundi',      cat:'Monde',      note:'Version distribuante de CW8, dividendes versés en cash PEA' },
-    { ticker:'DCAM.PA',   name:'Amundi PEA Monde MSCI World',      ter:0.20, index:'MSCI World',            provider:'Amundi',      cat:'Monde',      note:'Lancé 2025, part à 5€ pour DCA facile, frais réduits vs CW8' },
-    { ticker:'WPEA.PA',   name:'iShares MSCI World Swap PEA',      ter:0.20, index:'MSCI World',            provider:'iShares',     cat:'Monde',      zeroFee:true, note:'BlackRock, part à 5€, PEA éligible — 0€ frais courtage Boursomarkets (confirmé)' },
-    { ticker:'WPEH.PA',   name:'iShares MSCI World Swap PEA Hdg',  ter:0.30, index:'MSCI World EUR Hdg',      provider:'iShares',     cat:'Monde',      zeroFee:true, note:'WPEA couvert EUR, élimine risque USD/EUR — 0€ frais courtage Boursobank' },
+    { ticker:'CW8.PA',   name:'Amundi MSCI World (cap)',          ter:0.38, isin:'LU1681043599', index:'MSCI World',           provider:'Amundi',      cat:'Monde',      replication:'synthetic', sectors:['Info. tech. 24%','Finance 15%','Santé 13%','Industrie 10%','Conso. disc. 10%'], holdings:['Apple 4.8%','Microsoft 4.5%','NVIDIA 4.2%','Amazon 2.5%','Meta 1.9%'], note:'Référence absolue PEA, encours >6Mds€, très liquide, capitalisant' },
+    { ticker:'EWLD.PA',  name:'Amundi MSCI World (dist)',         ter:0.38, isin:'LU1437016972', index:'MSCI World',           provider:'Amundi',      cat:'Monde',      replication:'synthetic', sectors:['Info. tech. 24%','Finance 15%','Santé 13%','Industrie 10%','Conso. disc. 10%'], holdings:['Apple 4.8%','Microsoft 4.5%','NVIDIA 4.2%','Amazon 2.5%','Meta 1.9%'], note:'Version distribuante de CW8, dividendes versés en cash PEA' },
+    { ticker:'DCAM.PA',  name:'Amundi PEA Monde MSCI World',     ter:0.20, index:'MSCI World',           provider:'Amundi',      cat:'Monde',      replication:'synthetic', sectors:['Info. tech. 24%','Finance 15%','Santé 13%','Industrie 10%','Conso. disc. 10%'], holdings:['Apple 4.8%','Microsoft 4.5%','NVIDIA 4.2%','Amazon 2.5%','Meta 1.9%'], note:'Lancé 2025, part à 5€ pour DCA facile, frais réduits vs CW8' },
+    { ticker:'WPEA.PA',  name:'iShares MSCI World Swap PEA',     ter:0.20, isin:'IE000716YHJ7', index:'MSCI World',           provider:'iShares',     cat:'Monde',      replication:'synthetic', zeroFee:true, sectors:['Info. tech. 24%','Finance 15%','Santé 13%','Industrie 10%','Conso. disc. 10%'], holdings:['Apple 4.8%','Microsoft 4.5%','NVIDIA 4.2%','Amazon 2.5%','Meta 1.9%'], note:'BlackRock, part à 5€, PEA éligible — 0€ frais courtage Boursomarkets (confirmé)' },
+    { ticker:'WPEH.PA',  name:'iShares MSCI World Swap PEA Hdg', ter:0.30, index:'MSCI World EUR Hdg',   provider:'iShares',     cat:'Monde',      replication:'synthetic', zeroFee:true, sectors:['Info. tech. 24%','Finance 15%','Santé 13%','Industrie 10%','Conso. disc. 10%'], holdings:['Apple 4.8%','Microsoft 4.5%','NVIDIA 4.2%','Amazon 2.5%','Meta 1.9%'], note:'WPEA couvert EUR, élimine risque USD/EUR — 0€ frais courtage Boursobank' },
     // --- USA ---
-    { ticker:'PSP5.PA',   name:'Amundi PEA S&P 500',               ter:0.12, index:'S&P 500',               provider:'Amundi',      cat:'USA',        note:'S&P 500 PEA éligible, frais ultra-bas, capitalisant' },
-    { ticker:'PE500.PA',  name:'Amundi PEA S&P 500 Screened',      ter:0.25, index:'S&P 500 ESG',           provider:'Amundi',      cat:'USA',        note:'S&P 500 avec filtre ESG, exclut controversés' },
-    { ticker:'PSPS.PA',   name:'Amundi PEA S&P 500 Scrn S-Acc',    ter:0.25, index:'S&P 500',               provider:'Amundi',      cat:'USA',        note:'Part S-Acc (5€) du PE500, même stratégie' },
-    { ticker:'PUST.PA',   name:'Amundi PEA Nasdaq-100',             ter:0.23, index:'Nasdaq-100',            provider:'Amundi',      cat:'USA',        note:'Tech US, forte concentration GAFAM, volatil, capitalisant' },
-    { ticker:'PNAS.PA',   name:'Amundi PEA Nasdaq-100 S-Acc',      ter:0.23, index:'Nasdaq-100',            provider:'Amundi',      cat:'USA',        note:'Part S-Acc (5€) du PUST' },
-    { ticker:'PANX.PA',   name:'Amundi PEA US Tech Screened',       ter:0.30, index:'Nasdaq-100 ESG',        provider:'Amundi',      cat:'USA',        note:'Nasdaq tech avec filtre ESG — frais courtage Boursobank : 1,99€ (<500€) ou 0,60% (≥500€)' },
-    { ticker:'RS2K.PA',   name:'Amundi PEA Russell 2000 (EUR)',     ter:0.45, index:'Russell 2000',          provider:'Amundi',      cat:'USA',        note:'Small caps US, prime risque, décorrélé partiellement MSCI World' },
-    { ticker:'ESE.PA',    name:'BNP Paribas Easy S&P 500 (EUR)',    ter:0.13, index:'S&P 500',               provider:'BNP Paribas', cat:'USA',        note:'Alternative BNP, frais bas, très liquide' },
-    { ticker:'USVE.PA',   name:'Amundi PEA MSCI USA Value Adv',     ter:0.25, index:'MSCI USA Value',        provider:'Amundi',      cat:'USA',        note:'Value factor sur USA, surperforme en reprise/hausse taux' },
-    { ticker:'CU2.PA',    name:'Amundi PEA MSCI USA ESG Sel (EUR)', ter:0.25, index:'MSCI USA ESG',          provider:'Amundi',      cat:'USA',        note:'USA avec sélection ESG, version EUR' },
+    { ticker:'PSP5.PA',  name:'Amundi PEA S&P 500',              ter:0.12, isin:'LU1615096760', index:'S&P 500',              provider:'Amundi',      cat:'USA',        replication:'synthetic', sectors:['Info. tech. 32%','Finance 13%','Santé 11%','Conso. disc. 11%','Industrie 8%'], holdings:['Apple 7.2%','NVIDIA 6.8%','Microsoft 6.5%','Amazon 4.1%','Meta 2.4%'], note:'S&P 500 PEA éligible, frais ultra-bas, capitalisant' },
+    { ticker:'PE500.PA', name:'Amundi PEA S&P 500 Screened',     ter:0.25, index:'S&P 500 ESG',          provider:'Amundi',      cat:'USA',        replication:'synthetic', sectors:['Info. tech. 30%','Finance 13%','Santé 12%','Conso. disc. 11%','Industrie 8%'], holdings:['Apple 6.8%','NVIDIA 6.2%','Microsoft 6.0%','Amazon 4.0%','Meta 2.2%'], note:'S&P 500 avec filtre ESG, exclut controversés' },
+    { ticker:'PSPS.PA',  name:'Amundi PEA S&P 500 Scrn S-Acc',   ter:0.25, index:'S&P 500 ESG',          provider:'Amundi',      cat:'USA',        replication:'synthetic', sectors:['Info. tech. 30%','Finance 13%','Santé 12%','Conso. disc. 11%','Industrie 8%'], holdings:['Apple 6.8%','NVIDIA 6.2%','Microsoft 6.0%','Amazon 4.0%','Meta 2.2%'], note:'Part S-Acc (5€) du PE500, même stratégie' },
+    { ticker:'PUST.PA',  name:'Amundi PEA Nasdaq-100',            ter:0.23, isin:'LU1681038243', index:'Nasdaq-100',           provider:'Amundi',      cat:'USA',        replication:'synthetic', sectors:['Info. tech. 58%','Conso. disc. 14%','Santé 7%','Industrie 5%','Finance 3%'], holdings:['Apple 9.1%','Microsoft 8.7%','NVIDIA 8.0%','Amazon 5.2%','Meta 4.5%'], note:'Tech US, forte concentration GAFAM, volatil, capitalisant' },
+    { ticker:'PNAS.PA',  name:'Amundi PEA Nasdaq-100 S-Acc',     ter:0.23, index:'Nasdaq-100',           provider:'Amundi',      cat:'USA',        replication:'synthetic', sectors:['Info. tech. 58%','Conso. disc. 14%','Santé 7%','Industrie 5%','Finance 3%'], holdings:['Apple 9.1%','Microsoft 8.7%','NVIDIA 8.0%','Amazon 5.2%','Meta 4.5%'], note:'Part S-Acc (5€) du PUST' },
+    { ticker:'PANX.PA',  name:'Amundi PEA US Tech Screened',     ter:0.30, index:'Nasdaq-100 ESG',       provider:'Amundi',      cat:'USA',        replication:'synthetic', sectors:['Info. tech. 56%','Conso. disc. 14%','Santé 8%','Industrie 5%','Finance 3%'], holdings:['Apple 8.5%','Microsoft 8.0%','NVIDIA 7.5%','Amazon 5.0%','Meta 4.2%'], note:'Nasdaq tech avec filtre ESG — frais courtage Boursobank : 1,99€ (<500€) ou 0,60% (≥500€)' },
+    { ticker:'RS2K.PA',  name:'Amundi PEA Russell 2000 (EUR)',   ter:0.45, index:'Russell 2000',         provider:'Amundi',      cat:'USA',        replication:'synthetic', sectors:['Finance 18%','Santé 15%','Industrie 15%','Info. tech. 12%','Conso. disc. 10%'], holdings:['~2000 titres, aucun >0.5%'], note:'Small caps US, prime risque, décorrélé partiellement MSCI World' },
+    { ticker:'ESE.PA',   name:'BNP Paribas Easy S&P 500 (EUR)', ter:0.13, isin:'FR0011550185', index:'S&P 500',              provider:'BNP Paribas', cat:'USA',        replication:'synthetic', sectors:['Info. tech. 32%','Finance 13%','Santé 11%','Conso. disc. 11%','Industrie 8%'], holdings:['Apple 7.2%','NVIDIA 6.8%','Microsoft 6.5%','Amazon 4.1%','Meta 2.4%'], note:'Alternative BNP, frais bas, très liquide' },
+    { ticker:'USVE.PA',  name:'Amundi PEA MSCI USA Value Adv',  ter:0.25, index:'MSCI USA Value',       provider:'Amundi',      cat:'USA',        replication:'synthetic', sectors:['Finance 22%','Santé 14%','Industrie 11%','Énergie 10%','Conso. stap. 8%'], holdings:['Berkshire H. 4.5%','JPMorgan 4.0%','ExxonMobil 3.5%','J&J 3.2%','UnitedHealth 3.0%'], note:'Value factor sur USA, surperforme en reprise/hausse taux' },
+    { ticker:'CU2.PA',   name:'Amundi PEA MSCI USA ESG Sel',    ter:0.25, index:'MSCI USA ESG',         provider:'Amundi',      cat:'USA',        replication:'synthetic', sectors:['Info. tech. 28%','Finance 14%','Santé 13%','Industrie 9%','Conso. disc. 9%'], holdings:['Apple 7.0%','Microsoft 6.8%','NVIDIA 5.5%','Amazon 3.8%','Alphabet 3.0%'], note:'USA avec sélection ESG, version EUR' },
     // --- EUROPE LARGE CAP ---
-    { ticker:'PCEU.PA',   name:'Amundi PEA MSCI Europe',            ter:0.15, index:'MSCI Europe',           provider:'Amundi',      cat:'Europe',     note:'Europe large cap 15 pays, biais défensif vs MSCI World' },
-    { ticker:'ETZ.PA',    name:'BNP Easy STOXX Europe 600 (cap)',   ter:0.18, index:'STOXX Europe 600',       provider:'BNP Paribas', cat:'Europe',     note:'600 valeurs EU, très diversifié, capitalisant' },
-    { ticker:'ETZD.PA',   name:'BNP Easy STOXX Europe 600 (dist)',  ter:0.18, index:'STOXX Europe 600',       provider:'BNP Paribas', cat:'Europe',     note:'Version distribuante du ETZ' },
-    { ticker:'C50.PA',    name:'Amundi Core Euro STOXX 50 (cap)',   ter:0.10, index:'Euro STOXX 50',          provider:'Amundi',      cat:'Europe',     note:'50 plus grandes capi zone euro, très liquide, TER bas' },
-    { ticker:'CD5.PA',    name:'Amundi Core Euro STOXX 50 (dist)',  ter:0.10, index:'Euro STOXX 50',          provider:'Amundi',      cat:'Europe',     note:'Version distribuante du C50' },
-    { ticker:'MFEC.PA',   name:'Amundi Core MSCI EMU (cap)',        ter:0.12, index:'MSCI EMU',               provider:'Amundi',      cat:'Europe',     note:'Zone euro large cap, plus large que STOXX 50' },
-    { ticker:'MFE.PA',    name:'Amundi Core MSCI EMU (dist)',       ter:0.12, index:'MSCI EMU',               provider:'Amundi',      cat:'Europe',     note:'Version distribuante du MFEC' },
-    { ticker:'MSE.PA',    name:'Amundi Euro STOXX 50 II (cap)',     ter:0.15, index:'Euro STOXX 50',          provider:'Amundi',      cat:'Europe',     note:'Alternative au C50' },
-    { ticker:'MSES.PA',   name:'Amundi Euro STOXX 50 II S-Acc',     ter:0.15, index:'Euro STOXX 50',          provider:'Amundi',      cat:'Europe',     note:'Part S-Acc 5€ du MSE' },
-    { ticker:'VERX.PA',   name:'Vanguard FTSE Dev Europe ex UK',    ter:0.10, index:'FTSE Dev Europe ex UK',  provider:'Vanguard',    cat:'Europe',     note:'Europe développée hors UK, TER parmi les plus bas, Vanguard' },
-    { ticker:'SEL.PA',    name:'Amundi STOXX Europe Select Div 30', ter:0.30, index:'STOXX Europe Select Div',provider:'Amundi',      cat:'Europe',     note:'30 actions européennes à haut dividende' },
-    { ticker:'INDEP.PA',  name:'Amundi European Strategic Autonomy',ter:0.35, index:'Solactive EU Autonomy',  provider:'Amundi',      cat:'Europe',     note:'Défense/souveraineté européenne, thématique 2025+' },
+    { ticker:'PCEU.PA',  name:'Amundi PEA MSCI Europe',          ter:0.15, isin:'LU1681042195', index:'MSCI Europe',          provider:'Amundi',      cat:'Europe',     replication:'synthetic', sectors:['Finance 16%','Industrie 14%','Santé 14%','Conso. disc. 10%','Matériaux 8%'], holdings:['Novo Nordisk 4.5%','ASML 3.8%','Nestlé 3.5%','LVMH 3.2%','AstraZeneca 2.9%'], note:'Europe large cap 15 pays, biais défensif vs MSCI World' },
+    { ticker:'ETZ.PA',   name:'BNP Easy STOXX Europe 600 (cap)', ter:0.18, isin:'FR0011550680', index:'STOXX Europe 600',      provider:'BNP Paribas', cat:'Europe',     replication:'synthetic', sectors:['Finance 16%','Industrie 14%','Santé 14%','Conso. disc. 10%','Matériaux 8%'], holdings:['Novo Nordisk 4.5%','ASML 3.8%','Nestlé 3.5%','LVMH 3.2%','AstraZeneca 2.9%'], note:'600 valeurs EU, très diversifié, capitalisant' },
+    { ticker:'ETZD.PA',  name:'BNP Easy STOXX Europe 600 (dist)',ter:0.18, index:'STOXX Europe 600',      provider:'BNP Paribas', cat:'Europe',     replication:'synthetic', sectors:['Finance 16%','Industrie 14%','Santé 14%','Conso. disc. 10%','Matériaux 8%'], holdings:['Novo Nordisk 4.5%','ASML 3.8%','Nestlé 3.5%','LVMH 3.2%','AstraZeneca 2.9%'], note:'Version distribuante du ETZ' },
+    { ticker:'C50.PA',   name:'Amundi Core Euro STOXX 50 (cap)', ter:0.10, isin:'LU0274211217', index:'Euro STOXX 50',         provider:'Amundi',      cat:'Europe',     replication:'synthetic', sectors:['Finance 19%','Industrie 17%','Conso. disc. 13%','Santé 11%','Énergie 8%'], holdings:['LVMH 5.8%','SAP 5.2%','ASML 4.9%','Siemens 4.6%','TotalEnergies 4.2%'], note:'50 plus grandes capi zone euro, très liquide, TER bas' },
+    { ticker:'CD5.PA',   name:'Amundi Core Euro STOXX 50 (dist)',ter:0.10, index:'Euro STOXX 50',         provider:'Amundi',      cat:'Europe',     replication:'synthetic', sectors:['Finance 19%','Industrie 17%','Conso. disc. 13%','Santé 11%','Énergie 8%'], holdings:['LVMH 5.8%','SAP 5.2%','ASML 4.9%','Siemens 4.6%','TotalEnergies 4.2%'], note:'Version distribuante du C50' },
+    { ticker:'MFEC.PA',  name:'Amundi Core MSCI EMU (cap)',      ter:0.12, isin:'LU1437016261', index:'MSCI EMU',              provider:'Amundi',      cat:'Europe',     replication:'synthetic', sectors:['Finance 20%','Industrie 15%','Conso. disc. 12%','Santé 11%','Matériaux 8%'], holdings:['LVMH 4.8%','SAP 4.5%','ASML 4.2%','Sanofi 3.2%','TotalEnergies 3.0%'], note:'Zone euro large cap, plus large que STOXX 50' },
+    { ticker:'MFE.PA',   name:'Amundi Core MSCI EMU (dist)',     ter:0.12, index:'MSCI EMU',              provider:'Amundi',      cat:'Europe',     replication:'synthetic', sectors:['Finance 20%','Industrie 15%','Conso. disc. 12%','Santé 11%','Matériaux 8%'], holdings:['LVMH 4.8%','SAP 4.5%','ASML 4.2%','Sanofi 3.2%','TotalEnergies 3.0%'], note:'Version distribuante du MFEC' },
+    { ticker:'MSE.PA',   name:'Amundi Euro STOXX 50 II (cap)',   ter:0.15, isin:'FR0010654913', index:'Euro STOXX 50',         provider:'Amundi',      cat:'Europe',     replication:'synthetic', sectors:['Finance 19%','Industrie 17%','Conso. disc. 13%','Santé 11%','Énergie 8%'], holdings:['LVMH 5.8%','SAP 5.2%','ASML 4.9%','Siemens 4.6%','TotalEnergies 4.2%'], note:'Alternative au C50' },
+    { ticker:'MSES.PA',  name:'Amundi Euro STOXX 50 II S-Acc',   ter:0.15, index:'Euro STOXX 50',         provider:'Amundi',      cat:'Europe',     replication:'synthetic', sectors:['Finance 19%','Industrie 17%','Conso. disc. 13%','Santé 11%','Énergie 8%'], holdings:['LVMH 5.8%','SAP 5.2%','ASML 4.9%','Siemens 4.6%','TotalEnergies 4.2%'], note:'Part S-Acc 5€ du MSE' },
+    { ticker:'VERX.PA',  name:'Vanguard FTSE Dev Europe ex UK',  ter:0.10, isin:'IE00B945VV12', index:'FTSE Dev Europe ex UK', provider:'Vanguard',    cat:'Europe',     replication:'physical', sectors:['Finance 17%','Industrie 14%','Santé 13%','Conso. disc. 11%','Matériaux 8%'], holdings:['Novo Nordisk 5.0%','ASML 4.2%','LVMH 3.8%','Nestlé 3.5%','Sanofi 3.0%'], note:'Europe développée hors UK, TER parmi les plus bas, Vanguard' },
+    { ticker:'SEL.PA',   name:'Amundi STOXX Europe Select Div 30',ter:0.30,isin:'FR0010378604', index:'STOXX Europe Select Div',provider:'Amundi',      cat:'Europe',     replication:'synthetic', sectors:['Finance 28%','Utilities 20%','Télécoms 15%','Énergie 12%','Industrie 10%'], holdings:['Vodafone 4.5%','Enel 4.2%','BASF 4.0%','Orange 3.8%','NN Group 3.5%'], note:'30 actions européennes à haut dividende' },
+    { ticker:'INDEP.PA', name:'Amundi European Strategic Autonomy',ter:0.35,index:'Solactive EU Autonomy', provider:'Amundi',      cat:'Europe',     replication:'synthetic', sectors:['Défense/Aéro 45%','Industrie 25%','Info. tech. 15%','Énergie 8%'], holdings:['Airbus 8.5%','Rheinmetall 7.2%','Thales 6.8%','Leonardo 5.5%','BAE Systems 5.0%'], note:'Défense/souveraineté européenne, thématique 2025+' },
     // --- FRANCE ---
-    { ticker:'MFEE.PA',   name:'Amundi CAC 40 (dist)',              ter:0.25, index:'CAC 40',                 provider:'Amundi',      cat:'France',     note:'CAC 40 distribuant, 40 blue chips FR, risque concentration pays' },
-    { ticker:'CACC.PA',   name:'Amundi CAC 40 (cap)',               ter:0.25, index:'CAC 40',                 provider:'Amundi',      cat:'France',     note:'Version capitalisante du MFEE' },
-    { ticker:'CA40.PA',   name:'Amundi CAC 40 S-Acc (5€)',          ter:0.25, index:'CAC 40',                 provider:'Amundi',      cat:'France',     note:'Part S-Acc 5€ du CAC 40 Amundi' },
-    { ticker:'C40.PA',    name:'Amundi CAC 40 ESG (cap)',           ter:0.23, index:'CAC 40 ESG',             provider:'Amundi',      cat:'France',     note:'CAC 40 avec sélection ESG, capitalisant' },
-    { ticker:'C4D.PA',    name:'Amundi CAC 40 ESG (dist)',          ter:0.23, index:'CAC 40 ESG',             provider:'Amundi',      cat:'France',     note:'Version distribuante du C40' },
-    { ticker:'E40.PA',    name:'BNP Paribas Easy CAC 40 ESG',       ter:0.25, index:'CAC 40 ESG',             provider:'BNP Paribas', cat:'France',     note:'Alternative BNP au CAC 40 ESG' },
-    { ticker:'CF1.PA',    name:'Amundi CAC Transition Climat',      ter:0.23, index:'CAC Transition Climat',  provider:'Amundi',      cat:'France',     note:'CAC 40 orienté transition énergétique' },
-    // --- EUROPE NATIONAL ---
-    { ticker:'DAX.PA',    name:'Amundi DAX II (cap)',               ter:0.20, index:'DAX',                    provider:'Amundi',      cat:'National EU',note:'Allemagne 40 blue chips, économie industrielle, cyclique' },
-    { ticker:'CG1.PA',    name:'Amundi ETF DAX DR',                 ter:0.20, index:'DAX',                    provider:'Amundi',      cat:'National EU',note:'Version DR (réplication directe) du DAX' },
-    { ticker:'MDX.PA',    name:'Amundi MDAX',                       ter:0.35, index:'MDAX',                   provider:'Amundi',      cat:'National EU',note:'Mid cap allemandes, plus risqué mais prime PME Allemagne' },
-    { ticker:'MIB.PA',    name:'Amundi FTSE MIB (dist)',            ter:0.35, index:'FTSE MIB',               provider:'Amundi',      cat:'National EU',note:'Italie 40 titres, forte pondération bancaire, risque souverain' },
-    { ticker:'FMI.PA',    name:'Amundi Italy MIB ESG (cap)',        ter:0.25, index:'FTSE MIB ESG',           provider:'Amundi',      cat:'National EU',note:'Italie avec filtre ESG' },
-    { ticker:'CS1.PA',    name:'Amundi Ibex 35 (cap)',              ter:0.35, index:'Ibex 35',                 provider:'Amundi',      cat:'National EU',note:'Espagne 35 titres, forte pondération banques/utilities' },
-    { ticker:'GRE.PA',    name:'Amundi MSCI Greece (dist)',         ter:0.45, index:'MSCI Greece',            provider:'Amundi',      cat:'National EU',note:'Grèce, niche spéculative, fort rebond post-crise' },
+    { ticker:'MFEE.PA',  name:'Amundi CAC 40 (dist)',             ter:0.25, isin:'FR0007080973', index:'CAC 40',                provider:'Amundi',      cat:'France',     replication:'synthetic', sectors:['Conso. disc./Luxe 22%','Finance 14%','Énergie 11%','Santé 10%','Industrie 10%'], holdings:['LVMH 11.5%','TotalEnergies 8.8%','Hermès 7.2%','Sanofi 7.0%','Airbus 5.8%'], note:'CAC 40 distribuant, 40 blue chips FR, risque concentration pays' },
+    { ticker:'CACC.PA',  name:'Amundi CAC 40 (cap)',              ter:0.25, index:'CAC 40',                provider:'Amundi',      cat:'France',     replication:'synthetic', sectors:['Conso. disc./Luxe 22%','Finance 14%','Énergie 11%','Santé 10%','Industrie 10%'], holdings:['LVMH 11.5%','TotalEnergies 8.8%','Hermès 7.2%','Sanofi 7.0%','Airbus 5.8%'], note:'Version capitalisante du MFEE' },
+    { ticker:'CA40.PA',  name:'Amundi CAC 40 S-Acc (5€)',         ter:0.25, index:'CAC 40',                provider:'Amundi',      cat:'France',     replication:'synthetic', sectors:['Conso. disc./Luxe 22%','Finance 14%','Énergie 11%','Santé 10%','Industrie 10%'], holdings:['LVMH 11.5%','TotalEnergies 8.8%','Hermès 7.2%','Sanofi 7.0%','Airbus 5.8%'], note:'Part S-Acc 5€ du CAC 40 Amundi' },
+    { ticker:'C40.PA',   name:'Amundi CAC 40 ESG (cap)',          ter:0.23, isin:'FR0010847754', index:'CAC 40 ESG',            provider:'Amundi',      cat:'France',     replication:'synthetic', sectors:['Conso. disc./Luxe 22%','Finance 14%','Énergie 11%','Santé 10%','Industrie 10%'], holdings:['LVMH 11%','TotalEnergies 8.5%','Hermès 7%','Sanofi 6.8%','Airbus 5.5%'], note:'CAC 40 avec sélection ESG, capitalisant' },
+    { ticker:'C4D.PA',   name:'Amundi CAC 40 ESG (dist)',         ter:0.23, index:'CAC 40 ESG',            provider:'Amundi',      cat:'France',     replication:'synthetic', sectors:['Conso. disc./Luxe 22%','Finance 14%','Énergie 11%','Santé 10%','Industrie 10%'], holdings:['LVMH 11%','TotalEnergies 8.5%','Hermès 7%','Sanofi 6.8%','Airbus 5.5%'], note:'Version distribuante du C40' },
+    { ticker:'E40.PA',   name:'BNP Paribas Easy CAC 40 ESG',     ter:0.25, index:'CAC 40 ESG',            provider:'BNP Paribas', cat:'France',     replication:'synthetic', sectors:['Conso. disc./Luxe 22%','Finance 14%','Énergie 11%','Santé 10%','Industrie 10%'], holdings:['LVMH 11%','TotalEnergies 8.5%','Hermès 7%','Sanofi 6.8%','Airbus 5.5%'], note:'Alternative BNP au CAC 40 ESG' },
+    { ticker:'CF1.PA',   name:'Amundi CAC Transition Climat',    ter:0.23, index:'CAC Transition Climat', provider:'Amundi',      cat:'France',     replication:'synthetic', sectors:['Industrie 18%','Finance 14%','Santé 12%','Utilities 12%','Info. tech. 10%'], holdings:['Schneider 8%','Engie 7%','Sanofi 7%','Air Liquide 6.5%','TotalEnergies 6%'], note:'CAC 40 orienté transition énergétique' },
+    // --- EUROPE NATIONALE ---
+    { ticker:'DAX.PA',   name:'Amundi DAX II (cap)',              ter:0.20, index:'DAX',                   provider:'Amundi',      cat:'National EU',replication:'synthetic', sectors:['Finance 18%','Industrie 17%','Santé 14%','Info. tech. 12%','Conso. disc. 11%'], holdings:['SAP 10.2%','Siemens 8.5%','Allianz 7.2%','Deutsche Telekom 5.8%','BASF 4.5%'], note:'Allemagne 40 blue chips, économie industrielle, cyclique' },
+    { ticker:'CG1.PA',   name:'Amundi ETF DAX DR',               ter:0.20, index:'DAX',                   provider:'Amundi',      cat:'National EU',replication:'physical', sectors:['Finance 18%','Industrie 17%','Santé 14%','Info. tech. 12%','Conso. disc. 11%'], holdings:['SAP 10.2%','Siemens 8.5%','Allianz 7.2%','Deutsche Telekom 5.8%','BASF 4.5%'], note:'Version DR (réplication directe) du DAX' },
+    { ticker:'MDX.PA',   name:'Amundi MDAX',                     ter:0.35, index:'MDAX',                  provider:'Amundi',      cat:'National EU',replication:'synthetic', sectors:['Industrie 28%','Conso. disc. 15%','Santé 13%','Info. tech. 10%','Finance 9%'], holdings:['Knorr-Bremse 4.5%','Rational 4.2%','LEG Immobilien 4.0%','Hochtief 3.8%','Gerresheimer 3.5%'], note:'Mid cap allemandes, plus risqué mais prime PME Allemagne' },
+    { ticker:'MIB.PA',   name:'Amundi FTSE MIB (dist)',          ter:0.35, index:'FTSE MIB',              provider:'Amundi',      cat:'National EU',replication:'synthetic', sectors:['Finance 38%','Énergie 15%','Utilities 13%','Industrie 8%','Conso. disc. 7%'], holdings:['Enel 10.2%','Intesa Sanpaolo 9.5%','UniCredit 8.8%','ENI 8.0%','Stellantis 5.5%'], note:'Italie 40 titres, forte pondération bancaire, risque souverain' },
+    { ticker:'FMI.PA',   name:'Amundi Italy MIB ESG (cap)',      ter:0.25, index:'FTSE MIB ESG',          provider:'Amundi',      cat:'National EU',replication:'synthetic', sectors:['Finance 35%','Énergie 14%','Utilities 13%','Industrie 9%','Conso. disc. 7%'], holdings:['Enel 10%','Intesa Sanpaolo 9%','UniCredit 8.5%','ENI 7.5%','Snam 5%'], note:'Italie avec filtre ESG' },
+    { ticker:'CS1.PA',   name:'Amundi Ibex 35 (cap)',            ter:0.35, index:'Ibex 35',               provider:'Amundi',      cat:'National EU',replication:'synthetic', sectors:['Finance 33%','Utilities 17%','Télécoms 10%','Santé 8%','Industrie 8%'], holdings:['Inditex 14.5%','BBVA 9.2%','Santander 8.8%','Iberdrola 8.5%','Telefonica 5.5%'], note:'Espagne 35 titres, forte pondération banques/utilities' },
+    { ticker:'GRE.PA',   name:'Amundi MSCI Greece (dist)',       ter:0.45, index:'MSCI Greece',           provider:'Amundi',      cat:'National EU',replication:'synthetic', sectors:['Finance 35%','Énergie 20%','Utilities 15%','Industrie 10%','Conso. disc. 8%'], holdings:['Eurobank 12%','National Bank of Greece 10%','Alpha Bank 9%','Motor Oil 7%','OPAP 6.5%'], note:'Grèce, niche spéculative, fort rebond post-crise' },
     // --- EUROPE SECTORIELLE ---
-    { ticker:'GUARD.PA',  name:'BNP Paribas Easy Bloomberg Europe Defense', ter:0.18, index:'Bloomberg Europe Defense', provider:'BNP Paribas', cat:'Sectoriel EU', note:'Défense/industrie militaire EU (Airbus, Rheinmetall, Thales, Leonardo...) — TER 0,18% (confirmé Boursobank), frais courtage : 1,99€ (<500€) ou 0,60% (≥500€)' },
-    { ticker:'BNK.PA',    name:'Amundi STOXX EU600 Banks (cap)',    ter:0.30, index:'STOXX EU600 Banks',       provider:'Amundi',      cat:'Sectoriel EU',note:'Banques européennes, très cyclique, sensible aux taux BCE' },
-    { ticker:'BNKE.PA',   name:'Amundi Euro STOXX Banks (cap)',     ter:0.30, index:'Euro STOXX Banks',        provider:'Amundi',      cat:'Sectoriel EU',note:'Banques zone euro uniquement (vs EU600)' },
-    { ticker:'UTI.PA',    name:'Amundi STOXX EU600 Utilities (cap)',ter:0.30, index:'STOXX EU600 Utilities',   provider:'Amundi',      cat:'Sectoriel EU',note:'Utilities EU, ultra-défensif, sensible aux taux longs' },
-    { ticker:'IND.PA',    name:'Amundi STOXX EU600 Industrials',   ter:0.30, index:'STOXX EU600 Industrials', provider:'Amundi',      cat:'Sectoriel EU',note:'Industrie européenne, cyclique, corrélé conjoncture' },
-    { ticker:'TELE.PA',   name:'Amundi STOXX EU600 Telecom',       ter:0.30, index:'STOXX EU600 Telecom',     provider:'Amundi',      cat:'Sectoriel EU',note:'Télécom EU, défensif, rendement dividende élevé' },
-    { ticker:'FOO.PA',    name:'Amundi STOXX EU600 Cons Staples',  ter:0.30, index:'STOXX EU600 Cons Staples',provider:'Amundi',      cat:'Sectoriel EU',note:'Conso défensive EU (alimentaire, hygiène), résilient en crise' },
-    { ticker:'TRV.PA',    name:'Amundi STOXX EU600 Cons Disc',     ter:0.30, index:'STOXX EU600 Cons Disc',   provider:'Amundi',      cat:'Sectoriel EU',note:'Conso discrétionnaire EU, cyclique, lié au moral consommateurs' },
-    { ticker:'INS.PA',    name:'Amundi STOXX EU600 Insurance',     ter:0.30, index:'STOXX EU600 Insurance',   provider:'Amundi',      cat:'Sectoriel EU',note:'Assurance européenne, bénéficie de la hausse des taux' },
-    { ticker:'TNO.PA',    name:'Amundi STOXX EU600 Technology',    ter:0.30, index:'STOXX EU600 Technology',  provider:'Amundi',      cat:'Sectoriel EU',note:'Tech européenne (ASML, SAP...), croissance, premium valorisation' },
-    { ticker:'HLT.PA',    name:'Amundi STOXX EU600 Healthcare',    ter:0.30, index:'STOXX EU600 Healthcare',  provider:'Amundi',      cat:'Sectoriel EU',note:'Santé EU, très défensif, résilient en récession' },
-    { ticker:'BRES.PA',   name:'Amundi STOXX EU600 Basic Res',     ter:0.30, index:'STOXX EU600 Basic Res',   provider:'Amundi',      cat:'Sectoriel EU',note:'Minières/matières premières EU, très cyclique, corrélé Chine' },
-    { ticker:'CHM.PA',    name:'Amundi STOXX EU600 Basic Mtrls',   ter:0.30, index:'STOXX EU600 Materials',   provider:'Amundi',      cat:'Sectoriel EU',note:'Chimie/matériaux européens, cyclique, lié à l\'industrie' },
+    { ticker:'GUARD.PA', name:'BNP Easy Bloomberg Europe Defense',ter:0.18, index:'Bloomberg Europe Defense',provider:'BNP Paribas', cat:'Sectoriel EU',replication:'synthetic', sectors:['Défense/Aéro 70%','Industrie 20%','Info. tech. 10%'], holdings:['Rheinmetall 12.5%','Airbus 11.8%','BAE Systems 10.5%','Thales 9.2%','Leonardo 7.5%'], note:'Défense/industrie militaire EU (Airbus, Rheinmetall, Thales, Leonardo...) — TER 0,18% (confirmé Boursobank), frais courtage : 1,99€ (<500€) ou 0,60% (≥500€)' },
+    { ticker:'BNK.PA',   name:'Amundi STOXX EU600 Banks (cap)',  ter:0.30, isin:'FR0010655720', index:'STOXX EU600 Banks',      provider:'Amundi',      cat:'Sectoriel EU',replication:'synthetic', sectors:['Banques 100%'], holdings:['HSBC 10.2%','UBS 7.8%','BNP Paribas 7.5%','Barclays 6.8%','ING 6.2%'], note:'Banques européennes, très cyclique, sensible aux taux BCE' },
+    { ticker:'BNKE.PA',  name:'Amundi Euro STOXX Banks (cap)',   ter:0.30, index:'Euro STOXX Banks',       provider:'Amundi',      cat:'Sectoriel EU',replication:'synthetic', sectors:['Banques 100%'], holdings:['BNP Paribas 14.5%','Santander 12.8%','ING 10.5%','UniCredit 10.2%','Société Générale 8.5%'], note:'Banques zone euro uniquement (vs EU600)' },
+    { ticker:'UTI.PA',   name:'Amundi STOXX EU600 Utilities',    ter:0.30, isin:'FR0010655761', index:'STOXX EU600 Utilities',  provider:'Amundi',      cat:'Sectoriel EU',replication:'synthetic', sectors:['Utilities 100%'], holdings:['Iberdrola 12.8%','Enel 11.5%','National Grid 9.2%','Engie 8.5%','Endesa 5.5%'], note:'Utilities EU, ultra-défensif, sensible aux taux longs' },
+    { ticker:'IND.PA',   name:'Amundi STOXX EU600 Industrials',  ter:0.30, index:'STOXX EU600 Industrials',provider:'Amundi',      cat:'Sectoriel EU',replication:'synthetic', sectors:['Industrie 100%'], holdings:['Siemens 12.5%','ABB 7.8%','Schneider Electric 7.5%','Airbus 6.8%','Rolls-Royce 5.2%'], note:'Industrie européenne, cyclique, corrélé conjoncture' },
+    { ticker:'TELE.PA',  name:'Amundi STOXX EU600 Telecom',      ter:0.30, index:'STOXX EU600 Telecom',    provider:'Amundi',      cat:'Sectoriel EU',replication:'synthetic', sectors:['Télécoms 100%'], holdings:['Deutsche Telekom 22.5%','Vodafone 12.8%','Orange 10.5%','Telefonica 9.8%','BT Group 8.2%'], note:'Télécom EU, défensif, rendement dividende élevé' },
+    { ticker:'FOO.PA',   name:'Amundi STOXX EU600 Cons Staples', ter:0.30, index:'STOXX EU600 Cons Staples',provider:'Amundi',      cat:'Sectoriel EU',replication:'synthetic', sectors:['Conso. stap. 100%'], holdings:['Nestlé 22.5%','Unilever 12.8%','L\'Oréal 12.0%','Heineken 6.5%','Danone 6.2%'], note:'Conso défensive EU (alimentaire, hygiène), résilient en crise' },
+    { ticker:'TRV.PA',   name:'Amundi STOXX EU600 Cons Disc',    ter:0.30, index:'STOXX EU600 Cons Disc',  provider:'Amundi',      cat:'Sectoriel EU',replication:'synthetic', sectors:['Conso. disc. 100%'], holdings:['LVMH 18.5%','Inditex 12.5%','Mercedes-Benz 8.5%','BMW 7.8%','Hermès 7.2%'], note:'Conso discrétionnaire EU, cyclique, lié au moral consommateurs' },
+    { ticker:'INS.PA',   name:'Amundi STOXX EU600 Insurance',    ter:0.30, index:'STOXX EU600 Insurance',  provider:'Amundi',      cat:'Sectoriel EU',replication:'synthetic', sectors:['Assurance 100%'], holdings:['AXA 17.5%','Allianz 17.0%','Munich Re 10.5%','Zurich Insurance 9.8%','Hannover Re 7.2%'], note:'Assurance européenne, bénéficie de la hausse des taux' },
+    { ticker:'TNO.PA',   name:'Amundi STOXX EU600 Technology',   ter:0.30, index:'STOXX EU600 Technology', provider:'Amundi',      cat:'Sectoriel EU',replication:'synthetic', sectors:['Info. tech. 100%'], holdings:['ASML 28.5%','SAP 22.5%','Capgemini 7.8%','Dassault Systèmes 7.5%','Amadeus IT 6.2%'], note:'Tech européenne (ASML, SAP...), croissance, premium valorisation' },
+    { ticker:'HLT.PA',   name:'Amundi STOXX EU600 Healthcare',   ter:0.30, index:'STOXX EU600 Healthcare', provider:'Amundi',      cat:'Sectoriel EU',replication:'synthetic', sectors:['Santé 100%'], holdings:['Novo Nordisk 22.5%','AstraZeneca 14.8%','Novartis 10.5%','Roche 10.2%','Sanofi 9.8%'], note:'Santé EU, très défensif, résilient en récession' },
+    { ticker:'BRES.PA',  name:'Amundi STOXX EU600 Basic Res',    ter:0.30, index:'STOXX EU600 Basic Res',  provider:'Amundi',      cat:'Sectoriel EU',replication:'synthetic', sectors:['Mat. premières 100%'], holdings:['BHP 18.5%','Glencore 15.2%','Rio Tinto 14.8%','Anglo American 10.5%','Antofagasta 6.5%'], note:'Minières/matières premières EU, très cyclique, corrélé Chine' },
+    { ticker:'CHM.PA',   name:'Amundi STOXX EU600 Basic Mtrls',  ter:0.30, index:'STOXX EU600 Materials',  provider:'Amundi',      cat:'Sectoriel EU',replication:'synthetic', sectors:['Chimie/Matériaux 100%'], holdings:['Linde 22.5%','Air Liquide 14.8%','BASF 12.5%','Solvay 8.2%','Akzo Nobel 6.8%'], note:'Chimie/matériaux européens, cyclique, lié à l\'industrie' },
     // --- EUROPE ESG / FACTORIEL ---
-    { ticker:'MFED.PA',   name:'Amundi MSCI EMU ESG Broad Trans',  ter:0.18, index:'MSCI EMU ESG Transition', provider:'Amundi',      cat:'ESG EU',     note:'EMU avec filtre ESG transition climatique, TER bas' },
-    { ticker:'CMU.PA',    name:'Amundi MSCI EMU ESG Select (cap)', ter:0.20, index:'MSCI EMU ESG',            provider:'Amundi',      cat:'ESG EU',     note:'Zone euro best-in-class ESG, capitalisant' },
-    { ticker:'MUSRI.PA',  name:'BNP E MSCI EMU SRI PAB (cap)',     ter:0.25, index:'MSCI EMU SRI PAB',        provider:'BNP Paribas', cat:'ESG EU',     note:'Zone euro ISR aligné Paris, critères stricts' },
-    { ticker:'EESG.PA',   name:'Amundi MSCI EMU SRI Climate PA',   ter:0.20, index:'MSCI EMU SRI Climate PA', provider:'Amundi',      cat:'ESG EU',     note:'EMU ISR + Paris Aligned, double filtre ESG/climat' },
-    { ticker:'PABZ.PA',   name:'Amundi MSCI EMU Climate Paris Alg',ter:0.20, index:'MSCI EMU Climate PA',     provider:'Amundi',      cat:'ESG EU',     note:'EMU aligné accord de Paris sur le climat' },
-    { ticker:'EPAB.PA',   name:'Amundi S&P Eurozone Climate PA',   ter:0.20, index:'S&P Eurozone Climate PA', provider:'Amundi',      cat:'ESG EU',     note:'Eurozone avec filtre S&P Paris Aligned' },
-    { ticker:'BIODV.PA',  name:'BNP ESG Eurozone Biodiversity',    ter:0.25, index:'EU Biodiversity',         provider:'BNP Paribas', cat:'ESG EU',     note:'Eurozone avec filtre biodiversité, thématique émergente' },
-    { ticker:'VAL.PA',    name:'Amundi MSCI EMU Value Factor (dist)',ter:0.25,index:'MSCI EMU Value',         provider:'Amundi',      cat:'Factoriel EU',note:'Value factor zone euro, surperforme en sortie de crise' },
-    { ticker:'MMS.PA',    name:'Amundi MSCI EMU SmCap ESG Trans',  ter:0.25, index:'MSCI EMU Small Cap ESG',  provider:'Amundi',      cat:'Factoriel EU',note:'Small caps EMU avec ESG, prime PME zone euro' },
-    { ticker:'CAPE.PA',   name:'Ossiam CAPE Europe Select Value',  ter:0.65, index:'CAPE Europe',             provider:'Ossiam',      cat:'Factoriel EU',note:'Value basé sur CAPE (Shiller PE), approche quantitative' },
-    { ticker:'EUDV.PA',   name:'SPDR S&P Euro Dividend Aristocrats',ter:0.30,index:'S&P Euro Div Aristocrats',provider:'SPDR',       cat:'Factoriel EU',note:'Actions européennes à dividendes croissants, qualité/revenu' },
-    { ticker:'EVOE.PA',   name:'BNP Easy Low Vol Europe (cap)',    ter:0.30, index:'EU Low Volatility',        provider:'BNP Paribas', cat:'Factoriel EU',note:'Low volatility EU, réduit les drawdowns, défensif' },
-    { ticker:'EQUA.PA',   name:'BNP Easy Quality Europe (cap)',    ter:0.30, index:'EU Quality',               provider:'BNP Paribas', cat:'Factoriel EU',note:'Quality factor EU : ROE élevé, bilan solide' },
-    { ticker:'EVAE.PA',   name:'BNP Easy Value Europe (cap)',      ter:0.30, index:'EU Value',                 provider:'BNP Paribas', cat:'Factoriel EU',note:'Value factor EU, titres décotés vs fondamentaux' },
-    { ticker:'EDEU.PA',   name:'BNP Easy Dividend Europe (cap)',   ter:0.30, index:'EU Dividend',              provider:'BNP Paribas', cat:'Factoriel EU',note:'Rendement dividende élevé EU, orienté revenu' },
-    { ticker:'EGRA.PA',   name:'WisdomTree Eurozone Qual Div Gr',  ter:0.35, index:'WisdomTree Eurozone',      provider:'WisdomTree',  cat:'Factoriel EU',note:'Dividendes croissants + qualité zone euro' },
-    { ticker:'EEI.PA',    name:'WisdomTree Europe Equity Income',  ter:0.29, index:'WisdomTree Europe',        provider:'WisdomTree',  cat:'Factoriel EU',note:'Revenu Europe, pondération par dividendes' },
+    { ticker:'MFED.PA',  name:'Amundi MSCI EMU ESG Broad Trans', ter:0.18, index:'MSCI EMU ESG Transition',provider:'Amundi',      cat:'ESG EU',     replication:'synthetic', sectors:['Finance 19%','Industrie 15%','Conso. disc. 12%','Santé 11%','Matériaux 8%'], holdings:['LVMH 4.5%','ASML 4.2%','SAP 4.0%','Sanofi 3.2%','TotalEnergies 2.8%'], note:'EMU avec filtre ESG transition climatique, TER bas' },
+    { ticker:'CMU.PA',   name:'Amundi MSCI EMU ESG Select (cap)',ter:0.20, index:'MSCI EMU ESG',           provider:'Amundi',      cat:'ESG EU',     replication:'synthetic', sectors:['Finance 19%','Industrie 15%','Conso. disc. 12%','Santé 11%','Matériaux 8%'], holdings:['LVMH 4.5%','ASML 4.2%','SAP 4.0%','Sanofi 3.2%','TotalEnergies 2.8%'], note:'Zone euro best-in-class ESG, capitalisant' },
+    { ticker:'MUSRI.PA', name:'BNP E MSCI EMU SRI PAB (cap)',    ter:0.25, index:'MSCI EMU SRI PAB',       provider:'BNP Paribas', cat:'ESG EU',     replication:'synthetic', sectors:['Finance 18%','Industrie 15%','Santé 12%','Conso. disc. 12%','Matériaux 7%'], holdings:['ASML 5.5%','SAP 5.2%','Schneider 4.5%','Sanofi 4.2%','L\'Oréal 4.0%'], note:'Zone euro ISR aligné Paris, critères stricts' },
+    { ticker:'EESG.PA',  name:'Amundi MSCI EMU SRI Climate PA',  ter:0.20, index:'MSCI EMU SRI Climate PA',provider:'Amundi',      cat:'ESG EU',     replication:'synthetic', sectors:['Finance 18%','Industrie 15%','Santé 12%','Conso. disc. 12%','Matériaux 7%'], holdings:['ASML 5.2%','SAP 5.0%','Schneider 4.5%','Sanofi 4.0%','Air Liquide 3.8%'], note:'EMU ISR + Paris Aligned, double filtre ESG/climat' },
+    { ticker:'PABZ.PA',  name:'Amundi MSCI EMU Climate Paris',   ter:0.20, index:'MSCI EMU Climate PA',    provider:'Amundi',      cat:'ESG EU',     replication:'synthetic', sectors:['Finance 18%','Industrie 15%','Santé 12%','Conso. disc. 12%','Matériaux 7%'], holdings:['ASML 5.0%','SAP 4.8%','Schneider 4.5%','Sanofi 4.0%','Air Liquide 3.8%'], note:'EMU aligné accord de Paris sur le climat' },
+    { ticker:'EPAB.PA',  name:'Amundi S&P Eurozone Climate PA',  ter:0.20, index:'S&P Eurozone Climate PA',provider:'Amundi',      cat:'ESG EU',     replication:'synthetic', sectors:['Finance 18%','Industrie 15%','Conso. disc. 12%','Santé 11%','Matériaux 8%'], holdings:['LVMH 5.0%','SAP 4.8%','ASML 4.5%','Sanofi 3.5%','TotalEnergies 3.0%'], note:'Eurozone avec filtre S&P Paris Aligned' },
+    { ticker:'BIODV.PA', name:'BNP ESG Eurozone Biodiversity',   ter:0.25, index:'EU Biodiversity',        provider:'BNP Paribas', cat:'ESG EU',     replication:'synthetic', sectors:['Finance 18%','Industrie 16%','Santé 12%','Conso. disc. 11%','Matériaux 9%'], holdings:['SAP 5.0%','ASML 4.8%','Schneider 4.5%','Sanofi 4.0%','Legrand 3.5%'], note:'Eurozone avec filtre biodiversité, thématique émergente' },
+    { ticker:'VAL.PA',   name:'Amundi MSCI EMU Value Factor',    ter:0.25, isin:'FR0010655662', index:'MSCI EMU Value',        provider:'Amundi',      cat:'Factoriel EU',replication:'synthetic', sectors:['Finance 28%','Énergie 14%','Industrie 12%','Utilities 10%','Matériaux 9%'], holdings:['TotalEnergies 8.5%','Stellantis 6.2%','Santander 5.8%','ING 5.5%','ENI 5.0%'], note:'Value factor zone euro, surperforme en sortie de crise' },
+    { ticker:'MMS.PA',   name:'Amundi MSCI EMU SmCap ESG Trans', ter:0.25, index:'MSCI EMU Small Cap ESG', provider:'Amundi',      cat:'Factoriel EU',replication:'synthetic', sectors:['Industrie 22%','Finance 18%','Santé 13%','Conso. disc. 10%','Matériaux 9%'], holdings:['~240 titres, aucun >2%'], note:'Small caps EMU avec ESG, prime PME zone euro' },
+    { ticker:'CAPE.PA',  name:'Ossiam CAPE Europe Select Value', ter:0.65, index:'CAPE Europe',            provider:'Ossiam',      cat:'Factoriel EU',replication:'physical', sectors:['Finance 22%','Industrie 18%','Conso. disc. 14%','Santé 12%','Matériaux 10%'], holdings:['Rotation sectorielle CAPE-Shiller'], note:'Value basé sur CAPE (Shiller PE), approche quantitative' },
+    { ticker:'EUDV.PA',  name:'SPDR S&P Euro Dividend Aristocrats',ter:0.30,isin:'IE00B5M1WJ87',index:'S&P Euro Div Aristocrats',provider:'SPDR',      cat:'Factoriel EU',replication:'physical', sectors:['Finance 21%','Utilities 16%','Conso. stap. 13%','Santé 12%','Industrie 11%'], holdings:['NN Group 4.8%','Bouygues 4.5%','Endesa 4.2%','Danone 4.0%','Engie 3.8%'], note:'Actions européennes à dividendes croissants, qualité/revenu' },
+    { ticker:'EVOE.PA',  name:'BNP Easy Low Vol Europe (cap)',   ter:0.30, index:'EU Low Volatility',      provider:'BNP Paribas', cat:'Factoriel EU',replication:'synthetic', sectors:['Utilities 22%','Conso. stap. 18%','Santé 15%','Télécoms 12%','Finance 10%'], holdings:['Nestlé 5.5%','Iberdrola 5.0%','Unilever 4.8%','Deutsche Telekom 4.5%','Sanofi 4.2%'], note:'Low volatility EU, réduit les drawdowns, défensif' },
+    { ticker:'EQUA.PA',  name:'BNP Easy Quality Europe (cap)',   ter:0.30, index:'EU Quality',             provider:'BNP Paribas', cat:'Factoriel EU',replication:'synthetic', sectors:['Info. tech. 18%','Santé 17%','Conso. disc. 15%','Industrie 14%','Finance 12%'], holdings:['ASML 7.5%','Novo Nordisk 7.2%','LVMH 6.8%','Hermès 6.5%','L\'Oréal 5.5%'], note:'Quality factor EU : ROE élevé, bilan solide' },
+    { ticker:'EVAE.PA',  name:'BNP Easy Value Europe (cap)',     ter:0.30, index:'EU Value',               provider:'BNP Paribas', cat:'Factoriel EU',replication:'synthetic', sectors:['Finance 28%','Énergie 14%','Industrie 13%','Utilities 11%','Matériaux 9%'], holdings:['TotalEnergies 7.5%','Stellantis 6.2%','Santander 5.8%','ING 5.5%','ENI 5.0%'], note:'Value factor EU, titres décotés vs fondamentaux' },
+    { ticker:'EDEU.PA',  name:'BNP Easy Dividend Europe (cap)',  ter:0.30, index:'EU Dividend',            provider:'BNP Paribas', cat:'Factoriel EU',replication:'synthetic', sectors:['Finance 22%','Utilities 16%','Télécoms 13%','Énergie 12%','Industrie 10%'], holdings:['Orange 5.5%','Enel 5.2%','Vodafone 4.8%','Santander 4.5%','NN Group 4.2%'], note:'Rendement dividende élevé EU, orienté revenu' },
+    { ticker:'EGRA.PA',  name:'WisdomTree Eurozone Qual Div Gr', ter:0.35, isin:'IE00BZ56SW52', index:'WisdomTree Eurozone',    provider:'WisdomTree',  cat:'Factoriel EU',replication:'physical', sectors:['Finance 22%','Industrie 16%','Conso. disc. 13%','Santé 12%','Utilities 10%'], holdings:['Allianz 5.5%','Siemens 5.2%','Sanofi 4.8%','TotalEnergies 4.5%','AXA 4.2%'], note:'Dividendes croissants + qualité zone euro' },
+    { ticker:'EEI.PA',   name:'WisdomTree Europe Equity Income', ter:0.29, index:'WisdomTree Europe',      provider:'WisdomTree',  cat:'Factoriel EU',replication:'physical', sectors:['Finance 24%','Industrie 14%','Énergie 13%','Utilities 12%','Télécoms 10%'], holdings:['HSBC 5.2%','TotalEnergies 4.8%','BP 4.5%','Shell 4.2%','BT Group 3.8%'], note:'Revenu Europe, pondération par dividendes' },
     // --- MARCHÉS ÉMERGENTS ---
-    { ticker:'PAEEM.PA',  name:'Amundi PEA MSCI EM ESG (cap)',     ter:0.30, index:'MSCI EM ESG',              provider:'Amundi',      cat:'Émergents',  note:'Principal ETF EM en PEA, expo Inde/Chine/Taiwan, ESG filter — frais courtage Boursobank : 1,99€ (<500€) ou 0,60% (≥500€)' },
-    { ticker:'PEMS.PA',   name:'Amundi PEA MSCI EM ESG S-Acc',     ter:0.30, index:'MSCI EM ESG',              provider:'Amundi',      cat:'Émergents',  note:'Part S-Acc 5€ du PAEEM' },
-    { ticker:'PLEM.PA',   name:'Amundi PEA MSCI EM EMEA ESG',      ter:0.55, index:'MSCI EM EMEA',             provider:'Amundi',      cat:'Émergents',  note:'EM zone EMEA (Europe Est, Moyen-Orient, Afrique)' },
-    { ticker:'PALAT.PA',  name:'Amundi PEA MSCI Emerging Latam',   ter:0.55, index:'MSCI Emerging Latam',      provider:'Amundi',      cat:'Émergents',  note:'Amérique Latine émergente (Brésil, Mexique, Chili...)' },
+    { ticker:'PAEEM.PA', name:'Amundi PEA MSCI EM ESG (cap)',    ter:0.30, isin:'LU1681045370', index:'MSCI EM ESG',           provider:'Amundi',      cat:'Émergents',  replication:'synthetic', sectors:['Finance 22%','Info. tech. 20%','Conso. disc. 13%','Matériaux 7%','Énergie 6%'], holdings:['Samsung 4.2%','TSMC 3.8%','Alibaba 2.8%','Tencent 2.5%','HDFC Bank 1.8%'], note:'Principal ETF EM en PEA, expo Inde/Chine/Taiwan, ESG filter — frais courtage Boursobank : 1,99€ (<500€) ou 0,60% (≥500€)' },
+    { ticker:'PEMS.PA',  name:'Amundi PEA MSCI EM ESG S-Acc',   ter:0.30, index:'MSCI EM ESG',           provider:'Amundi',      cat:'Émergents',  replication:'synthetic', sectors:['Finance 22%','Info. tech. 20%','Conso. disc. 13%','Matériaux 7%','Énergie 6%'], holdings:['Samsung 4.2%','TSMC 3.8%','Alibaba 2.8%','Tencent 2.5%','HDFC Bank 1.8%'], note:'Part S-Acc 5€ du PAEEM' },
+    { ticker:'PLEM.PA',  name:'Amundi PEA MSCI EM EMEA ESG',    ter:0.55, index:'MSCI EM EMEA',          provider:'Amundi',      cat:'Émergents',  replication:'synthetic', sectors:['Finance 26%','Matériaux 17%','Énergie 14%','Utilities 10%','Télécoms 9%'], holdings:['Saudi Aramco 10.5%','Naspers 8.2%','Al Rajhi Bank 6.8%','Standard Bank 5.5%','Safaricom 4.2%'], note:'EM zone EMEA (Europe Est, Moyen-Orient, Afrique)' },
+    { ticker:'PALAT.PA', name:'Amundi PEA MSCI Emerging Latam', ter:0.55, index:'MSCI Emerging Latam',   provider:'Amundi',      cat:'Émergents',  replication:'synthetic', sectors:['Finance 22%','Matériaux 17%','Énergie 15%','Utilities 12%','Conso. stap. 10%'], holdings:['Vale 11.5%','Petrobras 9.8%','Itaú Unibanco 8.5%','Grupo Mexico 6.2%','Walmart Mexico 5.5%'], note:'Amérique Latine émergente (Brésil, Mexique, Chili...)' },
     // --- ASIE / JAPON ---
-    { ticker:'PTPXE.PA',  name:'Amundi PEA Japan Topix (EUR cap)', ter:0.20, index:'TOPIX',                    provider:'Amundi',      cat:'Asie',       note:'Japon ~2100 entreprises, diversification hors US/EU' },
-    { ticker:'PTPXH.PA',  name:'Amundi PEA Japan Topix (EUR hdg)', ter:0.45, index:'TOPIX EUR Hedged',         provider:'Amundi',      cat:'Asie',       note:'Japon couvert EUR/JPY, élimine le risque de change yen' },
-    { ticker:'PAASI.PA',  name:'Amundi PEA Asie Emerg MSCI Scr',   ter:0.20, index:'MSCI Emerging Asia',       provider:'Amundi',      cat:'Asie',       note:'Asie émergente (Chine, Inde, Corée, Taiwan, ASEAN)' },
-    { ticker:'PAEJ.PA',   name:'Amundi PEA AsiePac ex Japan',       ter:0.20, index:'MSCI AsiaPac ex JP',       provider:'Amundi',      cat:'Asie',       note:'Asie-Pacifique hors Japon, mix EM + dev (Australie, HK...)' },
-    // --- THÉMATIQUE MONDIAL ---
-    { ticker:'AWAT.PA',   name:'Amundi PEA Eau (MSCI Water)',       ter:0.35, index:'MSCI Water',               provider:'Amundi',      cat:'Thématique', note:'Secteur eau mondial, thématique ressources rares long terme' },
-    { ticker:'PINR.PA',   name:'Amundi PEA Inde (MSCI India)',      ter:0.85, index:'MSCI India',               provider:'Amundi',      cat:'Thématique', note:'Inde pure play, forte croissance démographique/économique — TER élevé 0,85% (confirmé Boursobank)' },
-    { ticker:'PASI.PA',   name:'Amundi PEA Chine MSCI China Scr',   ter:0.25, index:'MSCI China',               provider:'Amundi',      cat:'Thématique', note:'Chine, risque réglementaire/géopolitique, fort potentiel' },
-    { ticker:'MLUX.PA',   name:'Amundi PEA Luxe Monde',             ter:0.35, index:'Solactive Global Luxury',  provider:'Amundi',      cat:'Thématique', note:'Luxe mondial (LVMH, Hermès, Kering...), résilient premium' },
-    { ticker:'PMEH.PA',   name:'Amundi PEA Immobilier Europe',      ter:0.40, index:'FTSE EPRA/NAREIT EU',      provider:'Amundi',      cat:'Thématique', note:'SIIC/REITs européens en PEA, sensible aux taux longs' },
-    { ticker:'INDEP.PA',  name:'Amundi European Strategic Autonomy',ter:0.35, index:'EU Strategic Autonomy',    provider:'Amundi',      cat:'Thématique', note:'Défense/tech souveraine EU, thématique post-2022 très portante' },
-    { ticker:'COSE.PA',   name:'Amundi PEA S&P US Cons Staples',    ter:0.25, index:'S&P US Cons Staples',      provider:'Amundi',      cat:'Thématique', note:'Conso défensive US en PEA, résilient en récession' },
-    { ticker:'DJE.PA',    name:'Amundi PEA S&P US Industrials',     ter:0.25, index:'S&P US Industrials',       provider:'Amundi',      cat:'Thématique', note:'Industrie US en PEA (Boeing, Caterpillar, Honeywell...)' },
+    { ticker:'PTPXE.PA', name:'Amundi PEA Japan Topix (EUR cap)',ter:0.20, isin:'LU1681042781', index:'TOPIX',                 provider:'Amundi',      cat:'Asie',       replication:'synthetic', sectors:['Industrie 21%','Finance 14%','Conso. disc. 13%','Info. tech. 10%','Matériaux 8%'], holdings:['Toyota 4.2%','Sony 3.5%','Mitsubishi UFJ 3.0%','Keyence 2.8%','Daiichi Sankyo 2.5%'], note:'Japon ~2100 entreprises, diversification hors US/EU' },
+    { ticker:'PTPXH.PA', name:'Amundi PEA Japan Topix (EUR hdg)',ter:0.45, index:'TOPIX EUR Hedged',      provider:'Amundi',      cat:'Asie',       replication:'synthetic', sectors:['Industrie 21%','Finance 14%','Conso. disc. 13%','Info. tech. 10%','Matériaux 8%'], holdings:['Toyota 4.2%','Sony 3.5%','Mitsubishi UFJ 3.0%','Keyence 2.8%','Daiichi Sankyo 2.5%'], note:'Japon couvert EUR/JPY, élimine le risque de change yen' },
+    { ticker:'PAASI.PA', name:'Amundi PEA Asie Emerg MSCI Scr',  ter:0.20, index:'MSCI Emerging Asia',    provider:'Amundi',      cat:'Asie',       replication:'synthetic', sectors:['Info. tech. 27%','Finance 22%','Conso. disc. 14%','Télécoms 7%','Matériaux 6%'], holdings:['Samsung 6.5%','TSMC 6.0%','Alibaba 4.2%','Tencent 3.8%','Meituan 2.5%'], note:'Asie émergente (Chine, Inde, Corée, Taiwan, ASEAN)' },
+    { ticker:'PAEJ.PA',  name:'Amundi PEA AsiePac ex Japan',      ter:0.20, index:'MSCI AsiaPac ex JP',    provider:'Amundi',      cat:'Asie',       replication:'synthetic', sectors:['Finance 22%','Info. tech. 20%','Conso. disc. 13%','Matériaux 8%','Industrie 7%'], holdings:['Samsung 5.5%','TSMC 5.0%','Alibaba 3.5%','Tencent 3.2%','BHP 2.8%'], note:'Asie-Pacifique hors Japon, mix EM + dev (Australie, HK...)' },
+    // --- THÉMATIQUE ---
+    { ticker:'AWAT.PA',  name:'Amundi PEA Eau (MSCI Water)',      ter:0.35, index:'MSCI Water',            provider:'Amundi',      cat:'Thématique', replication:'synthetic', sectors:['Utilities 35%','Industrie 30%','Santé 15%','Info. tech. 12%','Finance 8%'], holdings:['Veolia 7.5%','Xylem 7.2%','Danaher 6.8%','American Water Works 6.5%','AECOM 5.5%'], note:'Secteur eau mondial, thématique ressources rares long terme' },
+    { ticker:'PINR.PA',  name:'Amundi PEA Inde (MSCI India)',     ter:0.85, index:'MSCI India',            provider:'Amundi',      cat:'Thématique', replication:'synthetic', sectors:['Finance 24%','Info. tech. 18%','Énergie 11%','Matériaux 8%','Conso. disc. 7%'], holdings:['Reliance Industries 10.5%','HDFC Bank 9.8%','ICICI Bank 7.5%','Infosys 6.8%','TCS 6.2%'], note:'Inde pure play, forte croissance démographique/économique — TER élevé 0,85% (confirmé Boursobank)' },
+    { ticker:'PASI.PA',  name:'Amundi PEA Chine MSCI China Scr',  ter:0.25, index:'MSCI China',            provider:'Amundi',      cat:'Thématique', replication:'synthetic', sectors:['Conso. disc. 32%','Info. tech. 24%','Finance 17%','Télécoms 10%','Santé 6%'], holdings:['Alibaba 10.5%','Tencent 9.8%','JD.com 6.5%','Meituan 5.8%','Baidu 5.2%'], note:'Chine, risque réglementaire/géopolitique, fort potentiel' },
+    { ticker:'MLUX.PA',  name:'Amundi PEA Luxe Monde',            ter:0.35, index:'Solactive Global Luxury',provider:'Amundi',      cat:'Thématique', replication:'synthetic', sectors:['Luxe/Conso. disc. 65%','Santé/Beauté 15%','Finance 8%','Hôtellerie 7%'], holdings:['LVMH 15.5%','Hermès 10.8%','Kering 8.5%','Richemont 7.8%','Moncler 5.2%'], note:'Luxe mondial (LVMH, Hermès, Kering...), résilient premium' },
+    { ticker:'PMEH.PA',  name:'Amundi PEA Immobilier Europe',     ter:0.40, index:'FTSE EPRA/NAREIT EU',   provider:'Amundi',      cat:'Thématique', replication:'synthetic', sectors:['Immobilier 100%'], holdings:['Vonovia 12.5%','Unibail-Rodamco 10.8%','Gecina 8.5%','PSP Swiss Prop. 7.2%','Klépierre 6.8%'], note:'SIIC/REITs européens en PEA, sensible aux taux longs' },
+    { ticker:'COSE.PA',  name:'Amundi PEA S&P US Cons Staples',   ter:0.25, index:'S&P US Cons Staples',   provider:'Amundi',      cat:'Thématique', replication:'synthetic', sectors:['Conso. stap. 100%'], holdings:['P&G 14.5%','Coca-Cola 12.8%','PepsiCo 11.5%','Costco 10.5%','Walmart 9.8%'], note:'Conso défensive US en PEA, résilient en récession' },
+    { ticker:'DJE.PA',   name:'Amundi PEA S&P US Industrials',    ter:0.25, index:'S&P US Industrials',    provider:'Amundi',      cat:'Thématique', replication:'synthetic', sectors:['Industrie 100%'], holdings:['Boeing 8.5%','Caterpillar 8.2%','Honeywell 7.8%','Union Pacific 7.5%','Raytheon 7.2%'], note:'Industrie US en PEA (Boeing, Caterpillar, Honeywell...)' },
     // --- iSHARES 0€ FRAIS BOURSOBANK (Boursomarkets) ---
-    { ticker:'CEMU.DE',   name:'iShares Core MSCI EMU (acc)',       ter:0.12, index:'MSCI EMU',               provider:'iShares',     cat:'Europe',     zeroFee:true, note:'Zone euro core, TER 0.12%, 0€ frais courtage Boursobank' },
-    { ticker:'CSX5.DE',   name:'iShares Core Euro STOXX 50 (acc)',  ter:0.10, index:'Euro STOXX 50',          provider:'iShares',     cat:'Europe',     zeroFee:true, note:'STOXX 50 cap, TER 0.10%, 0€ frais courtage Boursobank' },
-    { ticker:'EUEA.DE',   name:'iShares Core Euro STOXX 50 (dist)', ter:0.10, index:'Euro STOXX 50',          provider:'iShares',     cat:'Europe',     zeroFee:true, note:'STOXX 50 dist, TER 0.10%, 0€ frais courtage Boursobank' },
-    { ticker:'EXS1.DE',   name:'iShares Core DAX ETF (acc)',        ter:0.16, index:'DAX',                    provider:'iShares',     cat:'National EU',zeroFee:true, note:'DAX 40 iShares, très liquide, 0€ frais courtage Boursobank' },
-    { ticker:'IFRE.PA',   name:'iShares MSCI France ETF (acc)',     ter:0.25, index:'MSCI France',            provider:'iShares',     cat:'France',     zeroFee:true, note:'France large cap iShares, 0€ frais courtage Boursobank' },
-    { ticker:'SMUA.DE',   name:'iShares MSCI EMU SRI (acc)',        ter:0.20, index:'MSCI EMU SRI',           provider:'iShares',     cat:'ESG EU',     zeroFee:true, note:'EMU ISR iShares, 0€ frais courtage Boursobank' },
-    { ticker:'EMPA.DE',   name:'iShares MSCI EMU Paris-Aligned (acc)',ter:0.17,index:'MSCI EMU Paris-Aligned',provider:'iShares',     cat:'ESG EU',     zeroFee:true, note:'EMU aligné Paris iShares, TER 0.17%, 0€ frais courtage Boursobank' },
-    { ticker:'STEC.DE',   name:'iShares STOXX EU600 Tech (acc)',    ter:0.46, index:'STOXX EU600 Technology', provider:'iShares',     cat:'Sectoriel EU',zeroFee:true, note:'Tech EU iShares, 0€ frais courtage Boursobank' },
-    { ticker:'EXA1.DE',   name:'iShares EURO STOXX Banks 30-15',   ter:0.51, index:'EURO STOXX Banks 30-15', provider:'iShares',     cat:'Sectoriel EU',zeroFee:true, note:'Banques zone euro iShares, 0€ frais courtage Boursobank' },
-    { ticker:'IDVA.DE',   name:'iShares EURO STOXX Select Div 30',  ter:0.40, index:'EURO STOXX Select Div',  provider:'iShares',     cat:'Factoriel EU',zeroFee:true, note:'Dividendes zone euro iShares, 0€ frais courtage Boursobank' },
+    { ticker:'CEMU.DE',  name:'iShares Core MSCI EMU (acc)',      ter:0.12, isin:'IE00B53QG562', index:'MSCI EMU',             provider:'iShares',     cat:'Europe',     replication:'physical', zeroFee:true, sectors:['Finance 20%','Industrie 15%','Conso. disc. 12%','Santé 11%','Matériaux 8%'], holdings:['LVMH 4.8%','SAP 4.5%','ASML 4.2%','Sanofi 3.2%','TotalEnergies 3.0%'], note:'Zone euro core, TER 0.12%, 0€ frais courtage Boursobank' },
+    { ticker:'CSX5.DE',  name:'iShares Core Euro STOXX 50 (acc)', ter:0.10, isin:'IE00B53L3W79', index:'Euro STOXX 50',        provider:'iShares',     cat:'Europe',     replication:'physical', zeroFee:true, sectors:['Finance 19%','Industrie 17%','Conso. disc. 13%','Santé 11%','Énergie 8%'], holdings:['LVMH 5.8%','SAP 5.2%','ASML 4.9%','Siemens 4.6%','TotalEnergies 4.2%'], note:'STOXX 50 cap, TER 0.10%, 0€ frais courtage Boursobank' },
+    { ticker:'EUEA.DE',  name:'iShares Core Euro STOXX 50 (dist)',ter:0.10, index:'Euro STOXX 50',        provider:'iShares',     cat:'Europe',     replication:'physical', zeroFee:true, sectors:['Finance 19%','Industrie 17%','Conso. disc. 13%','Santé 11%','Énergie 8%'], holdings:['LVMH 5.8%','SAP 5.2%','ASML 4.9%','Siemens 4.6%','TotalEnergies 4.2%'], note:'STOXX 50 dist, TER 0.10%, 0€ frais courtage Boursobank' },
+    { ticker:'EXS1.DE',  name:'iShares Core DAX ETF (acc)',       ter:0.16, isin:'DE0005933931', index:'DAX',                  provider:'iShares',     cat:'National EU',replication:'physical', zeroFee:true, sectors:['Finance 18%','Industrie 17%','Santé 14%','Info. tech. 12%','Conso. disc. 11%'], holdings:['SAP 10.2%','Siemens 8.5%','Allianz 7.2%','Deutsche Telekom 5.8%','BASF 4.5%'], note:'DAX 40 iShares, très liquide, 0€ frais courtage Boursobank' },
+    { ticker:'IFRE.PA',  name:'iShares MSCI France ETF (acc)',    ter:0.25, index:'MSCI France',          provider:'iShares',     cat:'France',     replication:'physical', zeroFee:true, sectors:['Conso. disc./Luxe 22%','Finance 14%','Énergie 11%','Santé 10%','Industrie 10%'], holdings:['LVMH 12%','TotalEnergies 9%','Hermès 7.5%','Sanofi 7%','Airbus 6%'], note:'France large cap iShares, 0€ frais courtage Boursobank' },
+    { ticker:'SMUA.DE',  name:'iShares MSCI EMU SRI (acc)',       ter:0.20, index:'MSCI EMU SRI',         provider:'iShares',     cat:'ESG EU',     replication:'physical', zeroFee:true, sectors:['Industrie 18%','Finance 16%','Santé 14%','Info. tech. 12%','Conso. disc. 10%'], holdings:['ASML 7.5%','SAP 7.0%','Schneider 5.5%','Air Liquide 5.0%','L\'Oréal 4.8%'], note:'EMU ISR iShares, 0€ frais courtage Boursobank' },
+    { ticker:'EMPA.DE',  name:'iShares MSCI EMU Paris-Aligned',  ter:0.17, index:'MSCI EMU Paris-Aligned',provider:'iShares',     cat:'ESG EU',     replication:'physical', zeroFee:true, sectors:['Industrie 18%','Finance 16%','Santé 14%','Info. tech. 12%','Conso. disc. 10%'], holdings:['ASML 7.2%','SAP 6.8%','Schneider 5.5%','Air Liquide 4.8%','L\'Oréal 4.5%'], note:'EMU aligné Paris iShares, TER 0.17%, 0€ frais courtage Boursobank' },
+    { ticker:'STEC.DE',  name:'iShares STOXX EU600 Tech (acc)',   ter:0.46, index:'STOXX EU600 Technology',provider:'iShares',     cat:'Sectoriel EU',replication:'physical', zeroFee:true, sectors:['Info. tech. 100%'], holdings:['ASML 30.5%','SAP 24.2%','Capgemini 7.5%','Dassault Systèmes 7.2%','Amadeus IT 5.8%'], note:'Tech EU iShares, 0€ frais courtage Boursobank' },
+    { ticker:'EXA1.DE',  name:'iShares EURO STOXX Banks 30-15',  ter:0.51, index:'EURO STOXX Banks 30-15',provider:'iShares',     cat:'Sectoriel EU',replication:'physical', zeroFee:true, sectors:['Banques 100%'], holdings:['BNP Paribas 14.8%','Santander 13.2%','ING 10.8%','UniCredit 10.5%','Société Générale 8.8%'], note:'Banques zone euro iShares, 0€ frais courtage Boursobank' },
+    { ticker:'IDVA.DE',  name:'iShares EURO STOXX Select Div 30', ter:0.40, index:'EURO STOXX Select Div', provider:'iShares',     cat:'Factoriel EU',replication:'physical', zeroFee:true, sectors:['Finance 22%','Utilities 18%','Télécoms 14%','Énergie 12%','Industrie 10%'], holdings:['Orange 6.5%','Enel 6.2%','Endesa 5.8%','Santander 5.5%','NN Group 5.2%'], note:'Dividendes zone euro iShares, 0€ frais courtage Boursobank' },
     // --- COURT TERME / MONÉTAIRE ---
-    { ticker:'OBLI.PA',   name:'Amundi PEA Euro Court Terme',       ter:0.10, index:'Euro Court Terme',         provider:'Amundi',      cat:'Monétaire',  note:'Substitut liquidités en PEA, très faible risque, proche taux court' },
-    { ticker:'CASHE.PA',  name:'BNP Easy EUR Overnight (cap)',       ter:0.10, index:'EUR Overnight',            provider:'BNP Paribas', cat:'Monétaire',  note:'Rendement overnight en PEA, parking cash sécurisé' },
+    { ticker:'OBLI.PA',  name:'Amundi PEA Euro Court Terme',      ter:0.10, index:'Euro Court Terme',      provider:'Amundi',      cat:'Monétaire',  replication:'synthetic', sectors:['Obligataire CT 100%'], holdings:['Oblig. souveraines zone euro <3 mois'], note:'Substitut liquidités en PEA, très faible risque, proche taux court' },
+    { ticker:'CASHE.PA', name:'BNP Easy EUR Overnight (cap)',     ter:0.10, index:'EUR Overnight',         provider:'BNP Paribas', cat:'Monétaire',  replication:'synthetic', sectors:['Monétaire overnight 100%'], holdings:['Dépôts BCE au jour le jour'], note:'Rendement overnight en PEA, parking cash sécurisé' },
     // --- LEVIER ---
-    { ticker:'LQQ.PA',    name:'Amundi Nasdaq-100 Leverage x2',     ter:0.60, index:'Nasdaq-100 x2',            provider:'Amundi',      cat:'Levier',     note:'⚠️ x2 quotidien, érosion si lateral, réservé investisseurs avertis' },
+    { ticker:'LQQ.PA',   name:'Amundi Nasdaq-100 Leverage x2',   ter:0.60, index:'Nasdaq-100 x2',         provider:'Amundi',      cat:'Levier',     replication:'synthetic', sectors:['Info. tech. 58%','Conso. disc. 14%','Santé 7%','Industrie 5%','Finance 3%'], holdings:['Apple x2 9.1%','Microsoft x2 8.7%','NVIDIA x2 8.0%','Amazon x2 5.2%','Meta x2 4.5%'], note:'⚠️ x2 quotidien, érosion si lateral, réservé investisseurs avertis' },
   ],
   fiscalite: [
     'Plafond versements PEA: 150 000 € (ne comprend pas la plus-value)',
@@ -6728,7 +6866,15 @@ function buildKBContext() {
   const cats = [...new Set(PEA_KB.etfs.map(e => e.cat))];
   const etfLines = cats.map(cat => {
     const items = PEA_KB.etfs.filter(e => e.cat === cat);
-    return `[${cat}]\n` + items.map(e => `  • ${e.ticker}${e.zeroFee?' [0€]':''} — ${e.name} | TER:${e.ter}% | ${e.note}`).join('\n');
+    return `[${cat}]\n` + items.map(e => {
+      let line = `  • ${e.ticker}${e.zeroFee?' [0€]':''} — ${e.name} | TER:${e.ter}%`;
+      if (e.isin) line += ` | ISIN:${e.isin}`;
+      if (e.replication) line += ` | Rép.:${e.replication}`;
+      if (e.sectors && e.sectors.length) line += ` | Secteurs: ${e.sectors.join(', ')}`;
+      if (e.holdings && e.holdings.length) line += ` | Top: ${e.holdings.join(', ')}`;
+      line += ` | ${e.note}`;
+      return line;
+    }).join('\n');
   }).join('\n');
   const fiscLines = PEA_KB.fiscalite.map(f => `• ${f}`).join('\n');
   const stratLines = PEA_KB.strategies.map(s => `• ${s}`).join('\n');

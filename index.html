@@ -2941,17 +2941,43 @@ function parseAIJSON(text) {
   if (s.includes('```')) {
     s = s.replace(/^[\s\S]*?```(?:json)?\s*/i, '').replace(/\s*```[\s\S]*$/, '').trim();
   }
-  const start = s.indexOf('{'), end = s.lastIndexOf('}');
-  if (start === -1 || end === -1) throw new Error('no JSON');
-  let j = s.slice(start, end + 1);
-  // Parse direct
-  try { return JSON.parse(j); } catch(e) {}
-  // Répare trailing commas et mots-clés Python
+  const start = s.indexOf('{');
+  if (start === -1) throw new Error('no JSON');
+  // Prend tout depuis le premier { (pas besoin du dernier } — on répare si tronqué)
+  let j = s.slice(start);
+  // Nettoyage commun
   j = j.replace(/,\s*([}\]])/g, '$1')
         .replace(/\bNone\b/g, 'null')
         .replace(/\bTrue\b/g, 'true')
         .replace(/\bFalse\b/g, 'false');
-  return JSON.parse(j);
+  // Parse direct
+  try { return JSON.parse(j); } catch(e) {}
+  // JSON tronqué (token limit) → tente réparation
+  try { return JSON.parse(repairJSON(j)); } catch(e2) {}
+  // Dernier recours : tronque au dernier } complet
+  const end = j.lastIndexOf('}');
+  if (end === -1) throw new Error('no JSON');
+  return JSON.parse(j.slice(0, end + 1));
+}
+function repairJSON(s) {
+  // Ferme les chaînes, tableaux et objets ouverts non fermés
+  let inStr = false, esc = false, stack = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (esc) { esc = false; continue; }
+    if (c === '\\' && inStr) { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (!inStr) {
+      if (c === '{') stack.push('}');
+      else if (c === '[') stack.push(']');
+      else if ((c === '}' || c === ']') && stack.length) stack.pop();
+    }
+  }
+  let out = s;
+  if (inStr) out += '"';                      // ferme chaîne ouverte
+  if (out.trimEnd().slice(-1) === ',') out = out.trimEnd().slice(0, -1); // trailing comma finale
+  while (stack.length) out += stack.pop();    // ferme objets/tableaux
+  return out;
 }
 
 function verdictBadge(v) {
@@ -3167,7 +3193,7 @@ RÈGLES CRITIQUES INVIOLABLES :
 4. BOURSOMARKETS 0€ — uniquement les iShares .PA listés dans la KB. Les ETF .DE, .L et autres ont des frais standards. Ne jamais affirmer qu'un .DE est à 0€ chez Boursobank.
 5. SUBSTITUTION = MÊME CATÉGORIE — remplacer un ETF défense par un ETF EURO STOXX 50 n'est pas une substitution neutre, c'est un pivot stratégique. Toujours signaler explicitement si l'exposition change.`;
   try {
-    const tokenMap = { plan: 6000, analyze: 5000, risk: 4000, monthly: 3000, valuation: 3000, compare: 3500 };
+    const tokenMap = { plan: 10000, analyze: 6000, risk: 4000, monthly: 3000, valuation: 3000, compare: 4000 };
     const res = await callAI([{ role:'user', content:fullPrompt }], { system: jsonSystem, maxTokens: tokenMap[type] ?? 3000 });
     let data = null;
     try { data = parseAIJSON(res); } catch(e) { console.warn('parseAIJSON failed:', e.message, '| raw:', res.slice(0,200)); }

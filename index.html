@@ -2230,11 +2230,21 @@ function renderPlanning() {
   etfResults = recomputeProj(etfResults);
   totalEtfUsed = etfResults.reduce((s,r) => s + r.amount, 0);
 
-  // Arrondi à l'entier inférieur : Boursobank ne supporte pas les fractions de parts
+  // Arrondi parts entières — Boursobank ne supporte pas les fractions
+  // Si floor donne un montant < 200€ min, on prend ceil(200/prix) pour respecter le minimum
   etfResults = etfResults.map(r => {
     if (!r.price || !r.parts) return r;
-    const wholeParts = Math.floor(r.parts);
-    if (wholeParts === 0) return { ...r, parts: 0, netInvestment: 0, feeAmt: 0, amount: 0 };
+    const minAmt = Math.max(r.minAmount ?? 200, 200);
+    let wholeParts = Math.floor(r.parts);
+    if (wholeParts === 0) {
+      // Pas assez pour 1 part idéale — mais si min-forcé, on vérifie si 1 part suffit
+      if (r.status === 'min-forced' && r.price * r.feeMul >= minAmt) wholeParts = 1;
+      else return { ...r, parts: 0, netInvestment: 0, feeAmt: 0, amount: 0 };
+    }
+    // Si l'arrondi inférieur donne < minimum → arrondi supérieur pour atteindre 200€
+    if (wholeParts * r.price * r.feeMul < minAmt) {
+      wholeParts = Math.ceil(minAmt / (r.price * r.feeMul));
+    }
     const netInvestment = wholeParts * r.price;
     const amount = netInvestment * r.feeMul;
     return { ...r, parts: wholeParts, netInvestment, feeAmt: amount - netInvestment, amount };

@@ -3555,18 +3555,22 @@ function renderPlanAnalysisCard(d) {
       const isPending = hasChoix && selectedIdx === undefined;
       const budget = S.data.settings.monthlyBudget || 1800;
       const basePct = (d.etfs_base||[]).reduce((s,e)=>s+(e.allocationPct||0),0);
-      const choixHtml = hasChoix ? `<div ${isPending?'data-choix-pending':''} style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+      // Options + "Ne rien changer" automatique (idx = o.options.length)
+      const noChangeIdx = o.options ? o.options.length : 0;
+      const allOptions = o.options ? [...o.options, {label:'Ne rien changer', items:null, rationale:'Conserver le plan actuel pour cet item'}] : [];
+      const choixHtml = hasChoix ? `<div data-choix-id="${o.choix_id}" ${isPending?'data-choix-pending':''} style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
         <div style="font-size:0.72rem;color:var(--accent);font-weight:700;margin-bottom:6px">👆 Ton choix :</div>
         <div style="display:flex;flex-direction:column;gap:5px">
-          ${o.options.map((opt,oi) => {
+          ${allOptions.map((opt,oi) => {
             const isSel = selectedIdx === oi;
-            const optPct = (opt.items||[]).reduce((s,e)=>s+(e.allocationPct||0),0);
+            const isNoChange = oi === noChangeIdx;
+            const optPct = (!isNoChange && opt.items?.length) ? (opt.items||[]).reduce((s,e)=>s+(e.allocationPct||0),0) : 0;
             const totPct = basePct + optPct || 100;
-            const mois = opt.items?.length ? Math.round(optPct/totPct*budget) : 0;
-            const moisStr = opt.items?.length && mois>0 ? ` · ~${mois}€/mois` : opt.items?.length===0 ? ' · supprime ce poste' : '';
-            return `<div onclick="selectPlanChoix('${o.choix_id}',${oi})" style="cursor:pointer;border-radius:7px;padding:8px 11px;border:2px solid ${isSel?'var(--accent)':'var(--border)'};background:${isSel?'var(--accent)11':'transparent'};transition:all 0.15s;display:flex;align-items:center;gap:8px">
-              <div style="width:14px;height:14px;border-radius:50%;border:2px solid ${isSel?'var(--accent)':'var(--muted)'};background:${isSel?'var(--accent)':'transparent'};flex-shrink:0"></div>
-              <div><div style="font-size:0.8rem;font-weight:${isSel?'700':'500'};color:${isSel?'var(--accent)':'var(--text)'}">${esc(opt.label)}${moisStr}</div>${opt.rationale?`<div style="font-size:0.71rem;color:var(--muted)">${esc(opt.rationale)}</div>`:''}</div>
+            const mois = optPct > 0 ? Math.round(optPct/totPct*budget) : 0;
+            const moisStr = isNoChange ? '' : optPct>0 ? ` · ~${mois}€/mois` : (opt.items?.length===0 ? ' · supprime ce poste' : '');
+            return `<div data-opt-idx="${oi}" onclick="selectPlanChoix('${o.choix_id}',${oi})" style="cursor:pointer;border-radius:7px;padding:8px 11px;border:2px solid ${isSel?'var(--accent)':'var(--border)'};background:${isSel?'var(--accent)11':'transparent'};transition:all 0.15s;display:flex;align-items:center;gap:8px">
+              <div class="choix-radio" style="width:14px;height:14px;border-radius:50%;border:2px solid ${isSel?'var(--accent)':'var(--muted)'};background:${isSel?'var(--accent)':'transparent'};flex-shrink:0;transition:all 0.15s"></div>
+              <div><div class="choix-label" style="font-size:0.8rem;font-weight:${isSel?'700':'500'};color:${isSel?'var(--accent)':isNoChange?'var(--muted)':'var(--text)'}">${esc(opt.label)}${moisStr}</div>${opt.rationale?`<div style="font-size:0.71rem;color:var(--muted)">${esc(opt.rationale)}</div>`:''}</div>
             </div>`;
           }).join('')}
         </div>
@@ -4569,14 +4573,34 @@ function applyAIStructuredPlanB64(b64) {
 function selectPlanChoix(choixId, optionIdx) {
   if (!S._planChoices) S._planChoices = {};
   S._planChoices[choixId] = optionIdx;
-  renderAI();
-  // Scroll vers le prochain choix non répondu, ou vers le plan assemblé si tout répondu
-  requestAnimationFrame(() => {
-    const next = document.querySelector('[data-choix-pending]');
-    const assembled = document.querySelector('[data-plan-assembled]');
-    const target = next || assembled;
-    if (target) target.scrollIntoView({ behavior:'smooth', block:'start' });
-  });
+
+  // Mise à jour visuelle directe — PAS de re-render = pas de reset scroll
+  const container = document.querySelector(`[data-choix-id="${choixId}"]`);
+  if (container) {
+    container.removeAttribute('data-choix-pending');
+    container.querySelectorAll('[data-opt-idx]').forEach(el => {
+      const sel = parseInt(el.getAttribute('data-opt-idx')) === optionIdx;
+      el.style.borderColor = sel ? 'var(--accent)' : 'var(--border)';
+      el.style.background  = sel ? 'var(--accent)11' : 'transparent';
+      const dot = el.querySelector('.choix-radio');
+      if (dot) { dot.style.background = sel ? 'var(--accent)' : 'transparent'; dot.style.borderColor = sel ? 'var(--accent)' : 'var(--muted)'; }
+      const lbl = el.querySelector('.choix-label');
+      if (lbl) { lbl.style.color = sel ? 'var(--accent)' : 'var(--text)'; lbl.style.fontWeight = sel ? '700' : '500'; }
+    });
+  }
+
+  // Prochain choix non répondu → scroll vers lui
+  const nextPending = document.querySelector('[data-choix-pending]');
+  if (nextPending) {
+    nextPending.scrollIntoView({ behavior:'smooth', block:'center' });
+  } else {
+    // Tout répondu → re-render pour afficher le plan assemblé
+    renderAI();
+    requestAnimationFrame(() => {
+      const assembled = document.querySelector('[data-plan-assembled]');
+      if (assembled) assembled.scrollIntoView({ behavior:'smooth', block:'start' });
+    });
+  }
 }
 
 function assemblePlanFromChoices(data) {
@@ -4587,13 +4611,15 @@ function assemblePlanFromChoices(data) {
     if (!o.choix_id || !o.options) continue;
     const idx = S._planChoices?.[o.choix_id];
     if (idx === undefined) continue;
-    for (const item of (o.options[idx]?.items || [])) {
+    const noChangeIdx = o.options ? o.options.length : 0;
+    if (idx === noChangeIdx) continue; // "Ne rien changer" → on ne modifie pas le base
+    const selectedOpt = o.options?.[idx];
+    if (!selectedOpt || selectedOpt.items === null) continue; // sécurité
+    for (const item of (selectedOpt.items || [])) {
       const existing = merged.findIndex(e => e.ticker === item.ticker);
       if (existing >= 0) merged[existing] = {...item, isEtf:true}; // remplace
       else merged.push({...item, isEtf:true});                     // ajoute
     }
-    // Si l'option supprime un ETF (items vide mais ticker à retirer dans action)
-    // Les items:[] signifient "ne rien ajouter/modifier" — déjà géré
   }
   return { name:'Plan personnalisé', items: merged.filter(e => e.allocationPct > 0) };
 }

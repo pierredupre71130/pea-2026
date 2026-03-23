@@ -4577,7 +4577,7 @@ function assemblePlanFromChoices(data) {
   }
   return { name:'Plan personnalisé', items:[...base, ...extra] };
 }
-}
+
 function applyAIStructuredPlan(plan) {
   if (!plan?.items?.length) { toast('Plan vide', 'error'); return; }
   if (S.data.planItems.filter(p => p.active).length) {

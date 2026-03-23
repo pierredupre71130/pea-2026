@@ -3433,7 +3433,7 @@ MISSION: Analyse complète du plan mensuel. Diversification, allocations ETF, ch
 RAPPELS CRITIQUES: 1) Parts ENTIÈRES uniquement (PEA français, jamais 1.5 part). 2) Minimum 200€/ordre depuis avril 2026 sur Boursobank. 3) Boursomarkets 0€ = seulement iShares .PA listés. 4) Substitution ETF = même catégorie/thématique obligatoire.
 JSON UNIQUEMENT — schéma strict:
 {"note_globale":<0-10>,"verdict":"<verdict 2-3 phrases>","budget_mensuel":${S.data.settings.monthlyBudget},"etfs":[{"ticker":"","pct_reel":<n>,"note":<0-10>,"role":"<rôle court>","commentaire":"<analyse concise>","risque":"<risque principal>"}],"titres":[{"ticker":"","parts_mois":<n>,"budget_mois_eur":<n>,"commentaire":"<analyse concise>","utilite":"<utilité>"}],"diversification":{"score":<0-10>,"detail":"<bilan concis>","zones_manquantes":["<zone>"],"chevauchements":["<overlap>"]},"couts":{"total_annuel_eur":${costs.total_annuel_eur},"courtage_annuel_eur":${costs.courtage_annuel_eur},"ter_annuel_eur":${costs.ter_annuel_eur},"frais_etf_pct_moy":${costs.frais_etf_pct_moy},"detail":"${costs.detail}"},"points_forts":["<point>"],"risques_plan":["<risque>"],"optimisations":[{"priorite":<1-5>,"action":"<action>","impact":"<impact>","effort":"facile|moyen|complexe"}],"synthese":"<synthèse 3-4 phrases>","plan_suggere":{"name":"<nom 4 mots>","items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
-RÈGLE plan_suggere : TOUJOURS inclure un plan optimisé concret basé sur tes recommandations. ETFs→allocationPct(somme libre 0-100). Titres directs→isEtf:false+monthlyShares(entier≥1).`,
+RÈGLE plan_suggere OBLIGATOIRE : Inclure TOUJOURS un plan concret qui CORRIGE les problèmes identifiés et viserait une note ≥8/10. Ce plan doit être DIFFÉRENT du plan actuel (sinon inutile). Appliquer tes recommandations d'optimisation prioritaires. ETFs→allocationPct(0-100,somme libre). Titres directs→isEtf:false+monthlyShares(entier≥1). Si tu inclus les mêmes allocations que le plan actuel, le plan_suggere sera rejeté.`,
   'plan',
   (d) => { d.couts = { total_annuel_eur: costs.total_annuel_eur, courtage_annuel_eur: costs.courtage_annuel_eur, ter_annuel_eur: costs.ter_annuel_eur, frais_etf_pct_moy: costs.frais_etf_pct_moy, detail: costs.detail }; return d; });
 }
@@ -4475,14 +4475,24 @@ function applyAIStructuredPlan(plan) {
     if (!S.data.savedPlans) S.data.savedPlans = [];
     S.data.savedPlans.push({ id:uid(), name:'Avant IA — '+today(), date:today(), source:'manual', aiColor:null, items:S.data.planItems.map(p=>({...p})) });
   }
-  const newItems = plan.items.map((item,idx) => ({
-    id:uid(), ticker:item.ticker, name:item.name,
-    isEtf: item.isEtf !== false,
-    allocationPct: item.isEtf !== false ? (item.allocationPct||0) : 0,
-    monthlyShares: item.isEtf === false ? (item.monthlyShares||1) : 0,
-    monthlyAmount:0, minAmount:200, feePct: item.isEtf!==false ? 0.5 : 0.9,
-    priority:idx+1, active:true, notes:''
-  }));
+  const newItems = plan.items.map((item,idx) => {
+    const isEtf = item.isEtf !== false;
+    // feePct correct : 0€ Boursomarkets, 0.9% action, 0.60% ETF sinon
+    const feePct = NO_COURTAGE.has(item.ticker) ? 0 : isEtf ? BOURSO_ETF_FEE_PCT : 0.9;
+    // ter depuis l'item IA → PEA_KB → 0
+    const ter = item.ter ?? PEA_KB?.etfs?.find(e => e.ticker === item.ticker)?.ter ?? undefined;
+    // Récupère les champs existants du plan actuel si le ticker est déjà présent
+    const existing = S.data.planItems.find(p => p.ticker === item.ticker);
+    return {
+      id:uid(), ticker:item.ticker, name:item.name || existing?.name || item.ticker,
+      isEtf,
+      allocationPct: isEtf ? (item.allocationPct || existing?.allocationPct || 0) : 0,
+      monthlyShares: !isEtf ? (item.monthlyShares || existing?.monthlyShares || 1) : 0,
+      monthlyAmount:0, minAmount:200, feePct,
+      ...(ter !== undefined ? {ter} : {}),
+      priority:idx+1, active:true, notes: existing?.notes || ''
+    };
+  });
   if (!S.data.savedPlans) S.data.savedPlans = [];
   S.data.savedPlans.push({ id:uid(), name:plan.name||'Plan IA', date:today(), source:'ai', aiColor:'#3b82f6', items:newItems });
   S.data.planItems = newItems;

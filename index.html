@@ -3473,6 +3473,8 @@ function renderValuationCard(d) {
 
 async function aiRunStructured(fullPrompt, type, postProcess) {
   const labels = { analyze:'📊 Analyse du portefeuille', monthly:'📅 Conseil achat mensuel', risk:'⚡ Analyse des risques', valuation:'💰 Valorisation IA', plan:'📋 Analyse du plan mensuel', compare:'🔄 Comparaison de plans' };
+  // Chaque nouvelle analyse remplace la précédente (évite l'accumulation / scroll excessif)
+  S.ai = [];
   const now = new Date().toLocaleTimeString('fr-FR');
   S.ai.push({ role:'user', content:labels[type]||'Analyse IA', time:now, isLabel:true });
   renderAI();
@@ -4343,6 +4345,8 @@ function techDrawMACDChart(labels, macd) {
 
 async function aiTechnicalAnalysis() {
   if (!_techData || !_techState.ticker) { toast('Lancez d\'abord une analyse technique', 'error'); return; }
+  // Chaque nouvelle analyse remplace la précédente
+  S.ai = [];
   const { closes, highs, lows, labels } = _techData;
   const sma20  = techSMA(closes, 20);
   const sma50  = techSMA(closes, 50);

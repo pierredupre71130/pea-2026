@@ -245,15 +245,14 @@
       [style*="grid-template-columns: repeat("],[style*="grid-template-columns:repeat("]{grid-template-columns:1fr!important}
       /* Grids 2 colonnes explicites → 1 colonne */
       [style*="grid-template-columns: 1fr 1fr"],[style*="grid-template-columns:1fr 1fr"]{grid-template-columns:1fr!important}
-      .btn{min-height:42px}
+      .btn{min-height:40px}
       input,select,textarea{min-height:44px;font-size:16px!important}
-      .page-actions{gap:6px}
-      .page-actions .btn{flex:1;justify-content:center;min-width:0}
-      /* Inputs à largeur fixe dans les flex → libres */
-      .table-wrap input[type=number]{width:52px!important}
-      /* Page header wrap */
-      .page-header{flex-direction:column;align-items:flex-start;gap:10px}
-      .page-sub{margin-bottom:10px}
+      /* Page-actions : 2 boutons par ligne, texte compact */
+      .page-actions{gap:5px;width:100%}
+      .page-actions .btn{flex:1 1 calc(50% - 3px);justify-content:center;min-width:0;font-size:0.72rem;padding:7px 6px;white-space:normal;text-align:center;line-height:1.2}
+      /* Page header en colonne */
+      .page-header{flex-direction:column;align-items:flex-start;gap:8px}
+      .page-sub{margin-bottom:6px}
       /* Tables : réduction min-width sur petit écran */
       table{min-width:340px}
       /* Toasts centrés en bas */
@@ -2656,21 +2655,34 @@ function renderPlanning() {
     ${projRows.length ? `
     <div class="card">
       <div class="section-title mb16">Projection du portefeuille après achat</div>
-      <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:14px;font-size:0.82rem">
-        <div>Portefeuille actuel&nbsp;: <strong>${fc(totalCurrentPF)}</strong></div>
-        <div title="Cash total débité du compte (net + frais)">Cash débité&nbsp;: <strong class="positive">+${fc(totalCashSpent)}</strong></div>
-        <div title="Investissement net réel (hors frais de courtage)">Net investi&nbsp;: <strong class="positive">+${fc(totalNetInvested)}</strong></div>
-        <div>Portefeuille projeté&nbsp;: <strong style="color:var(--accent)">${fc(totalProjectedPF)}</strong></div>
-        ${currentEtfTotal > 0 ? `<span style="color:var(--border)">|</span>
-        <div class="neutral">Bucket ETF&nbsp;: <strong>${fc(currentEtfTotal)}</strong> → <strong style="color:var(--accent)">${fc(etfProjectedTotal)}</strong></div>` : ''}
+      <!-- Résumé chiffres clés -->
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px">
+        <div style="background:var(--surface2);border-radius:8px;padding:9px 11px">
+          <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;margin-bottom:2px">Portefeuille actuel</div>
+          <div style="font-size:0.95rem;font-weight:700">${fc(totalCurrentPF)}</div>
+        </div>
+        <div style="background:var(--surface2);border-radius:8px;padding:9px 11px">
+          <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;margin-bottom:2px">Portefeuille projeté</div>
+          <div style="font-size:0.95rem;font-weight:700;color:var(--accent)">${fc(totalProjectedPF)}</div>
+        </div>
+        <div style="background:var(--surface2);border-radius:8px;padding:9px 11px">
+          <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;margin-bottom:2px">Cash débité</div>
+          <div style="font-size:0.95rem;font-weight:700;color:#22c55e">+${fc(totalCashSpent)}</div>
+        </div>
+        <div style="background:var(--surface2);border-radius:8px;padding:9px 11px">
+          <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;margin-bottom:2px">Net investi</div>
+          <div style="font-size:0.95rem;font-weight:700;color:#22c55e">+${fc(totalNetInvested)}</div>
+        </div>
       </div>
-      <div class="table-wrap"><table>
+
+      <!-- TABLE DESKTOP -->
+      <div class="plan-desktop table-wrap"><table>
         <thead><tr>
           <th>Ticker</th><th>Nom</th><th>Valeur actuelle</th><th>Achat prévu</th><th>Valeur projetée</th>
-          <th title="% du portefeuille total (ETFs + titres directs)">% total actuel</th>
-          <th title="% du portefeuille total après achat">% total projeté</th>
-          <th title="% dans le bucket ETF uniquement (hors titres directs) — affiché seulement pour les ETFs du plan">% ETF actuel</th>
-          <th title="% dans le bucket ETF uniquement après achat">% ETF projeté</th>
+          <th title="% du portefeuille total">% PF actuel</th>
+          <th title="% du portefeuille total après achat">% PF projeté</th>
+          <th title="% bucket ETF seulement">% ETF actuel</th>
+          <th title="% bucket ETF après achat">% ETF projeté</th>
         </tr></thead>
         <tbody>${projRows.map(row => `
           <tr>
@@ -2680,20 +2692,39 @@ function renderPlanning() {
             <td>${row.addVal > 0 ? `<span class="positive">+${fc(row.addVal)}</span>${row.addFees > 0.005 ? `<div style="font-size:0.7rem;color:var(--muted)">frais ${fc(row.addFees)}</div>` : ''}` : '<span class="neutral">—</span>'}</td>
             <td><strong>${fc(row.projectedVal)}</strong></td>
             <td class="neutral">${fn(row.currentPct,1)}%</td>
-            <td>${row.addVal > 0
-              ? `<strong style="color:var(--accent)">${fn(row.projectedPct,1)}%</strong>`
-              : `<span class="neutral">${fn(row.projectedPct,1)}%</span>`}</td>
-            <td>${row.etfCurrentPct !== null
-              ? `<span class="neutral">${fn(row.etfCurrentPct,1)}%</span>`
-              : '<span class="neutral">—</span>'}</td>
-            <td>${row.etfProjectedPct !== null
-              ? (row.addVal > 0
-                  ? `<strong style="color:var(--accent)">${fn(row.etfProjectedPct,1)}%</strong>`
-                  : `<span class="neutral">${fn(row.etfProjectedPct,1)}%</span>`)
-              : '<span class="neutral">—</span>'}</td>
+            <td>${row.addVal > 0 ? `<strong style="color:var(--accent)">${fn(row.projectedPct,1)}%</strong>` : `<span class="neutral">${fn(row.projectedPct,1)}%</span>`}</td>
+            <td>${row.etfCurrentPct !== null ? `<span class="neutral">${fn(row.etfCurrentPct,1)}%</span>` : '<span class="neutral">—</span>'}</td>
+            <td>${row.etfProjectedPct !== null ? (row.addVal > 0 ? `<strong style="color:var(--accent)">${fn(row.etfProjectedPct,1)}%</strong>` : `<span class="neutral">${fn(row.etfProjectedPct,1)}%</span>`) : '<span class="neutral">—</span>'}</td>
           </tr>`).join('')}
         </tbody>
       </table></div>
+
+      <!-- CARDS MOBILE -->
+      <div class="plan-mobile">${projRows.map(row => `
+        <div style="background:var(--surface2);border:1px solid ${row.addVal>0?'rgba(45,126,247,0.3)':'var(--border)'};border-radius:10px;padding:10px 12px;margin-bottom:7px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px">
+            <div style="display:flex;align-items:center;gap:7px;min-width:0">
+              <span class="chip" style="flex-shrink:0">${esc(row.ticker)}</span>
+              <span style="font-size:0.78rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.name)}</span>
+            </div>
+            ${row.addVal > 0 ? `<span style="font-size:0.72rem;font-weight:700;color:#22c55e;flex-shrink:0">+${fc(row.addVal)}</span>` : ''}
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+            <div>
+              <div style="font-size:0.6rem;color:var(--muted);margin-bottom:1px">Valeur projetée</div>
+              <div style="font-size:0.9rem;font-weight:700;color:${row.addVal>0?'var(--accent)':'var(--text)'}">${fc(row.projectedVal)}</div>
+              <div style="font-size:0.67rem;color:var(--muted)">${fc(row.currentVal)} actuel</div>
+            </div>
+            <div>
+              <div style="font-size:0.6rem;color:var(--muted);margin-bottom:1px">% PF</div>
+              <div style="font-size:0.9rem;font-weight:700;color:${row.addVal>0?'var(--accent)':'var(--muted)'}">
+                ${fn(row.projectedPct,1)}%
+              </div>
+              <div style="font-size:0.67rem;color:var(--muted)">${fn(row.currentPct,1)}% actuel${row.etfProjectedPct!==null?` · ETF ${fn(row.etfProjectedPct,1)}%`:''}</div>
+            </div>
+          </div>
+        </div>`).join('')}
+      </div>
     </div>` : ''}
   `;
   requestAnimationFrame(() => makePlanChart(etfItems));

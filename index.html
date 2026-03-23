@@ -1272,110 +1272,87 @@ async function refreshPrices(tickers) {
 // ======================================================
 const TER_TTL = 7 * 24 * 60 * 60 * 1000; // 7 jours
 
-// Récupère TER + indice + secteurs + top holdings depuis justETF
+// Récupère TER + indice + secteurs + top holdings
+// Sources : 1) Yahoo Finance quoteSummary (TER fiable), 2) justETF via proxies alternatifs
 // Retourne { ter, isin, index, sectors:[{name,pct}], holdings:[{name,pct}] } ou null
 async function fetchETFProfileJustETF(ticker) {
   const cache = (S.data.terCache || {})[ticker];
   if (cache && (Date.now() - (cache.timestamp || 0) < TER_TTL)) return cache;
-
-  const symbol = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
   if (!S.data.terCache) S.data.terCache = {};
 
+  const symbol = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
+  let ter = null, isin = null, indexName = null, sectors = [], holdings = [];
+
+  // ══ SOURCE 1 : Yahoo Finance quoteSummary → TER (très fiable, déjà utilisé pour les prix) ══
   try {
-    // ── Étape 1 : API JSON justETF (ne requiert pas de JS côté client) ──
-    let isin = null;
-    let terFromApi = null;
-    const apiUrl = `https://www.justetf.com/api/etfs?query=${encodeURIComponent(symbol)}&locale=en&currency=EUR&page=0&pageSize=5`;
+    const yfUrl = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker)}?modules=fundProfile`;
+    const yr = await fetch(`${PROXY}${encodeURIComponent(yfUrl)}`, { signal: AbortSignal.timeout(12000) });
+    if (yr.ok) {
+      const raw = (await yr.json()).contents || '';
+      const j = JSON.parse(raw);
+      const er = j?.quoteSummary?.result?.[0]?.fundProfile?.annualReportExpenseRatio?.raw;
+      // Yahoo retourne 0.002 pour 0.20% — on convertit
+      if (er != null && er > 0) ter = Math.round(er * 10000) / 100;
+    }
+  } catch(e) { /* Yahoo non disponible */ }
+
+  // ══ SOURCE 2 : justETF via proxies alternatifs (ISIN + profil) ══
+  // allorigins retourne { contents: "..." }, corsproxy retourne le body directement
+  const jProxies = [
+    async (u) => { const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(u)}`, { signal: AbortSignal.timeout(12000) }); if (!r.ok) throw new Error('HTTP '+r.status); return (await r.json()).contents || ''; },
+    async (u) => { const r = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(u)}`, { signal: AbortSignal.timeout(12000) }); if (!r.ok) throw new Error('HTTP '+r.status); return await r.text(); },
+    async (u) => { const r = await fetch(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`, { signal: AbortSignal.timeout(12000) }); if (!r.ok) throw new Error('HTTP '+r.status); return await r.text(); },
+  ];
+
+  // 2a — API JSON justETF → ISIN (priorité)
+  for (const proxyFn of jProxies) {
+    if (isin) break;
     try {
-      const ar = await fetch(`${PROXY}${encodeURIComponent(apiUrl)}`, { signal: AbortSignal.timeout(15000) });
-      if (ar.ok) {
-        const raw = (await ar.json()).contents || '';
-        const apiJson = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        const etfs = apiJson?.etfs || apiJson?.data || [];
-        if (etfs.length) {
-          // Préférer correspondance exacte sur le ticker/symbole
-          const match = etfs.find(e => (e.symbol||'').toUpperCase() === symbol.toUpperCase()) || etfs[0];
-          isin = match.isin || null;
-          // Certaines réponses API incluent déjà le TER (en %)
-          if (match.ter != null) terFromApi = parseFloat(match.ter);
-        }
+      const raw = await proxyFn(`https://www.justetf.com/api/etfs?query=${encodeURIComponent(symbol)}&locale=en&currency=EUR&page=0&pageSize=5`);
+      const j = JSON.parse(raw);
+      const etfs = j?.etfs || j?.data || [];
+      if (etfs.length) {
+        const match = etfs.find(e => (e.symbol||'').toUpperCase() === symbol.toUpperCase()) || etfs[0];
+        isin = match.isin || null;
+        if (!ter && match.ter != null) { const t = parseFloat(match.ter); if (t > 0 && t <= 5) ter = t; }
       }
-    } catch(e2) { console.warn('justETF API', symbol, e2.message); }
-
-    // ── Étape 2 (fallback) : scrape page recherche HTML si API muette ──
-    if (!isin) {
-      try {
-        const searchUrl = `https://www.justetf.com/en/find-etf.html?query=${encodeURIComponent(symbol)}`;
-        const sr = await fetch(`${PROXY}${encodeURIComponent(searchUrl)}`, { signal: AbortSignal.timeout(15000) });
-        if (sr.ok) {
-          const shtml = (await sr.json()).contents || '';
-          const m = shtml.match(/data-isin="([A-Z]{2}[A-Z0-9]{10})"/) ||
-                    shtml.match(/[?&]isin=([A-Z]{2}[A-Z0-9]{10})/) ||
-                    shtml.match(/\/etf-profile\.html\?isin=([A-Z]{2}[A-Z0-9]{10})/);
-          if (m) isin = m[1];
-        }
-      } catch(e3) { console.warn('justETF search HTML', symbol, e3.message); }
-    }
-
-    if (!isin) {
-      console.warn('fetchETFProfileJustETF: ISIN introuvable pour', ticker);
-      return null;
-    }
-
-    // ── Étape 3 : page profil HTML ──
-    const profileUrl = `https://www.justetf.com/en/etf-profile.html?isin=${isin}`;
-    const pr = await fetch(`${PROXY}${encodeURIComponent(profileUrl)}`, { signal: AbortSignal.timeout(20000) });
-    if (!pr.ok) {
-      // On sauvegarde quand même l'ISIN + TER API si on les a
-      if (terFromApi && terFromApi > 0 && terFromApi <= 5) {
-        const partial = { ter: terFromApi, isin, index: null, sectors: [], holdings: [], timestamp: Date.now() };
-        S.data.terCache[ticker] = partial;
-        saveData();
-        return partial;
-      }
-      return null;
-    }
-    const phtml = (await pr.json()).contents || '';
-
-    // TER (priorité API, sinon regex dans la page)
-    let ter = terFromApi;
-    if (!ter) {
-      const terMatch = phtml.match(/Total expense ratio[\s\S]{0,400}?([0-9]+[.,][0-9]+)\s*%\s*p\.a/i) ||
-                       phtml.match(/TER[\s\S]{0,200}?([0-9]+[.,][0-9]+)\s*%/i);
-      ter = terMatch ? parseFloat(terMatch[1].replace(',', '.')) : null;
-    }
-    if (ter && (ter <= 0 || ter > 5)) ter = null;
-
-    // Indice répliqué
-    const indexMatch = phtml.match(/(?:Benchmark|Replication index|Replicated index|Index tracked)[^<]*<[^>]+>\s*([^<]{5,100})<\/(?:td|span|div|a)/i) ||
-                       phtml.match(/tracks the ([^<]{5,100}?)(?:\s*index|\s*Index)/i) ||
-                       phtml.match(/class="[^"]*index[^"]*"[^>]*>\s*([^<]{5,100})<\/(?:td|span|div)/i);
-    const indexName = indexMatch ? indexMatch[1].trim().replace(/\s+/g,' ').replace(/\.$/, '') : null;
-
-    // Top holdings (jusqu'à 5)
-    const holdingRows = [...phtml.matchAll(/class="[^"]*holding[^"]*"[\s\S]{0,200}?<td[^>]*>\s*([^<]{2,60})<\/td>[\s\S]{0,300}?([0-9]+[.,][0-9]+)\s*%/gi)];
-    const altHoldings = [...phtml.matchAll(/<td[^>]*>([A-Z][A-Za-z \.&]{3,50})<\/td>[\s\S]{0,200}?<td[^>]*>([0-9]+[.,][0-9]+)\s*%<\/td>/g)];
-    const holdings = (holdingRows.length ? holdingRows : altHoldings)
-      .slice(0, 5)
-      .map(m => ({ name: m[1].trim(), pct: parseFloat(m[2].replace(',', '.')) }))
-      .filter(h => h.pct > 0 && h.pct < 50);
-
-    // Secteurs (jusqu'à 5)
-    const sectorRows = [...phtml.matchAll(/([A-Za-z][A-Za-z &\/\-]{3,35})\s*<\/(?:td|span)>[\s\S]{0,200}?([0-9]+[.,][0-9]+)\s*%[\s\S]{0,100}?(?:sector|Sector)/gi)];
-    const altSectors  = [...phtml.matchAll(/(?:sector|Sector)[^>]*>[\s\S]{0,150}?([A-Za-z][A-Za-z &\/\-]{3,35})[\s\S]{0,150}?([0-9]+[.,][0-9]+)\s*%/gi)];
-    const sectors = (sectorRows.length ? sectorRows : altSectors)
-      .slice(0, 5)
-      .map(m => ({ name: m[1].trim(), pct: parseFloat(m[2].replace(',', '.')) }))
-      .filter(s => s.pct > 0 && s.pct <= 100);
-
-    const profile = { ter, isin, index: indexName, sectors, holdings, timestamp: Date.now() };
-    S.data.terCache[ticker] = profile;
-    saveData();
-    return profile;
-  } catch(e) {
-    console.warn('fetchETFProfileJustETF', ticker, e.message);
-    return null;
+    } catch(e) { /* essai proxy suivant */ }
   }
+
+  // 2b — Page profil HTML justETF → index + secteurs + holdings
+  if (isin) {
+    for (const proxyFn of jProxies) {
+      try {
+        const phtml = await proxyFn(`https://www.justetf.com/en/etf-profile.html?isin=${isin}`);
+        if (!phtml || phtml.length < 500) continue;
+
+        // TER depuis la page si Yahoo n'a pas répondu
+        if (!ter) {
+          const tm = phtml.match(/Total expense ratio[\s\S]{0,400}?([0-9]+[.,][0-9]+)\s*%\s*p\.a/i) ||
+                     phtml.match(/TER[\s\S]{0,200}?([0-9]+[.,][0-9]+)\s*%/i);
+          if (tm) { const t = parseFloat(tm[1].replace(',','.')); if (t > 0 && t <= 5) ter = t; }
+        }
+        // Indice répliqué
+        const im = phtml.match(/(?:Benchmark|Replication index|Replicated index|Index tracked)[^<]*<[^>]+>\s*([^<]{5,100})<\/(?:td|span|div|a)/i) ||
+                   phtml.match(/tracks the ([^<]{5,100}?)(?:\s*[Ii]ndex)/i);
+        if (im) indexName = im[1].trim().replace(/\s+/g,' ').replace(/\.$/, '');
+        // Holdings
+        const hRows = [...phtml.matchAll(/class="[^"]*holding[^"]*"[\s\S]{0,200}?<td[^>]*>\s*([^<]{2,60})<\/td>[\s\S]{0,300}?([0-9]+[.,][0-9]+)\s*%/gi)];
+        holdings = hRows.slice(0,5).map(m => ({ name:m[1].trim(), pct:parseFloat(m[2].replace(',','.')) })).filter(h => h.pct>0 && h.pct<50);
+        // Secteurs
+        const sRows = [...phtml.matchAll(/([A-Za-z][A-Za-z &\/\-]{3,35})\s*<\/(?:td|span)>[\s\S]{0,200}?([0-9]+[.,][0-9]+)\s*%[\s\S]{0,100}?(?:sector|Sector)/gi)];
+        sectors = sRows.slice(0,5).map(m => ({ name:m[1].trim(), pct:parseFloat(m[2].replace(',','.')) })).filter(s => s.pct>0 && s.pct<=100);
+        break; // profil OK, pas besoin d'autre proxy
+      } catch(e) { /* essai proxy suivant */ }
+    }
+  }
+
+  // Sauvegarde si on a au moins le TER
+  if (!ter && !isin) return null;
+  const profile = { ter, isin, index: indexName, sectors, holdings, timestamp: Date.now() };
+  S.data.terCache[ticker] = profile;
+  saveData();
+  return profile;
 }
 
 // Compat : retourne juste le TER
@@ -1387,7 +1364,7 @@ async function fetchTERJustETF(ticker) {
 async function refreshAllTER() {
   const planItems = S.data.planItems.filter(p => p.active && p.isEtf !== false);
   if (!planItems.length) { toast('Aucun ETF dans le plan', 'error'); return; }
-  toast(`Récupération profil justETF pour ${planItems.length} ETF(s)…`, 'info');
+  toast(`Récupération TER pour ${planItems.length} ETF(s)…`, 'info');
   let ok = 0; const failed = [];
   for (const item of planItems) {
     const profile = await fetchETFProfileJustETF(item.ticker);
@@ -3876,6 +3853,7 @@ function renderSettings() {
         <div class="card">
           <div class="section-title mb16">Données de démonstration</div>
           <div style="display:flex;flex-direction:column;gap:9px">
+            <button class="btn btn-secondary w-full" onclick="resetManualPrices()">🔄 Repasser tous les cours en automatique</button>
             <button class="btn btn-secondary w-full" onclick="loadDemo()">📦 Charger des données exemple</button>
             <button class="btn btn-danger w-full" onclick="resetAll()">🗑 Réinitialiser toutes les données</button>
           </div>
@@ -4287,6 +4265,22 @@ function loadDemo() {
   S.data.snapshots = demoSnaps;
 
   saveData(); toast('Données de démonstration chargées ✓'); navigate('dashboard');
+}
+
+function resetManualPrices() {
+  const cache = S.data.priceCache;
+  const manualTickers = Object.keys(cache).filter(t => cache[t]?.manual);
+  if (!manualTickers.length) { toast('Aucun cours manuel à réinitialiser', 'info'); return; }
+  manualTickers.forEach(t => { cache[t].manual = false; cache[t].timestamp = 0; });
+  saveData();
+  toast(`✅ ${manualTickers.length} cours repassés en automatique : ${manualTickers.join(', ')}`, 'success', 5000);
+  renderPage(S.page);
+  // Rafraîchit les cours immédiatement
+  const positions = computePositions();
+  if (positions.length) refreshPrices(positions.map(p => p.ticker)).then(({ ok, fail }) => {
+    toast(`${ok} cours mis à jour${fail ? `, ${fail} échec(s)` : ''}`, fail ? 'error' : 'success');
+    renderPage(S.page);
+  });
 }
 
 function resetAll() {

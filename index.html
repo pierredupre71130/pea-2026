@@ -4603,6 +4603,10 @@ function handleTx(e) {
     toast('Transaction modifiée ✓'); renderPage(S.page);
   } else {
     S.data.transactions.push(tx);
+    if (tx.type === 'buy') {
+      const amount = Math.round((tx.quantity * tx.price + (tx.fees || 0)) * 100) / 100;
+      S.data.deposits.push({ id: uid(), date: tx.date, type: 'deposit', amount, notes: `Auto — ${tx.ticker}` });
+    }
     saveData(); takeSnapshot(); closeModal('modal-tx'); e.target.reset();
     toast('Transaction ajoutée ✓'); renderPage(S.page);
   }
@@ -6635,8 +6639,24 @@ function computeYearlyReturns(snapshots) {
   return Object.entries(byYear).map(([year, snaps]) => {
     snaps.sort((a, b) => a.date.localeCompare(b.date));
     const sv = (s) => (s.portValue || 0) + (s.cash || 0);
-    const startVal = sv(snaps[0]), endVal = sv(snaps[snaps.length - 1]);
-    const perf = startVal > 0 ? (endVal - startVal) / startVal * 100 : 0;
+    const startVal = sv(snaps[0]);
+    const endVal = sv(snaps[snaps.length - 1]);
+    const startDate = new Date(snaps[0].date);
+    const endDate = new Date(snaps[snaps.length - 1].date);
+    const totalDays = Math.max(1, (endDate - startDate) / 86400000);
+
+    // Méthode de Dietz modifiée : pondère les apports par leur durée dans la période
+    let cashFlows = 0, weightedCF = 0;
+    for (const d of (S.data.deposits || [])) {
+      if (d.date <= snaps[0].date || d.date > snaps[snaps.length - 1].date) continue;
+      const sign = d.type === 'deposit' ? 1 : -1;
+      const daysLeft = (endDate - new Date(d.date)) / 86400000;
+      cashFlows += sign * d.amount;
+      weightedCF += sign * d.amount * (daysLeft / totalDays);
+    }
+    const denom = startVal + weightedCF;
+    const perf = denom > 0 ? (endVal - startVal - cashFlows) / denom * 100 : 0;
+
     return { year, startVal, endVal, perf, deposited: snaps[snaps.length - 1].deposited || 0 };
   }).sort((a, b) => a.year.localeCompare(b.year));
 }
@@ -6882,7 +6902,19 @@ async function renderPerformance() {
   if (firstDate) {
     const prices = await fetchBenchmarkHistory(firstDate);
     if (prices) {
-      bench = simulateDCABenchmark(S.data.deposits, prices);
+      // Construire les flux DCA depuis les transactions réelles si les dépôts sont insuffisants
+      // (1 seul dépôt global ≠ DCA — on simule : "si j'avais acheté IWDA.L le même jour pour le même montant")
+      const deposits = S.data.deposits || [];
+      const depositDates = deposits.filter(d => d.type === 'deposit').map(d => d.date);
+      const txDates = [...new Set((S.data.transactions||[]).filter(t => t.type==='buy').map(t => t.date))].sort();
+      const dcaDeposits = (depositDates.length <= 1 && txDates.length > 1)
+        ? txDates.map(date => ({
+            date, type: 'deposit',
+            amount: (S.data.transactions||[]).filter(t => t.type==='buy' && t.date===date)
+              .reduce((s, t) => s + t.quantity * t.price + (t.fees||0), 0)
+          }))
+        : deposits;
+      bench = simulateDCABenchmark(dcaDeposits, prices);
       if (bench) benchTRI = computeXIRR(bench.cashflows);
     }
   }
@@ -7219,6 +7251,15 @@ function init() {
   document.getElementById('form-tx').addEventListener('submit', handleTx);
   document.getElementById('form-dep').addEventListener('submit', handleDep);
   document.getElementById('form-plan').addEventListener('submit', handlePlan);
+
+  // Backfill : si aucun dépôt enregistré mais des achats existent, générer les dépôts automatiquement
+  if (S.data.deposits.length === 0 && S.data.transactions.some(t => t.type === 'buy')) {
+    S.data.transactions.filter(t => t.type === 'buy').forEach(tx => {
+      const amount = Math.round((tx.quantity * tx.price + (tx.fees || 0)) * 100) / 100;
+      S.data.deposits.push({ id: uid(), date: tx.date, type: 'deposit', amount, notes: `Auto — ${tx.ticker}` });
+    });
+    saveData();
+  }
 
   takeSnapshot();
   navigate('dashboard');

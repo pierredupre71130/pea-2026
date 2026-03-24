@@ -770,10 +770,13 @@ function saveData() {
 
 function takeSnapshot() {
   const { portValue, cash, deposited } = computeSummary();
+  // Fallback si deposited=0 (aucun dépôt enregistré) : utiliser le coût total des achats
+  const effectiveDeposited = deposited > 0 ? deposited
+    : (S.data.transactions||[]).filter(t=>t.type==='buy').reduce((s,t) => s + t.quantity*t.price + (t.fees||0), 0);
   const date = today();
   const snaps = S.data.snapshots || [];
   const idx = snaps.findIndex(s => s.date === date);
-  const entry = { date, portValue, cash: Math.max(0, cash), deposited };
+  const entry = { date, portValue, cash: Math.max(0, cash), deposited: effectiveDeposited };
   if (idx >= 0) snaps[idx] = entry; else snaps.push(entry);
   snaps.sort((a,b) => a.date.localeCompare(b.date));
   S.data.snapshots = snaps.slice(-730);
@@ -1160,7 +1163,11 @@ function makeEvolutionChart(filter) {
 
   const labels   = filtered.map(s => s.date);
   const total    = filtered.map(s => parseFloat((s.portValue + s.cash).toFixed(2)));
-  const invested = filtered.map(s => parseFloat(s.deposited.toFixed(2)));
+  // Forward-fill deposited : si un snapshot a deposited=0, on réutilise le dernier connu
+  const invested = (() => {
+    let last = 0;
+    return filtered.map(s => { if ((s.deposited||0) > 0) last = s.deposited; return parseFloat(last.toFixed(2)); });
+  })();
 
   S.charts['evolution'] = new Chart(ctx, {
     type: 'line',

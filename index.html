@@ -1674,7 +1674,10 @@ async function callOpenAICompat(url, key, model, messages, opts = {}, providerNa
   });
   if (!resp.ok) {
     const e = await resp.json().catch(() => ({}));
-    throw new Error(e.error?.message || `Erreur API ${providerName} ${resp.status}`);
+    // Gemini retourne parfois un tableau [{error:{...}}] au lieu d'un objet {error:{...}}
+    const eb = Array.isArray(e) ? e[0] : e;
+    const msg = eb?.error?.message || eb?.message || `Erreur HTTP ${resp.status}`;
+    throw new Error(msg);
   }
   const j = await resp.json();
   return j.choices?.[0]?.message?.content ?? '';
@@ -5324,8 +5327,16 @@ async function testKeyFree(provider) {
       toast(`✓ Clé ${name} valide !`, 'success');
     } else {
       const err = await r.json().catch(() => ({}));
-      const msg = err?.error?.message || err?.message || r.status;
-      toast(`Erreur ${name}: ${msg}`, 'error');
+      // Gemini retourne parfois [{error:{...}}] — gérer les deux formats
+      const eb = Array.isArray(err) ? err[0] : err;
+      const msg = eb?.error?.message || eb?.message || `Erreur HTTP ${r.status}`;
+      // Message clair selon le code d'erreur
+      const hint = r.status === 400 && msg.toLowerCase().includes('key')
+        ? ' — Vérifiez votre clé sur aistudio.google.com'
+        : r.status === 403 ? ' — API non activée ou clé restreinte'
+        : r.status === 429 ? ' — Quota dépassé, réessayez plus tard'
+        : '';
+      toast(`Erreur ${name}: ${msg}${hint}`, 'error', 8000);
       console.error(`${name} test error:`, err);
     }
   } catch(e) { toast('Erreur connexion: ' + e.message, 'error'); }

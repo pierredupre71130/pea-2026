@@ -655,9 +655,9 @@ const CLAUDE_MODELS = {
   opus:   'claude-opus-4-6',
 };
 const GEMINI_MODELS = {
-  'flash':      'gemini-2.0-flash',
-  'flash-lite': 'gemini-2.0-flash-lite',
-  'flash-15':   'gemini-1.5-flash',
+  'flash':      'gemini-2.0-flash-001',
+  'flash-lite': 'gemini-2.0-flash-lite-001',
+  'flash-25':   'gemini-2.5-flash-preview-04-17',
 };
 const GROQ_MODELS = {
   'llama-70b': 'llama-3.3-70b-versatile',
@@ -665,7 +665,7 @@ const GROQ_MODELS = {
   'mixtral':   'mixtral-8x7b-32768',
 };
 function getClaudeModel()  { return CLAUDE_MODELS[S.data.settings.claudeModel ?? 'haiku'] ?? CLAUDE_MODELS.haiku; }
-function getGeminiModel()  { return GEMINI_MODELS[S.data.settings.geminiModel  ?? 'flash'] ?? 'gemini-2.0-flash'; }
+function getGeminiModel()  { return GEMINI_MODELS[S.data.settings.geminiModel  ?? 'flash'] ?? 'gemini-2.0-flash-001'; }
 function getGroqModel()    { return GROQ_MODELS[S.data.settings.groqModel      ?? 'llama-70b'] ?? 'llama-3.3-70b-versatile'; }
 function getGrokXaiModel() { return S.data.settings.grokXaiModel ?? 'grok-3'; }
 const PRICE_TTL = 15 * 60 * 1000;
@@ -4810,9 +4810,9 @@ function renderSettings() {
           </div>
           <div class="form-group">
             <select onchange="updSetting('geminiModel',this.value)">
-              <option value="flash"      ${(s.geminiModel??'flash')==='flash'     ?'selected':''}>⚡ Gemini 2.0 Flash — recommandé</option>
-              <option value="flash-lite" ${s.geminiModel==='flash-lite'           ?'selected':''}>🪶 Flash Lite — ultra léger</option>
-              <option value="flash-15"   ${s.geminiModel==='flash-15'            ?'selected':''}>✦ 1.5 Flash — contexte long</option>
+              <option value="flash"      ${(s.geminiModel??'flash')==='flash'     ?'selected':''}>⚡ Gemini 2.0 Flash 001 — recommandé</option>
+              <option value="flash-lite" ${s.geminiModel==='flash-lite'           ?'selected':''}>🪶 Flash Lite 001 — ultra léger</option>
+              <option value="flash-25"   ${s.geminiModel==='flash-25'            ?'selected':''}>✨ Gemini 2.5 Flash — le plus récent</option>
             </select>
           </div>
           <button class="btn btn-secondary btn-sm" onclick="testKeyFree('gemini')">🔑 Tester</button>

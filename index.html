@@ -1806,6 +1806,20 @@ function renderDashboard() {
         ${positions.length ? `<div style="height:210px;position:relative"><canvas id="chart-pnl"></canvas></div>` : `<div class="empty"><div class="ico">📈</div><p>Aucune position</p></div>`}
       </div>
     </div>
+    ${(() => {
+      const txs = (S.data.transactions||[]).filter(t=>t.type==='buy'||t.type==='sell');
+      const firstTx = txs.length ? txs.map(t=>t.date).sort()[0] : null;
+      const firstSnap = (S.data.snapshots||[]).length ? (S.data.snapshots||[]).map(s=>s.date).sort()[0] : null;
+      if (!firstTx || (firstSnap && firstSnap <= firstTx)) return '';
+      return `<div class="card mb16" style="border-left:3px solid var(--warning);padding:14px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span style="font-size:1.3rem">📅</span>
+        <div style="flex:1;min-width:200px">
+          <div style="font-weight:600;color:var(--fg)">Historique incomplet</div>
+          <div style="font-size:0.8rem;color:var(--muted)">Vos achats ont commencé le ${fd(firstTx)} mais l'historique ne démarre que le ${firstSnap?fd(firstSnap):'maintenant'}. Reconstruisez-le depuis Yahoo Finance.</div>
+        </div>
+        <button id="btn-reconstruct" class="btn btn-primary btn-sm" onclick="doReconstructHistory()">Reconstruire l'historique</button>
+      </div>`;
+    })()}
     <div class="card mb16">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <div class="section-title" style="margin:0">Évolution du PEA</div>
@@ -6620,23 +6634,40 @@ function computeYearlyReturns(snapshots) {
   }).sort((a, b) => a.year.localeCompare(b.year));
 }
 
+let _benchmarkCache = null;
+let _benchmarkCacheFrom = null;
+
 async function fetchBenchmarkHistory(fromDate) {
+  if (_benchmarkCache && _benchmarkCacheFrom === fromDate) return _benchmarkCache;
+
   const ticker = 'IWDA.L';
   const from = Math.floor(new Date(fromDate).getTime() / 1000) - 86400 * 10;
-  // interval=1d pour couvrir les portefeuilles récents (< 1 mois d'historique)
-  const url = `${YF_CHART}${ticker}?interval=1d&period1=${from}&period2=${Math.floor(Date.now() / 1000)}`;
-  try {
-    const body = await proxyFetch(url); // utilise les 3 proxies en cascade
-    if (!body) return null;
-    const data = JSON.parse(body);
-    const res = data.chart.result[0];
-    const prices = {};
-    res.timestamp.forEach((t, i) => {
-      const c = res.indicators.quote[0].close[i];
-      if (c != null) prices[new Date(t * 1000).toISOString().slice(0, 10)] = c;
-    });
-    return prices;
-  } catch (e) { return null; }
+  const to = Math.floor(Date.now() / 1000);
+  // Essayer query1 ET query2 × 3 proxies pour éviter les conflits de concurrence
+  const urls = [
+    `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&period1=${from}&period2=${to}`,
+    `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&period1=${from}&period2=${to}`,
+  ];
+  for (const url of urls) {
+    try {
+      const body = await proxyFetch(url);
+      if (!body) continue;
+      const data = JSON.parse(body);
+      const res = data.chart?.result?.[0];
+      if (!res?.timestamp) continue;
+      const prices = {};
+      res.timestamp.forEach((t, i) => {
+        const c = res.indicators.quote[0].close[i];
+        if (c != null) prices[new Date(t * 1000).toISOString().slice(0, 10)] = c;
+      });
+      if (Object.keys(prices).length > 0) {
+        _benchmarkCache = prices;
+        _benchmarkCacheFrom = fromDate;
+        return prices;
+      }
+    } catch (e) {}
+  }
+  return null;
 }
 
 function simulateDCABenchmark(deposits, prices) {
@@ -6673,6 +6704,112 @@ function simulateDCABenchmark(deposits, prices) {
     return p2 ? acc[acc.length - 1].shares * p2 : 0;
   };
   return { currentValue, shares: cumulShares, currentPrice: curP, cashflows: cfs, getValueAt };
+}
+
+// ======================================================
+// RECONSTRUCTION HISTORIQUE
+// ======================================================
+async function fetchHistoricalPrices(ticker, fromDate, toDate) {
+  const from = Math.floor(new Date(fromDate).getTime() / 1000) - 86400 * 3;
+  const to   = Math.floor(new Date(toDate + 'T23:59:59').getTime() / 1000);
+  const urls = [
+    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`,
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`,
+  ];
+  for (const url of urls) {
+    try {
+      const body = await proxyFetch(url);
+      if (!body) continue;
+      const data = JSON.parse(body);
+      const res = data.chart?.result?.[0];
+      if (!res?.timestamp) continue;
+      const prices = {};
+      res.timestamp.forEach((t, i) => {
+        const c = res.indicators.quote[0].close[i];
+        if (c != null) prices[new Date(t * 1000).toISOString().slice(0, 10)] = c;
+      });
+      if (Object.keys(prices).length > 0) return prices;
+    } catch(e) {}
+  }
+  return null;
+}
+
+async function reconstructHistoricalSnapshots() {
+  const transactions = (S.data.transactions || []).filter(t => t.type === 'buy' || t.type === 'sell');
+  if (!transactions.length) return 0;
+
+  const snaps = S.data.snapshots || [];
+  const firstTxDate = transactions.map(t => t.date).sort()[0];
+  const firstSnapDate = snaps.length ? snaps.map(s => s.date).sort()[0] : null;
+
+  if (firstSnapDate && firstSnapDate <= firstTxDate) return 0;
+
+  const endDate = firstSnapDate || today();
+  const tickers = [...new Set(transactions.map(t => t.ticker))];
+
+  // Fetch des prix historiques pour chaque ticker (en parallèle)
+  const priceResults = await Promise.all(tickers.map(t => fetchHistoricalPrices(t, firstTxDate, endDate)));
+  const allPrices = Object.fromEntries(tickers.map((t, i) => [t, priceResults[i]]));
+
+  const getHistP = (ticker, dateStr) => {
+    const prices = allPrices[ticker];
+    if (!prices) return null;
+    const days = Object.keys(prices).sort();
+    if (prices[dateStr]) return prices[dateStr];
+    const before = days.filter(k => k <= dateStr);
+    if (before.length) return prices[before[before.length - 1]];
+    return prices[days[0]] || null;
+  };
+
+  const newSnapshots = [];
+  let d = new Date(firstTxDate + 'T12:00:00Z');
+  const endD = new Date(endDate + 'T12:00:00Z');
+
+  while (d < endD) {
+    const dateStr = d.toISOString().slice(0, 10);
+    if (!snaps.find(s => s.date === dateStr)) {
+      const holdings = {};
+      let totalCost = 0;
+      for (const tx of transactions.filter(t => t.date <= dateStr)) {
+        if (tx.type === 'buy') {
+          holdings[tx.ticker] = (holdings[tx.ticker] || 0) + tx.quantity;
+          totalCost += tx.quantity * tx.price + (tx.fees || 0);
+        } else if (tx.type === 'sell') {
+          holdings[tx.ticker] = (holdings[tx.ticker] || 0) - tx.quantity;
+          totalCost -= tx.quantity * tx.price - (tx.fees || 0);
+        }
+      }
+      let portValue = 0, hasPrice = false;
+      for (const [ticker, qty] of Object.entries(holdings)) {
+        if (qty <= 0) continue;
+        const p = getHistP(ticker, dateStr);
+        if (p) { portValue += qty * p; hasPrice = true; }
+      }
+      if (hasPrice && totalCost > 0) {
+        newSnapshots.push({ date: dateStr, portValue: Math.round(portValue * 100) / 100, cash: 0, deposited: Math.round(totalCost * 100) / 100, reconstructed: true });
+      }
+    }
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+
+  if (newSnapshots.length) {
+    S.data.snapshots = [...newSnapshots, ...snaps].sort((a, b) => a.date.localeCompare(b.date));
+    saveData();
+  }
+  return newSnapshots.length;
+}
+
+async function doReconstructHistory() {
+  const btn = document.getElementById('btn-reconstruct');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Reconstruction…'; }
+  const n = await reconstructHistoricalSnapshots();
+  if (n > 0) {
+    toast(`${n} jours d'historique reconstruits`, 'success');
+    renderPage(S.page);
+  } else {
+    toast('Aucun historique à reconstruire (données insuffisantes)', 'warning');
+    if (btn) { btn.disabled = false; btn.innerHTML = 'Reconstruire l\'historique'; }
+  }
 }
 
 function makePerfCompareChart(snapshots, bench) {

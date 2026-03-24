@@ -6645,9 +6645,11 @@ function simulateDCABenchmark(deposits, prices) {
   const getP = (dateStr) => {
     const d = dateStr.slice(0, 10);
     if (prices[d]) return prices[d];
-    // Trouver le jour le plus proche (pour jours fériés / week-ends)
-    const best = days.reduce((b, cur) => Math.abs(cur.localeCompare(d)) < Math.abs(b.localeCompare(d)) ? cur : b, days[0]);
-    return prices[best];
+    // Dernier prix disponible avant ou égal à la date demandée
+    const before = days.filter(k => k <= d);
+    if (before.length) return prices[before[before.length - 1]];
+    // Sinon premier prix disponible (dépôt antérieur aux données)
+    return prices[days[0]];
   };
   const sorted = (deposits || []).filter(d => d.type === 'deposit').sort((a, b) => a.date.localeCompare(b.date));
   if (!sorted.length) return null;

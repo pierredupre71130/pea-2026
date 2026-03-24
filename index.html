@@ -4489,10 +4489,17 @@ function saveManualEPS(ticker, name) {
 async function renderFundamentalsWithManualEPS(ticker, name, epsEntries, json) {
   const fundEl = () => document.getElementById('tech-fund-content');
   const quarters = epsEntries.map(e => ({ date: new Date(e.date), eps: e.eps }));
-  if (quarters.length < 4) { fundEl().innerHTML = `<div style="color:var(--muted)">Moins de 4 trimestres.</div>`; return; }
-  const ltmEPS = quarters.slice(3).map((_, i) => ({
-    date: quarters[i + 3].date,
-    ltm:  quarters.slice(i, i + 4).reduce((s, q) => s + q.eps, 0)
+  if (quarters.length < 2) { fundEl().innerHTML = `<div style="color:var(--muted)">Moins de 2 périodes.</div>`; return; }
+  // Détecter semestriel (gap ~180j) ou trimestriel (gap ~90j)
+  const avgGap = quarters.length > 1
+    ? (quarters.at(-1).date - quarters[0].date) / (quarters.length - 1) / 86400000
+    : 90;
+  const periodsPerYear = avgGap > 130 ? 2 : 4; // 2 = semestriel, 4 = trimestriel
+  const ltmWindow = periodsPerYear;
+  if (quarters.length < ltmWindow) { fundEl().innerHTML = `<div style="color:var(--muted)">Pas assez de données (${quarters.length} périodes).</div>`; return; }
+  const ltmEPS = quarters.slice(ltmWindow - 1).map((_, i) => ({
+    date: quarters[i + ltmWindow - 1].date,
+    ltm:  quarters.slice(i, i + ltmWindow).reduce((s, q) => s + q.eps, 0)
   }));
   // Prix depuis le json chart déjà chargé
   const result = json?.chart?.result?.[0];

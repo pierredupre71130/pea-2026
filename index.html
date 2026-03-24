@@ -4295,31 +4295,44 @@ async function loadFundamentalsChart(ticker, name) {
   try {
     const now = Math.floor(Date.now() / 1000);
     const p1  = now - 5 * 365 * 86400;
-    const summaryUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker)}?modules=incomeStatementHistoryQuarterly%2CdefaultKeyStatistics`;
-    const priceUrl   = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1wk&period1=${p1}&period2=${now}`;
-    const [sb, pb] = await Promise.all([proxyFetch(summaryUrl), proxyFetch(priceUrl)]);
-    const summaryData = sb ? JSON.parse(sb) : null;
-    const priceData   = pb ? JSON.parse(pb) : null;
-    const qHistory = summaryData?.quoteSummary?.result?.[0]?.incomeStatementHistoryQuarterly?.incomeStatementHistory;
-    if (!qHistory || qHistory.length === 0) {
+    // Utilise v8/chart avec events=earnings (même endpoint que l'analyse technique)
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1wk&period1=${p1}&period2=${now}&events=earnings`;
+    const url2 = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1wk&period1=${p1}&period2=${now}&events=earnings`;
+    let json = null;
+    const proxies = [
+      async () => { const r = await fetch(`${PROXY}${encodeURIComponent(url)}`,  { signal: AbortSignal.timeout(20000) }); if (!r.ok) throw new Error('HTTP '+r.status); const d = await r.json(); return JSON.parse(d.contents); },
+      async () => { const r = await fetch(`${PROXY}${encodeURIComponent(url2)}`, { signal: AbortSignal.timeout(20000) }); if (!r.ok) throw new Error('HTTP '+r.status); const d = await r.json(); return JSON.parse(d.contents); },
+      async () => { const r = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,  { signal: AbortSignal.timeout(20000) }); if (!r.ok) throw new Error('HTTP '+r.status); return await r.json(); },
+      async () => { const r = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(20000) }); if (!r.ok) throw new Error('HTTP '+r.status); return await r.json(); },
+    ];
+    for (const tryP of proxies) {
+      try { json = await tryP(); if (json?.chart?.result?.[0]) break; else json = null; } catch(e) { json = null; }
+    }
+    if (!json) { fundEl().innerHTML = `<div style="color:var(--muted);font-size:0.82rem;padding:16px 0">⚠️ Données fondamentales indisponibles (réseau).</div>`; return; }
+    const result = json.chart.result[0];
+    // Extraire les earnings events {timestamp: {date, epsActual, epsEstimate}}
+    const earningsEvents = result?.events?.earnings;
+    if (!earningsEvents || Object.keys(earningsEvents).length === 0) {
       fundEl().innerHTML = `<div style="color:var(--muted);font-size:0.82rem;padding:16px 0">
-        ℹ️ Données EPS non disponibles pour cet ETF.<br>
+        ℹ️ Données EPS non disponibles pour ce titre.<br>
         <span style="font-size:0.74rem">Les ETFs répliquent un indice — consultez le P/E de l'indice sous-jacent pour les fondamentaux.</span></div>`;
       return;
     }
-    const quarters = qHistory.filter(q => q.basicEPS?.raw != null)
-      .map(q => ({ date: new Date(q.endDate.raw * 1000), eps: q.basicEPS.raw }))
+    // Trier les trimestres par date
+    const quarters = Object.values(earningsEvents)
+      .filter(e => e.epsActual != null)
+      .map(e => ({ date: new Date(e.date * 1000), eps: e.epsActual }))
       .sort((a, b) => a.date - b.date);
-    if (quarters.length < 4) { fundEl().innerHTML = `<div style="color:var(--muted);font-size:0.82rem;padding:16px 0">Moins de 4 trimestres d'EPS disponibles.</div>`; return; }
+    if (quarters.length < 4) { fundEl().innerHTML = `<div style="color:var(--muted);font-size:0.82rem;padding:16px 0">Moins de 4 trimestres d'EPS disponibles (${quarters.length} trouvés).</div>`; return; }
+    // Calculer LTM EPS (somme des 4 derniers trimestres glissants)
     const ltmEPS = quarters.slice(3).map((_, i) => ({
       date: quarters[i + 3].date,
       ltm:  quarters.slice(i, i + 4).reduce((s, q) => s + q.eps, 0)
     }));
-    const result = priceData?.chart?.result?.[0];
-    if (!result?.timestamp) { fundEl().innerHTML = `<div style="color:var(--muted);font-size:0.82rem;padding:16px 0">Données de prix indisponibles.</div>`; return; }
+    // Données de prix (hebdo)
     const weekly = [];
-    result.timestamp.forEach((t, i) => {
-      const c = result.indicators.quote[0].close[i];
+    (result.timestamp || []).forEach((t, i) => {
+      const c = result.indicators?.quote?.[0]?.close?.[i];
       if (c != null) weekly.push({ date: new Date(t * 1000), price: c });
     });
     if (weekly.length < 8) { fundEl().innerHTML = `<div style="color:var(--muted);font-size:0.82rem;padding:16px 0">Pas assez de données de prix.</div>`; return; }
@@ -4328,29 +4341,23 @@ async function loadFundamentalsChart(ticker, name) {
     const filtEPS     = ltmEPS.filter(e => e.date >= commonStart);
     if (filtPrices.length < 4 || filtEPS.length < 1) { fundEl().innerHTML = `<div style="color:var(--muted);font-size:0.82rem;padding:16px 0">Période commune insuffisante.</div>`; return; }
     const baseP = filtPrices[0].price, baseE = filtEPS[0].ltm;
-    const priceIdx = filtPrices.map(p => ({ date: p.date, val: p.price / baseP * 100, raw: p.price }));
-    const epsIdx   = filtEPS.map(e => ({ date: e.date, val: e.ltm / baseE * 100, raw: e.ltm }));
-    const years      = (filtPrices.at(-1).date - filtPrices[0].date) / (365.25 * 86400000);
-    const lastPI     = priceIdx.at(-1).val, lastEI = epsIdx.at(-1).val;
-    const cagrP      = years > 0.5 ? (Math.pow(lastPI / 100, 1 / years) - 1) * 100 : 0;
-    const cagrE      = years > 0.5 ? (Math.pow(lastEI / 100, 1 / years) - 1) * 100 : 0;
-    const curP       = filtPrices.at(-1).price;
-    const curEPS     = ltmEPS.at(-1).ltm;
-    const pe         = curEPS !== 0 ? (curP / curEPS).toFixed(1) : '—';
-    const div        = lastPI - lastEI;
+    const priceIdx = filtPrices.map(p => ({ date: p.date, val: p.price / baseP * 100 }));
+    const epsIdx   = filtEPS.map(e => ({ date: e.date, val: e.ltm   / baseE * 100 }));
+    const years  = (filtPrices.at(-1).date - filtPrices[0].date) / (365.25 * 86400000);
+    const lastPI = priceIdx.at(-1).val, lastEI = epsIdx.at(-1).val;
+    const cagrP  = years > 0.5 ? (Math.pow(lastPI / 100, 1 / years) - 1) * 100 : 0;
+    const cagrE  = years > 0.5 ? (Math.pow(lastEI / 100, 1 / years) - 1) * 100 : 0;
+    const curP   = filtPrices.at(-1).price;
+    const curEPS = ltmEPS.at(-1).ltm;
+    const pe     = curEPS !== 0 ? (curP / curEPS).toFixed(1) : '—';
+    const div    = lastPI - lastEI;
     const [divTxt, divCol] = div > 15 ? ['⚠️ Prix dépasse nettement la croissance des bénéfices', '#f59e0b']
                            : div < -15 ? ['✅ Prix sous la croissance des bénéfices — potentiel décoté', '#22c55e']
                            : ['≈ Prix en ligne avec la croissance des bénéfices', '#60a5fa'];
-    const pLabels  = priceIdx.map(p => p.date.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' }));
-    const pVals    = priceIdx.map(p => p.val);
-    const epsLine  = priceIdx.map(p => {
-      const match = epsIdx.filter(e => e.date <= p.date);
-      return match.length ? match.at(-1).val : null;
-    });
-    const epsDots  = priceIdx.map(p => {
-      const m = epsIdx.find(e => Math.abs(e.date - p.date) < 15 * 86400000);
-      return m ? m.val : null;
-    });
+    const pLabels = priceIdx.map(p => p.date.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' }));
+    const pVals   = priceIdx.map(p => p.val);
+    const epsLine = priceIdx.map(p => { const m = epsIdx.filter(e => e.date <= p.date); return m.length ? m.at(-1).val : null; });
+    const epsDots = priceIdx.map(p => { const m = epsIdx.find(e => Math.abs(e.date - p.date) < 15 * 86400000); return m ? m.val : null; });
     fundEl().innerHTML = `
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
         <div style="flex:1;min-width:110px;background:var(--surface2);border-radius:8px;padding:10px 12px;text-align:center">
@@ -4366,7 +4373,7 @@ async function loadFundamentalsChart(ticker, name) {
         <div style="flex:1;min-width:110px;background:var(--surface2);border-radius:8px;padding:10px 12px;text-align:center">
           <div style="font-size:0.63rem;color:var(--muted);text-transform:uppercase;margin-bottom:3px">P/E actuel</div>
           <div style="font-size:1rem;font-weight:700">${pe}x</div>
-          <div style="font-size:0.68rem;color:var(--muted)">${years.toFixed(1)} ans</div>
+          <div style="font-size:0.68rem;color:var(--muted)">${years.toFixed(1)} ans · ${quarters.length} trimestres</div>
         </div>
       </div>
       <div style="font-size:0.78rem;color:${divCol};background:${divCol}18;border:1px solid ${divCol}33;border-radius:6px;padding:8px 12px;margin-bottom:12px">${divTxt}</div>
@@ -4374,7 +4381,7 @@ async function loadFundamentalsChart(ticker, name) {
       <div style="font-size:0.7rem;color:var(--muted);margin-top:8px;text-align:center">
         <span style="color:#60a5fa">━</span> BPA LTM · total ${lastEI >= 100 ? '+' : ''}${(lastEI - 100).toFixed(0)}% &nbsp;
         <span style="color:#f97316">━</span> Prix · total ${lastPI >= 100 ? '+' : ''}${(lastPI - 100).toFixed(0)}% &nbsp;
-        · Indexés à 100 · ${epsIdx.length} trimestres · ${pLabels[0]} → ${pLabels.at(-1)}
+        · Indexés à 100 · ${pLabels[0]} → ${pLabels.at(-1)}
       </div>`;
     setTimeout(() => {
       const ctx2 = document.getElementById('tech-chart-fund')?.getContext('2d');
@@ -4397,8 +4404,7 @@ async function loadFundamentalsChart(ticker, name) {
           responsive: true, maintainAspectRatio: false,
           interaction: { mode: 'index', intersect: false },
           plugins: {
-            legend: { display: true, labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 20, padding: 10,
-              filter: item => item.text !== '_dots' } },
+            legend: { display: true, labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 20, padding: 10, filter: item => item.text !== '_dots' } },
             tooltip: { backgroundColor: '#1e293b', titleColor: '#e2e8f0', bodyColor: '#94a3b8',
               callbacks: { label: c => c.dataset.label === '_dots' ? null : c.parsed.y !== null ? `${c.dataset.label.split('(')[0].trim()}: ${c.parsed.y.toFixed(1)}` : null } }
           },

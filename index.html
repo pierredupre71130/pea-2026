@@ -6626,9 +6626,9 @@ async function fetchBenchmarkHistory(fromDate) {
   // interval=1d pour couvrir les portefeuilles récents (< 1 mois d'historique)
   const url = `${YF_CHART}${ticker}?interval=1d&period1=${from}&period2=${Math.floor(Date.now() / 1000)}`;
   try {
-    const r = await fetch(`${PROXY}${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(15000) });
-    const j = await r.json();
-    const data = JSON.parse(j.contents);
+    const body = await proxyFetch(url); // utilise les 3 proxies en cascade
+    if (!body) return null;
+    const data = JSON.parse(body);
     const res = data.chart.result[0];
     const prices = {};
     res.timestamp.forEach((t, i) => {

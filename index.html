@@ -6623,7 +6623,8 @@ function computeYearlyReturns(snapshots) {
 async function fetchBenchmarkHistory(fromDate) {
   const ticker = 'IWDA.L';
   const from = Math.floor(new Date(fromDate).getTime() / 1000) - 86400 * 10;
-  const url = `${YF_CHART}${ticker}?interval=1mo&period1=${from}&period2=${Math.floor(Date.now() / 1000)}`;
+  // interval=1d pour couvrir les portefeuilles récents (< 1 mois d'historique)
+  const url = `${YF_CHART}${ticker}?interval=1d&period1=${from}&period2=${Math.floor(Date.now() / 1000)}`;
   try {
     const r = await fetch(`${PROXY}${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(15000) });
     const j = await r.json();
@@ -6632,7 +6633,7 @@ async function fetchBenchmarkHistory(fromDate) {
     const prices = {};
     res.timestamp.forEach((t, i) => {
       const c = res.indicators.quote[0].close[i];
-      if (c != null) prices[new Date(t * 1000).toISOString().slice(0, 7)] = c;
+      if (c != null) prices[new Date(t * 1000).toISOString().slice(0, 10)] = c;
     });
     return prices;
   } catch (e) { return null; }
@@ -6640,11 +6641,12 @@ async function fetchBenchmarkHistory(fromDate) {
 
 function simulateDCABenchmark(deposits, prices) {
   if (!prices || !Object.keys(prices).length) return null;
-  const months = Object.keys(prices).sort();
+  const days = Object.keys(prices).sort();
   const getP = (dateStr) => {
-    const m = dateStr.slice(0, 7);
-    if (prices[m]) return prices[m];
-    const best = months.reduce((b, cur) => Math.abs(cur.localeCompare(m)) < Math.abs(b.localeCompare(m)) ? cur : b, months[0]);
+    const d = dateStr.slice(0, 10);
+    if (prices[d]) return prices[d];
+    // Trouver le jour le plus proche (pour jours fériés / week-ends)
+    const best = days.reduce((b, cur) => Math.abs(cur.localeCompare(d)) < Math.abs(b.localeCompare(d)) ? cur : b, days[0]);
     return prices[best];
   };
   const sorted = (deposits || []).filter(d => d.type === 'deposit').sort((a, b) => a.date.localeCompare(b.date));

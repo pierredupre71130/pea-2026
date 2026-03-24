@@ -7549,10 +7549,13 @@ const MACRO_TICKERS = [
 ];
 
 async function fetchMacroContext() {
-  const results = await Promise.allSettled(MACRO_TICKERS.map(m => fetchPrice(m.ticker)));
-  const lines = MACRO_TICKERS.map((m, i) => {
-    const r = results[i];
-    if (r.status !== 'fulfilled') return null;
+  // Les tickers macro (^VIX, EURUSD=X, ^FCHI…) sont au format Yahoo Finance — on utilise fetchPriceYahoo directement
+  // (fetchPrice n'utilise que Boursorama qui renvoie ~7730 pour tout ticker inconnu = niveau CAC 40)
+  await Promise.allSettled(MACRO_TICKERS.map(async m => {
+    const r = await fetchPriceYahoo(m.ticker);
+    if (r) S.data.priceCache[m.ticker] = r;
+  }));
+  const lines = MACRO_TICKERS.map(m => {
     const cache = S.data.priceCache[m.ticker];
     if (!cache?.price) return null;
     const chg = cache.changePercent != null ? ` (${cache.changePercent >= 0 ? '+' : ''}${cache.changePercent.toFixed(2)}% j-1)` : '';

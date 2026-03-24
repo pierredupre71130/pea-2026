@@ -4174,6 +4174,7 @@ async function technicalLoad() {
     const sr     = detectSR(highs, lows, closes);
     const signals = techSignals(closes, sma20, sma50, sma200, rsi, macd, boll);
     techRenderResults(ticker, name, labels, closes, sma20, sma50, sma200, boll, rsi, macd, sr, signals);
+    loadFundamentalsChart(ticker, name);
   } catch(e) {
     if (resultsEl) resultsEl.innerHTML = `<div class="info-box info-danger">❌ ${esc(e.message)}<br><span style="font-size:0.75rem;color:var(--muted)">Vérifiez le ticker (format Yahoo Finance: MC.PA, AIR.PA, ASML.AS…)</span></div>`;
     toast(e.message, 'error', 6000);
@@ -4271,12 +4272,147 @@ function techRenderResults(ticker, name, labels, closes, sma20, sma50, sma200, b
     <div class="card mb16" style="padding:14px 16px">
       <div class="section-title" style="margin-bottom:2px">MACD (12,26,9) <span style="font-size:0.72rem;color:var(--muted);font-weight:400">— Histo vert = momentum haussier · rouge = baissier</span></div>
       <div style="position:relative;height:130px;margin-top:8px"><canvas id="tech-chart-macd"></canvas></div>
-    </div>`;
+    </div>
+    <div id="tech-fundamentals"></div>`;
   setTimeout(() => {
     techDrawPriceChart(labels, closes, sma20, sma50, sma200, boll, sr);
     techDrawRSIChart(labels, rsi);
     techDrawMACDChart(labels, macd);
   }, 60);
+}
+
+// ---- Fundamentals: Prix vs BPA LTM ----
+async function loadFundamentalsChart(ticker, name) {
+  const el = document.getElementById('tech-fundamentals');
+  if (!el) return;
+  el.innerHTML = `<div class="card mb16" style="padding:14px 16px">
+    <div class="section-title" style="margin-bottom:8px">📊 Prix vs Bénéfices par action <span style="font-size:0.72rem;color:var(--muted);font-weight:400">— EPS LTM · indexé à 100</span></div>
+    <div id="tech-fund-content" style="text-align:center;padding:24px 0">
+      <div class="spinner" style="width:20px;height:20px;border-width:2px;margin:0 auto 10px"></div>
+      <div style="color:var(--muted);font-size:0.82rem">Chargement données fondamentales…</div>
+    </div></div>`;
+  const fundEl = () => document.getElementById('tech-fund-content');
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const p1  = now - 5 * 365 * 86400;
+    const summaryUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker)}?modules=incomeStatementHistoryQuarterly%2CdefaultKeyStatistics`;
+    const priceUrl   = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1wk&period1=${p1}&period2=${now}`;
+    const [sb, pb] = await Promise.all([proxyFetch(summaryUrl), proxyFetch(priceUrl)]);
+    const summaryData = sb ? JSON.parse(sb) : null;
+    const priceData   = pb ? JSON.parse(pb) : null;
+    const qHistory = summaryData?.quoteSummary?.result?.[0]?.incomeStatementHistoryQuarterly?.incomeStatementHistory;
+    if (!qHistory || qHistory.length === 0) {
+      fundEl().innerHTML = `<div style="color:var(--muted);font-size:0.82rem;padding:16px 0">
+        ℹ️ Données EPS non disponibles pour cet ETF.<br>
+        <span style="font-size:0.74rem">Les ETFs répliquent un indice — consultez le P/E de l'indice sous-jacent pour les fondamentaux.</span></div>`;
+      return;
+    }
+    const quarters = qHistory.filter(q => q.basicEPS?.raw != null)
+      .map(q => ({ date: new Date(q.endDate.raw * 1000), eps: q.basicEPS.raw }))
+      .sort((a, b) => a.date - b.date);
+    if (quarters.length < 4) { fundEl().innerHTML = `<div style="color:var(--muted);font-size:0.82rem;padding:16px 0">Moins de 4 trimestres d'EPS disponibles.</div>`; return; }
+    const ltmEPS = quarters.slice(3).map((_, i) => ({
+      date: quarters[i + 3].date,
+      ltm:  quarters.slice(i, i + 4).reduce((s, q) => s + q.eps, 0)
+    }));
+    const result = priceData?.chart?.result?.[0];
+    if (!result?.timestamp) { fundEl().innerHTML = `<div style="color:var(--muted);font-size:0.82rem;padding:16px 0">Données de prix indisponibles.</div>`; return; }
+    const weekly = [];
+    result.timestamp.forEach((t, i) => {
+      const c = result.indicators.quote[0].close[i];
+      if (c != null) weekly.push({ date: new Date(t * 1000), price: c });
+    });
+    if (weekly.length < 8) { fundEl().innerHTML = `<div style="color:var(--muted);font-size:0.82rem;padding:16px 0">Pas assez de données de prix.</div>`; return; }
+    const commonStart = ltmEPS[0].date > weekly[0].date ? ltmEPS[0].date : weekly[0].date;
+    const filtPrices  = weekly.filter(p => p.date >= commonStart);
+    const filtEPS     = ltmEPS.filter(e => e.date >= commonStart);
+    if (filtPrices.length < 4 || filtEPS.length < 1) { fundEl().innerHTML = `<div style="color:var(--muted);font-size:0.82rem;padding:16px 0">Période commune insuffisante.</div>`; return; }
+    const baseP = filtPrices[0].price, baseE = filtEPS[0].ltm;
+    const priceIdx = filtPrices.map(p => ({ date: p.date, val: p.price / baseP * 100, raw: p.price }));
+    const epsIdx   = filtEPS.map(e => ({ date: e.date, val: e.ltm / baseE * 100, raw: e.ltm }));
+    const years      = (filtPrices.at(-1).date - filtPrices[0].date) / (365.25 * 86400000);
+    const lastPI     = priceIdx.at(-1).val, lastEI = epsIdx.at(-1).val;
+    const cagrP      = years > 0.5 ? (Math.pow(lastPI / 100, 1 / years) - 1) * 100 : 0;
+    const cagrE      = years > 0.5 ? (Math.pow(lastEI / 100, 1 / years) - 1) * 100 : 0;
+    const curP       = filtPrices.at(-1).price;
+    const curEPS     = ltmEPS.at(-1).ltm;
+    const pe         = curEPS !== 0 ? (curP / curEPS).toFixed(1) : '—';
+    const div        = lastPI - lastEI;
+    const [divTxt, divCol] = div > 15 ? ['⚠️ Prix dépasse nettement la croissance des bénéfices', '#f59e0b']
+                           : div < -15 ? ['✅ Prix sous la croissance des bénéfices — potentiel décoté', '#22c55e']
+                           : ['≈ Prix en ligne avec la croissance des bénéfices', '#60a5fa'];
+    const pLabels  = priceIdx.map(p => p.date.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' }));
+    const pVals    = priceIdx.map(p => p.val);
+    const epsLine  = priceIdx.map(p => {
+      const match = epsIdx.filter(e => e.date <= p.date);
+      return match.length ? match.at(-1).val : null;
+    });
+    const epsDots  = priceIdx.map(p => {
+      const m = epsIdx.find(e => Math.abs(e.date - p.date) < 15 * 86400000);
+      return m ? m.val : null;
+    });
+    fundEl().innerHTML = `
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+        <div style="flex:1;min-width:110px;background:var(--surface2);border-radius:8px;padding:10px 12px;text-align:center">
+          <div style="font-size:0.63rem;color:var(--muted);text-transform:uppercase;margin-bottom:3px">BPA LTM</div>
+          <div style="font-size:1rem;font-weight:700;color:#60a5fa">${curEPS.toFixed(2)}</div>
+          <div style="font-size:0.68rem;color:var(--muted)">CAGR ${cagrE >= 0 ? '+' : ''}${cagrE.toFixed(1)}%/an</div>
+        </div>
+        <div style="flex:1;min-width:110px;background:var(--surface2);border-radius:8px;padding:10px 12px;text-align:center">
+          <div style="font-size:0.63rem;color:var(--muted);text-transform:uppercase;margin-bottom:3px">Prix</div>
+          <div style="font-size:1rem;font-weight:700;color:#f97316">${fc(curP)}</div>
+          <div style="font-size:0.68rem;color:var(--muted)">CAGR ${cagrP >= 0 ? '+' : ''}${cagrP.toFixed(1)}%/an</div>
+        </div>
+        <div style="flex:1;min-width:110px;background:var(--surface2);border-radius:8px;padding:10px 12px;text-align:center">
+          <div style="font-size:0.63rem;color:var(--muted);text-transform:uppercase;margin-bottom:3px">P/E actuel</div>
+          <div style="font-size:1rem;font-weight:700">${pe}x</div>
+          <div style="font-size:0.68rem;color:var(--muted)">${years.toFixed(1)} ans</div>
+        </div>
+      </div>
+      <div style="font-size:0.78rem;color:${divCol};background:${divCol}18;border:1px solid ${divCol}33;border-radius:6px;padding:8px 12px;margin-bottom:12px">${divTxt}</div>
+      <div style="position:relative;height:260px"><canvas id="tech-chart-fund"></canvas></div>
+      <div style="font-size:0.7rem;color:var(--muted);margin-top:8px;text-align:center">
+        <span style="color:#60a5fa">━</span> BPA LTM · total ${lastEI >= 100 ? '+' : ''}${(lastEI - 100).toFixed(0)}% &nbsp;
+        <span style="color:#f97316">━</span> Prix · total ${lastPI >= 100 ? '+' : ''}${(lastPI - 100).toFixed(0)}% &nbsp;
+        · Indexés à 100 · ${epsIdx.length} trimestres · ${pLabels[0]} → ${pLabels.at(-1)}
+      </div>`;
+    setTimeout(() => {
+      const ctx2 = document.getElementById('tech-chart-fund')?.getContext('2d');
+      if (!ctx2) return;
+      if (S.charts.techFund) { S.charts.techFund.destroy(); S.charts.techFund = null; }
+      S.charts.techFund = new Chart(ctx2, {
+        type: 'line',
+        data: { labels: pLabels, datasets: [
+          { label: `BPA LTM (${cagrE >= 0 ? '+' : ''}${cagrE.toFixed(1)}%/an)`, data: epsLine,
+            borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.06)', borderWidth: 2.5,
+            pointRadius: 0, stepped: 'before', fill: false, tension: 0, order: 2 },
+          { label: `${esc(name)} (${cagrP >= 0 ? '+' : ''}${cagrP.toFixed(1)}%/an)`, data: pVals,
+            borderColor: '#f97316', backgroundColor: 'rgba(249,115,22,0.04)', borderWidth: 2,
+            pointRadius: 0, fill: false, tension: 0.2, order: 1 },
+          { label: '_dots', data: epsDots, borderColor: '#60a5fa', backgroundColor: '#60a5fa',
+            borderWidth: 0, pointRadius: epsDots.map(v => v !== null ? 4 : 0),
+            pointHoverRadius: 6, showLine: false, fill: false, order: 0 }
+        ]},
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: true, labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 20, padding: 10,
+              filter: item => item.text !== '_dots' } },
+            tooltip: { backgroundColor: '#1e293b', titleColor: '#e2e8f0', bodyColor: '#94a3b8',
+              callbacks: { label: c => c.dataset.label === '_dots' ? null : c.parsed.y !== null ? `${c.dataset.label.split('(')[0].trim()}: ${c.parsed.y.toFixed(1)}` : null } }
+          },
+          scales: {
+            x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#64748b', font: { size: 10 }, maxTicksLimit: 10 } },
+            y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#64748b', font: { size: 10 }, callback: v => v.toFixed(0) }, position: 'right' }
+          }
+        }
+      });
+    }, 80);
+  } catch(e) {
+    const f = fundEl();
+    if (f) f.innerHTML = `<div style="color:var(--muted);font-size:0.8rem;padding:16px 0">Données fondamentales indisponibles.<br><span style="font-size:0.72rem">${esc(e.message)}</span></div>`;
+  }
 }
 
 function techDrawPriceChart(labels, closes, sma20, sma50, sma200, boll, sr) {

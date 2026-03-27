@@ -694,16 +694,16 @@
 <div id="modal-budget-income" class="modal-overlay">
   <div class="modal" style="max-width:360px">
     <div class="modal-header">
-      <span class="modal-title">💼 Revenu mensuel net</span>
+      <span class="modal-title">🏦 Solde du compte actuel</span>
       <button class="modal-close" onclick="closeModal('modal-budget-income')">×</button>
     </div>
     <form onsubmit="saveBudgetIncome(event)">
       <div class="modal-body">
         <div class="form-group">
-          <label>Revenu net mensuel (€)</label>
+          <label>Solde du compte (€)</label>
           <input type="number" id="budget-income-val" step="0.01" min="0" placeholder="Ex: 2500">
         </div>
-        <div style="font-size:0.74rem;color:var(--muted)">Utilisé pour calculer votre taux d'épargne et le solde disponible.</div>
+        <div style="font-size:0.74rem;color:var(--muted)">Montant actuel sur votre compte, avant prélèvement des charges et de l'encours carte.</div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" onclick="closeModal('modal-budget-income')">Annuler</button>
@@ -7060,7 +7060,7 @@ function renderBudget() {
       <div class="section-title mb16">Récapitulatif du mois</div>
       <div style="display:flex;flex-direction:column;gap:10px">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <span>💼 Salaire net</span>
+          <span>🏦 Solde du compte actuel</span>
           <span class="positive" style="font-weight:700;font-size:1rem">${fc(income)}</span>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center">
@@ -7077,16 +7077,16 @@ function renderBudget() {
         </div>
         <div style="border-top:2px solid var(--border);padding-top:10px;display:flex;justify-content:space-between;align-items:center">
           <span style="font-weight:700">= Reste disponible après le ${cardDebitDay || '…'}</span>
-          <span style="font-size:1.25rem;font-weight:700;color:${afterAll >= 0 ? 'var(--success)' : 'var(--danger)'}">${fc(afterAll)}${savingsRate !== null ? `<span style="font-size:0.75rem;color:var(--muted);margin-left:8px">(${savingsRate.toFixed(1)}% du salaire)</span>` : ''}</span>
+          <span style="font-size:1.25rem;font-weight:700;color:${afterAll >= 0 ? 'var(--success)' : 'var(--danger)'}">${fc(afterAll)}${savingsRate !== null ? `<span style="font-size:0.75rem;color:var(--muted);margin-left:8px">(${savingsRate.toFixed(1)}% du solde)</span>` : ''}</span>
         </div>
       </div>
     </div>` : `
     <div class="card mb16" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
       <div style="flex:1;min-width:200px">
-        <div style="font-weight:600;margin-bottom:4px">Pour commencer, saisissez votre salaire net</div>
-        <div style="font-size:0.8rem;color:var(--muted)">Il servira à calculer votre reste disponible après charges et encours carte.</div>
+        <div style="font-weight:600;margin-bottom:4px">Pour commencer, saisissez le solde de votre compte</div>
+        <div style="font-size:0.8rem;color:var(--muted)">Il servira à calculer ce qu'il vous restera après charges et encours carte.</div>
       </div>
-      <button class="btn btn-primary" onclick="openBudgetIncomeModal()">💼 Saisir mon salaire</button>
+      <button class="btn btn-primary" onclick="openBudgetIncomeModal()">🏦 Saisir le solde</button>
     </div>`;
 
   // Bloc encours carte
@@ -7120,7 +7120,7 @@ function renderBudget() {
             <div style="flex:1;background:var(--border);border-radius:4px;height:6px;min-width:60px">
               <div style="width:${pct.toFixed(1)}%;background:var(--accent);height:6px;border-radius:4px"></div>
             </div>
-            <span style="font-size:0.75rem;color:var(--muted);min-width:36px">${pct.toFixed(0)}%${incomePct ? ` · ${incomePct}% sal.` : ''}</span>
+            <span style="font-size:0.75rem;color:var(--muted);min-width:36px">${pct.toFixed(0)}%${incomePct ? ` · ${incomePct}% solde` : ''}</span>
           </div>
         </td>
       </tr>`;
@@ -7148,7 +7148,7 @@ function renderBudget() {
     <div class="page-header">
       <div><h2>Budget Personnel</h2><div class="page-sub">Suivi de vos charges fixes et encours carte</div></div>
       <div class="page-actions">
-        ${income > 0 ? `<button class="btn btn-secondary" onclick="openBudgetIncomeModal()">💼 ${fc(income)}/mois</button>` : ''}
+        ${income > 0 ? `<button class="btn btn-secondary" onclick="openBudgetIncomeModal()">🏦 Solde : ${fc(income)}</button>` : ''}
         <button class="btn btn-primary" onclick="openBudgetExpenseModal()">+ Charge fixe</button>
       </div>
     </div>
@@ -7228,7 +7228,7 @@ function saveBudgetIncome(e) {
   S.data.budgetSettings.monthlyIncome = parseFloat(document.getElementById('budget-income-val').value) || 0;
   saveData();
   closeModal('modal-budget-income');
-  toast('Salaire enregistré', 'success');
+  toast('Solde enregistré', 'success');
   renderBudget();
 }
 

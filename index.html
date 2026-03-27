@@ -660,6 +660,7 @@
               <option value="loisirs">🎮 Loisirs</option>
               <option value="abonnements">📱 Abonnements</option>
               <option value="epargne">💎 Épargne / Investissement</option>
+              <option value="carte">💳 Encours carte</option>
               <option value="autres">📦 Autres</option>
             </select>
           </div>
@@ -679,6 +680,18 @@
           <div class="form-group">
             <label>Notes (optionnel)</label>
             <input type="text" id="budget-expense-notes" placeholder="Ex: contrat renouvelable">
+          </div>
+        </div>
+        <div id="budget-carte-extra" style="display:none">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Carte bancaire</label>
+              <input type="text" id="budget-expense-card-name" placeholder="Ex: Gold Caisse d'Épargne">
+            </div>
+            <div class="form-group">
+              <label>Prélèvement le (jour du mois)</label>
+              <input type="number" id="budget-expense-debit-day" min="1" max="31" placeholder="Ex: 4">
+            </div>
           </div>
         </div>
       </div>
@@ -6992,6 +7005,7 @@ const BUDGET_CATS = {
   loisirs:      { label: 'Loisirs',                 icon: '🎮' },
   abonnements:  { label: 'Abonnements',             icon: '📱' },
   epargne:      { label: 'Épargne / Investissement',icon: '💎' },
+  carte:        { label: 'Encours carte',           icon: '💳' },
   autres:       { label: 'Autres',                  icon: '📦' },
 };
 
@@ -7069,8 +7083,11 @@ function renderBudget() {
     .map(exp => {
       const meta = BUDGET_CATS[exp.category] || { label: exp.category, icon: '📦' };
       const monthly = budgetMonthlyAmount(exp);
+      const carteInfo = exp.category === 'carte' && (exp.cardName || exp.debitDay)
+        ? `<br><span style="font-size:0.72rem;color:var(--muted)">${exp.cardName ? esc(exp.cardName) : ''}${exp.debitDay ? ` · prélevé le ${exp.debitDay}` : ''}</span>`
+        : '';
       return `<tr>
-        <td><strong>${esc(exp.name)}</strong>${exp.notes ? `<br><span style="font-size:0.72rem;color:var(--muted)">${esc(exp.notes)}</span>` : ''}</td>
+        <td><strong>${esc(exp.name)}</strong>${carteInfo}${exp.notes ? `<br><span style="font-size:0.72rem;color:var(--muted)">${esc(exp.notes)}</span>` : ''}</td>
         <td><span class="badge" style="background:rgba(59,130,246,0.12);color:var(--accent)">${meta.icon} ${meta.label}</span></td>
         <td>${exp.frequency === 'yearly' ? `${fc(exp.amount)}/an` : `${fc(exp.amount)}/mois`}</td>
         <td class="neutral">${exp.frequency === 'yearly' ? fc(monthly) + '/mois' : fc(exp.amount * 12) + '/an'}</td>
@@ -7110,6 +7127,11 @@ function renderBudget() {
   `;
 }
 
+function toggleCarteExtra() {
+  const cat = document.getElementById('budget-expense-cat').value;
+  document.getElementById('budget-carte-extra').style.display = cat === 'carte' ? '' : 'none';
+}
+
 function openBudgetExpenseModal(id) {
   const exp = id ? (S.data.budgetExpenses || []).find(e => e.id === id) : null;
   document.getElementById('modal-budget-title').textContent = exp ? '✏️ Modifier la dépense' : '+ Nouvelle dépense';
@@ -7119,20 +7141,29 @@ function openBudgetExpenseModal(id) {
   document.getElementById('budget-expense-freq').value = exp?.frequency || 'monthly';
   document.getElementById('budget-expense-amount').value = exp?.amount || '';
   document.getElementById('budget-expense-notes').value = exp?.notes || '';
+  document.getElementById('budget-expense-card-name').value = exp?.cardName || '';
+  document.getElementById('budget-expense-debit-day').value = exp?.debitDay || '';
+  document.getElementById('budget-expense-cat').onchange = toggleCarteExtra;
+  toggleCarteExtra();
   openModal('modal-budget-expense');
 }
 
 function saveBudgetExpense(e) {
   e.preventDefault();
   const id = document.getElementById('budget-expense-id').value;
+  const category = document.getElementById('budget-expense-cat').value;
   const entry = {
     id: id || uid(),
     name: document.getElementById('budget-expense-name').value.trim(),
-    category: document.getElementById('budget-expense-cat').value,
+    category,
     frequency: document.getElementById('budget-expense-freq').value,
     amount: parseFloat(document.getElementById('budget-expense-amount').value),
     notes: document.getElementById('budget-expense-notes').value.trim(),
   };
+  if (category === 'carte') {
+    entry.cardName = document.getElementById('budget-expense-card-name').value.trim();
+    entry.debitDay = parseInt(document.getElementById('budget-expense-debit-day').value) || null;
+  }
   if (!S.data.budgetExpenses) S.data.budgetExpenses = [];
   if (id) {
     const idx = S.data.budgetExpenses.findIndex(e => e.id === id);

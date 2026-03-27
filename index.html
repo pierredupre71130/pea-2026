@@ -660,7 +660,6 @@
               <option value="loisirs">🎮 Loisirs</option>
               <option value="abonnements">📱 Abonnements</option>
               <option value="epargne">💎 Épargne / Investissement</option>
-              <option value="carte">💳 Encours carte</option>
               <option value="autres">📦 Autres</option>
             </select>
           </div>
@@ -680,18 +679,6 @@
           <div class="form-group">
             <label>Notes (optionnel)</label>
             <input type="text" id="budget-expense-notes" placeholder="Ex: contrat renouvelable">
-          </div>
-        </div>
-        <div id="budget-carte-extra" style="display:none">
-          <div class="form-row">
-            <div class="form-group">
-              <label>Carte bancaire</label>
-              <input type="text" id="budget-expense-card-name" placeholder="Ex: Gold Caisse d'Épargne">
-            </div>
-            <div class="form-group">
-              <label>Prélèvement le (jour du mois)</label>
-              <input type="number" id="budget-expense-debit-day" min="1" max="31" placeholder="Ex: 4">
-            </div>
           </div>
         </div>
       </div>
@@ -720,6 +707,39 @@
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" onclick="closeModal('modal-budget-income')">Annuler</button>
+        <button type="submit" class="btn btn-primary">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ===== MODAL: ENCOURS CARTE ===== -->
+<div id="modal-budget-card" class="modal-overlay">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header">
+      <span class="modal-title">💳 Encours carte du mois</span>
+      <button class="modal-close" onclick="closeModal('modal-budget-card')">×</button>
+    </div>
+    <form onsubmit="saveBudgetCard(event)">
+      <div class="modal-body">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Nom de la carte</label>
+            <input type="text" id="budget-card-name" placeholder="Ex: Gold Caisse d'Épargne">
+          </div>
+          <div class="form-group">
+            <label>Prélevé le (jour du mois)</label>
+            <input type="number" id="budget-card-debit-day" min="1" max="31" placeholder="Ex: 4">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Encours du mois en cours (€)</label>
+          <input type="number" id="budget-card-encours" step="0.01" min="0" placeholder="0.00">
+          <div style="font-size:0.74rem;color:var(--muted);margin-top:5px">Montant total dépensé par carte ce mois-ci, qui sera débité le jour indiqué.</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-budget-card')">Annuler</button>
         <button type="submit" class="btn btn-primary">Enregistrer</button>
       </div>
     </form>
@@ -820,7 +840,7 @@ function defData() {
     userDecisions: [],
     terCache: {},
     budgetExpenses: [],
-    budgetSettings: { monthlyIncome: 0 }
+    budgetSettings: { monthlyIncome: 0, cardName: '', cardDebitDay: null, cardEncours: 0 }
   };
 }
 
@@ -7005,7 +7025,6 @@ const BUDGET_CATS = {
   loisirs:      { label: 'Loisirs',                 icon: '🎮' },
   abonnements:  { label: 'Abonnements',             icon: '📱' },
   epargne:      { label: 'Épargne / Investissement',icon: '💎' },
-  carte:        { label: 'Encours carte',           icon: '💳' },
   autres:       { label: 'Autres',                  icon: '📦' },
 };
 
@@ -7015,44 +7034,74 @@ function budgetMonthlyAmount(exp) {
 
 function renderBudget() {
   const exps = S.data.budgetExpenses || [];
-  const income = (S.data.budgetSettings || {}).monthlyIncome || 0;
+  const bs = S.data.budgetSettings || {};
+  const income = bs.monthlyIncome || 0;
+  const cardEncours = bs.cardEncours || 0;
+  const cardName = bs.cardName || 'Carte bancaire';
+  const cardDebitDay = bs.cardDebitDay || null;
 
-  // Totaux par catégorie
+  // Totaux charges fixes par catégorie
   const bycat = {};
-  let totalMonthly = 0;
+  let totalFixed = 0;
   for (const exp of exps) {
     const m = budgetMonthlyAmount(exp);
-    totalMonthly += m;
+    totalFixed += m;
     if (!bycat[exp.category]) bycat[exp.category] = 0;
     bycat[exp.category] += m;
   }
 
-  const remaining = income > 0 ? income - totalMonthly : null;
-  const savingsRate = income > 0 ? ((income - totalMonthly) / income * 100) : null;
+  const afterFixed   = income > 0 ? income - totalFixed : null;
+  const afterAll     = income > 0 ? income - totalFixed - cardEncours : null;
+  const savingsRate  = income > 0 && afterAll !== null ? (afterAll / income * 100) : null;
 
-  // Cartes résumé
-  const summaryCards = `
-    <div class="grid-${income > 0 ? '4' : '3'}">
-      ${income > 0 ? `<div class="card">
-        <div class="section-title">Revenu net mensuel</div>
-        <div class="stat-val positive">${fc(income)}</div>
-        <div class="stat-sub neutral"><button class="btn btn-sm btn-secondary" onclick="openBudgetIncomeModal()">Modifier</button></div>
-      </div>` : ''}
-      <div class="card">
-        <div class="section-title">Total dépenses / mois</div>
-        <div class="stat-val ${totalMonthly > income && income > 0 ? 'negative' : ''}">${fc(totalMonthly)}</div>
-        <div class="stat-sub neutral">${exps.length} poste${exps.length !== 1 ? 's' : ''}</div>
+  // Bloc récapitulatif du mois
+  const recapHtml = income > 0 ? `
+    <div class="card mb16" style="border-left:3px solid var(--accent)">
+      <div class="section-title mb16">Récapitulatif du mois</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>💼 Salaire net</span>
+          <span class="positive" style="font-weight:700;font-size:1rem">${fc(income)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--muted)">− Charges fixes (${exps.length} postes)</span>
+          <span class="negative">−${fc(totalFixed)}</span>
+        </div>
+        <div style="border-top:1px dashed var(--border);padding-top:10px;display:flex;justify-content:space-between;align-items:center">
+          <span>Solde avant encours carte</span>
+          <span style="font-weight:600;color:${afterFixed >= 0 ? 'var(--success)' : 'var(--danger)'}">${fc(afterFixed)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--muted)">− 💳 Encours ${esc(cardName)}${cardDebitDay ? ` (débité le ${cardDebitDay})` : ''}</span>
+          <span class="${cardEncours > 0 ? 'negative' : 'neutral'}">−${fc(cardEncours)} <button class="btn btn-sm btn-secondary" style="margin-left:6px" onclick="openBudgetCardModal()">Modifier</button></span>
+        </div>
+        <div style="border-top:2px solid var(--border);padding-top:10px;display:flex;justify-content:space-between;align-items:center">
+          <span style="font-weight:700">= Reste disponible après le ${cardDebitDay || '…'}</span>
+          <span style="font-size:1.25rem;font-weight:700;color:${afterAll >= 0 ? 'var(--success)' : 'var(--danger)'}">${fc(afterAll)}${savingsRate !== null ? `<span style="font-size:0.75rem;color:var(--muted);margin-left:8px">(${savingsRate.toFixed(1)}% du salaire)</span>` : ''}</span>
+        </div>
       </div>
-      <div class="card">
-        <div class="section-title">Total dépenses / an</div>
-        <div class="stat-val">${fc(totalMonthly * 12)}</div>
-        <div class="stat-sub neutral">Projection annuelle</div>
+    </div>` : `
+    <div class="card mb16" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px">
+        <div style="font-weight:600;margin-bottom:4px">Pour commencer, saisissez votre salaire net</div>
+        <div style="font-size:0.8rem;color:var(--muted)">Il servira à calculer votre reste disponible après charges et encours carte.</div>
       </div>
-      ${income > 0 ? `<div class="card">
-        <div class="section-title">Solde disponible / mois</div>
-        <div class="stat-val ${remaining >= 0 ? 'positive' : 'negative'}">${fc(remaining)}</div>
-        <div class="stat-sub ${savingsRate >= 0 ? 'positive' : 'negative'}">Taux d'épargne : ${savingsRate.toFixed(1)}%</div>
-      </div>` : ''}
+      <button class="btn btn-primary" onclick="openBudgetIncomeModal()">💼 Saisir mon salaire</button>
+    </div>`;
+
+  // Bloc encours carte
+  const carteHtml = `
+    <div class="card mb16">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div>
+          <div class="section-title" style="margin-bottom:4px">💳 Encours carte du mois</div>
+          <div style="font-size:0.8rem;color:var(--muted)">${esc(cardName)}${cardDebitDay ? ` · prélevé le ${cardDebitDay} du mois suivant` : ''}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:1.4rem;font-weight:700;color:${cardEncours > 0 ? 'var(--warning)' : 'var(--muted)'}">${fc(cardEncours)}</span>
+          <button class="btn btn-secondary" onclick="openBudgetCardModal()">✏️ Modifier</button>
+        </div>
+      </div>
     </div>`;
 
   // Répartition par catégorie
@@ -7060,7 +7109,7 @@ function renderBudget() {
     .sort((a, b) => b[1] - a[1])
     .map(([cat, amt]) => {
       const meta = BUDGET_CATS[cat] || { label: cat, icon: '📦' };
-      const pct = totalMonthly > 0 ? (amt / totalMonthly * 100) : 0;
+      const pct = totalFixed > 0 ? (amt / totalFixed * 100) : 0;
       const incomePct = income > 0 ? (amt / income * 100).toFixed(1) : null;
       return `<tr>
         <td>${meta.icon} <strong>${meta.label}</strong></td>
@@ -7071,7 +7120,7 @@ function renderBudget() {
             <div style="flex:1;background:var(--border);border-radius:4px;height:6px;min-width:60px">
               <div style="width:${pct.toFixed(1)}%;background:var(--accent);height:6px;border-radius:4px"></div>
             </div>
-            <span style="font-size:0.75rem;color:var(--muted);min-width:36px">${pct.toFixed(0)}%${incomePct ? ` · ${incomePct}% rev.` : ''}</span>
+            <span style="font-size:0.75rem;color:var(--muted);min-width:36px">${pct.toFixed(0)}%${incomePct ? ` · ${incomePct}% sal.` : ''}</span>
           </div>
         </td>
       </tr>`;
@@ -7083,11 +7132,8 @@ function renderBudget() {
     .map(exp => {
       const meta = BUDGET_CATS[exp.category] || { label: exp.category, icon: '📦' };
       const monthly = budgetMonthlyAmount(exp);
-      const carteInfo = exp.category === 'carte' && (exp.cardName || exp.debitDay)
-        ? `<br><span style="font-size:0.72rem;color:var(--muted)">${exp.cardName ? esc(exp.cardName) : ''}${exp.debitDay ? ` · prélevé le ${exp.debitDay}` : ''}</span>`
-        : '';
       return `<tr>
-        <td><strong>${esc(exp.name)}</strong>${carteInfo}${exp.notes ? `<br><span style="font-size:0.72rem;color:var(--muted)">${esc(exp.notes)}</span>` : ''}</td>
+        <td><strong>${esc(exp.name)}</strong>${exp.notes ? `<br><span style="font-size:0.72rem;color:var(--muted)">${esc(exp.notes)}</span>` : ''}</td>
         <td><span class="badge" style="background:rgba(59,130,246,0.12);color:var(--accent)">${meta.icon} ${meta.label}</span></td>
         <td>${exp.frequency === 'yearly' ? `${fc(exp.amount)}/an` : `${fc(exp.amount)}/mois`}</td>
         <td class="neutral">${exp.frequency === 'yearly' ? fc(monthly) + '/mois' : fc(exp.amount * 12) + '/an'}</td>
@@ -7100,36 +7146,32 @@ function renderBudget() {
 
   document.getElementById('page-budget').innerHTML = `
     <div class="page-header">
-      <div><h2>Budget Personnel</h2><div class="page-sub">Suivi de vos frais mensuels et taux d'épargne</div></div>
+      <div><h2>Budget Personnel</h2><div class="page-sub">Suivi de vos charges fixes et encours carte</div></div>
       <div class="page-actions">
-        ${income === 0 ? `<button class="btn btn-secondary" onclick="openBudgetIncomeModal()">💼 Saisir mon revenu</button>` : ''}
-        <button class="btn btn-primary" onclick="openBudgetExpenseModal()">+ Ajouter une dépense</button>
+        ${income > 0 ? `<button class="btn btn-secondary" onclick="openBudgetIncomeModal()">💼 ${fc(income)}/mois</button>` : ''}
+        <button class="btn btn-primary" onclick="openBudgetExpenseModal()">+ Charge fixe</button>
       </div>
     </div>
-    ${summaryCards}
+    ${recapHtml}
+    ${carteHtml}
     ${Object.keys(bycat).length > 0 ? `
     <div class="card mb16">
-      <div class="section-title mb16">Répartition par catégorie</div>
+      <div class="section-title mb16">Répartition des charges fixes</div>
       <div class="table-wrap"><table>
         <thead><tr><th>Catégorie</th><th>/ mois</th><th>/ an</th><th>Part</th></tr></thead>
         <tbody>${catRows}</tbody>
       </table></div>
     </div>` : ''}
     <div class="card">
-      <div class="section-title mb16">Détail des dépenses</div>
+      <div class="section-title mb16">Détail des charges fixes</div>
       ${exps.length ? `
         <div class="table-wrap"><table>
           <thead><tr><th>Dépense</th><th>Catégorie</th><th>Montant saisi</th><th>Équivalent</th><th></th></tr></thead>
           <tbody>${expRows}</tbody>
         </table></div>
-      ` : `<div class="empty"><div class="ico">🏠</div><p>Aucune dépense enregistrée</p><p style="font-size:0.8rem;color:var(--muted);margin-top:8px">Ajoutez vos frais fixes (loyer, EDF, abonnements…) pour calculer votre capacité d'épargne.</p></div>`}
+      ` : `<div class="empty"><div class="ico">🏠</div><p>Aucune charge fixe enregistrée</p><p style="font-size:0.8rem;color:var(--muted);margin-top:8px">Ajoutez vos frais récurrents (loyer, EDF, abonnements…).</p></div>`}
     </div>
   `;
-}
-
-function toggleCarteExtra() {
-  const cat = document.getElementById('budget-expense-cat').value;
-  document.getElementById('budget-carte-extra').style.display = cat === 'carte' ? '' : 'none';
 }
 
 function openBudgetExpenseModal(id) {
@@ -7141,29 +7183,20 @@ function openBudgetExpenseModal(id) {
   document.getElementById('budget-expense-freq').value = exp?.frequency || 'monthly';
   document.getElementById('budget-expense-amount').value = exp?.amount || '';
   document.getElementById('budget-expense-notes').value = exp?.notes || '';
-  document.getElementById('budget-expense-card-name').value = exp?.cardName || '';
-  document.getElementById('budget-expense-debit-day').value = exp?.debitDay || '';
-  document.getElementById('budget-expense-cat').onchange = toggleCarteExtra;
-  toggleCarteExtra();
   openModal('modal-budget-expense');
 }
 
 function saveBudgetExpense(e) {
   e.preventDefault();
   const id = document.getElementById('budget-expense-id').value;
-  const category = document.getElementById('budget-expense-cat').value;
   const entry = {
     id: id || uid(),
     name: document.getElementById('budget-expense-name').value.trim(),
-    category,
+    category: document.getElementById('budget-expense-cat').value,
     frequency: document.getElementById('budget-expense-freq').value,
     amount: parseFloat(document.getElementById('budget-expense-amount').value),
     notes: document.getElementById('budget-expense-notes').value.trim(),
   };
-  if (category === 'carte') {
-    entry.cardName = document.getElementById('budget-expense-card-name').value.trim();
-    entry.debitDay = parseInt(document.getElementById('budget-expense-debit-day').value) || null;
-  }
   if (!S.data.budgetExpenses) S.data.budgetExpenses = [];
   if (id) {
     const idx = S.data.budgetExpenses.findIndex(e => e.id === id);
@@ -7195,7 +7228,27 @@ function saveBudgetIncome(e) {
   S.data.budgetSettings.monthlyIncome = parseFloat(document.getElementById('budget-income-val').value) || 0;
   saveData();
   closeModal('modal-budget-income');
-  toast('Revenu enregistré', 'success');
+  toast('Salaire enregistré', 'success');
+  renderBudget();
+}
+
+function openBudgetCardModal() {
+  const bs = S.data.budgetSettings || {};
+  document.getElementById('budget-card-name').value = bs.cardName || '';
+  document.getElementById('budget-card-debit-day').value = bs.cardDebitDay || '';
+  document.getElementById('budget-card-encours').value = bs.cardEncours || '';
+  openModal('modal-budget-card');
+}
+
+function saveBudgetCard(e) {
+  e.preventDefault();
+  if (!S.data.budgetSettings) S.data.budgetSettings = {};
+  S.data.budgetSettings.cardName     = document.getElementById('budget-card-name').value.trim() || 'Carte bancaire';
+  S.data.budgetSettings.cardDebitDay = parseInt(document.getElementById('budget-card-debit-day').value) || null;
+  S.data.budgetSettings.cardEncours  = parseFloat(document.getElementById('budget-card-encours').value) || 0;
+  saveData();
+  closeModal('modal-budget-card');
+  toast('Encours carte mis à jour', 'success');
   renderBudget();
 }
 

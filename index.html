@@ -302,6 +302,7 @@
   <div class="sheet-grid">
     <div class="sheet-item" data-page="transactions" onclick="sheetNav('transactions')"><span class="sico">🔄</span><span>Transactions</span></div>
     <div class="sheet-item" data-page="treasury" onclick="sheetNav('treasury')"><span class="sico">💰</span><span>Trésorerie</span></div>
+    <div class="sheet-item" data-page="budget" onclick="sheetNav('budget')"><span class="sico">🏠</span><span>Budget</span></div>
     <div class="sheet-item" data-page="simulation" onclick="sheetNav('simulation')"><span class="sico">🔮</span><span>Simulation</span></div>
     <div class="sheet-item" data-page="performance" onclick="sheetNav('performance')"><span class="sico">📈</span><span>Performance</span></div>
     <div class="sheet-item" data-page="technical" onclick="sheetNav('technical')"><span class="sico">📉</span><span>Technique</span></div>
@@ -321,6 +322,7 @@
   <div class="nav-item" data-page="portfolio"><span class="icon">💼</span>Portefeuille</div>
   <div class="nav-item" data-page="transactions"><span class="icon">🔄</span>Transactions</div>
   <div class="nav-item" data-page="treasury"><span class="icon">💰</span>Trésorerie</div>
+  <div class="nav-item" data-page="budget"><span class="icon">🏠</span>Budget Perso</div>
   <div class="nav-section">Outils</div>
   <div class="nav-item" data-page="planning"><span class="icon">📅</span>Planning Mensuel</div>
   <div class="nav-item" data-page="simulation"><span class="icon">🔮</span>Simulation</div>
@@ -352,6 +354,7 @@
   <div id="page-ai" class="page"></div>
   <div id="page-technical" class="page"></div>
   <div id="page-settings" class="page"></div>
+  <div id="page-budget" class="page"></div>
 </main>
 
 <!-- ===== MODAL: TRANSACTION ===== -->
@@ -632,6 +635,84 @@
   </div>
 </div>
 
+<!-- ===== MODAL: BUDGET EXPENSE ===== -->
+<div id="modal-budget-expense" class="modal-overlay">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-budget-title">+ Nouvelle dépense</span>
+      <button class="modal-close" onclick="closeModal('modal-budget-expense')">×</button>
+    </div>
+    <form onsubmit="saveBudgetExpense(event)">
+      <div class="modal-body">
+        <input type="hidden" id="budget-expense-id">
+        <div class="form-group">
+          <label>Nom de la dépense</label>
+          <input type="text" id="budget-expense-name" placeholder="Ex: Loyer, EDF, Spotify…" required>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Catégorie</label>
+            <select id="budget-expense-cat">
+              <option value="logement">🏠 Logement</option>
+              <option value="alimentation">🛒 Alimentation</option>
+              <option value="transport">🚗 Transport</option>
+              <option value="sante">💊 Santé</option>
+              <option value="loisirs">🎮 Loisirs</option>
+              <option value="abonnements">📱 Abonnements</option>
+              <option value="epargne">💎 Épargne / Investissement</option>
+              <option value="autres">📦 Autres</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Fréquence</label>
+            <select id="budget-expense-freq">
+              <option value="monthly">Mensuelle</option>
+              <option value="yearly">Annuelle</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Montant (€)</label>
+            <input type="number" id="budget-expense-amount" step="0.01" min="0" placeholder="0.00" required>
+          </div>
+          <div class="form-group">
+            <label>Notes (optionnel)</label>
+            <input type="text" id="budget-expense-notes" placeholder="Ex: contrat renouvelable">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-budget-expense')">Annuler</button>
+        <button type="submit" class="btn btn-primary">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ===== MODAL: BUDGET INCOME ===== -->
+<div id="modal-budget-income" class="modal-overlay">
+  <div class="modal" style="max-width:360px">
+    <div class="modal-header">
+      <span class="modal-title">💼 Revenu mensuel net</span>
+      <button class="modal-close" onclick="closeModal('modal-budget-income')">×</button>
+    </div>
+    <form onsubmit="saveBudgetIncome(event)">
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Revenu net mensuel (€)</label>
+          <input type="number" id="budget-income-val" step="0.01" min="0" placeholder="Ex: 2500">
+        </div>
+        <div style="font-size:0.74rem;color:var(--muted)">Utilisé pour calculer votre taux d'épargne et le solde disponible.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-budget-income')">Annuler</button>
+        <button type="submit" class="btn btn-primary">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- ===== TOASTS ===== -->
 <div id="toasts"></div>
 
@@ -724,7 +805,9 @@ function defData() {
     alerts: {},
     aiMemory: [],
     userDecisions: [],
-    terCache: {}
+    terCache: {},
+    budgetExpenses: [],
+    budgetSettings: { monthlyIncome: 0 }
   };
 }
 
@@ -757,7 +840,7 @@ function loadData() {
     const r = localStorage.getItem(STORAGE_KEY);
     if (r) {
       const p = JSON.parse(r);
-      const d = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings }, snapshots: p.snapshots || [], savedPlans: p.savedPlans || [], priceCache: p.priceCache || {}, pruOverrides: p.pruOverrides || {}, terCache: p.terCache || {} };
+      const d = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings }, snapshots: p.snapshots || [], savedPlans: p.savedPlans || [], priceCache: p.priceCache || {}, pruOverrides: p.pruOverrides || {}, terCache: p.terCache || {}, budgetExpenses: p.budgetExpenses || [], budgetSettings: { ...defData().budgetSettings, ...(p.budgetSettings||{}) } };
       migrateFees(d);
       return d;
     }
@@ -6899,10 +6982,197 @@ function renderAiLoyaltyEvents(snapshots) {
 }
 
 // ======================================================
+// PAGE — BUDGET PERSO
+// ======================================================
+const BUDGET_CATS = {
+  logement:     { label: 'Logement',               icon: '🏠' },
+  alimentation: { label: 'Alimentation',            icon: '🛒' },
+  transport:    { label: 'Transport',               icon: '🚗' },
+  sante:        { label: 'Santé',                   icon: '💊' },
+  loisirs:      { label: 'Loisirs',                 icon: '🎮' },
+  abonnements:  { label: 'Abonnements',             icon: '📱' },
+  epargne:      { label: 'Épargne / Investissement',icon: '💎' },
+  autres:       { label: 'Autres',                  icon: '📦' },
+};
+
+function budgetMonthlyAmount(exp) {
+  return exp.frequency === 'yearly' ? exp.amount / 12 : exp.amount;
+}
+
+function renderBudget() {
+  const exps = S.data.budgetExpenses || [];
+  const income = (S.data.budgetSettings || {}).monthlyIncome || 0;
+
+  // Totaux par catégorie
+  const bycat = {};
+  let totalMonthly = 0;
+  for (const exp of exps) {
+    const m = budgetMonthlyAmount(exp);
+    totalMonthly += m;
+    if (!bycat[exp.category]) bycat[exp.category] = 0;
+    bycat[exp.category] += m;
+  }
+
+  const remaining = income > 0 ? income - totalMonthly : null;
+  const savingsRate = income > 0 ? ((income - totalMonthly) / income * 100) : null;
+
+  // Cartes résumé
+  const summaryCards = `
+    <div class="grid-${income > 0 ? '4' : '3'}">
+      ${income > 0 ? `<div class="card">
+        <div class="section-title">Revenu net mensuel</div>
+        <div class="stat-val positive">${fc(income)}</div>
+        <div class="stat-sub neutral"><button class="btn btn-sm btn-secondary" onclick="openBudgetIncomeModal()">Modifier</button></div>
+      </div>` : ''}
+      <div class="card">
+        <div class="section-title">Total dépenses / mois</div>
+        <div class="stat-val ${totalMonthly > income && income > 0 ? 'negative' : ''}">${fc(totalMonthly)}</div>
+        <div class="stat-sub neutral">${exps.length} poste${exps.length !== 1 ? 's' : ''}</div>
+      </div>
+      <div class="card">
+        <div class="section-title">Total dépenses / an</div>
+        <div class="stat-val">${fc(totalMonthly * 12)}</div>
+        <div class="stat-sub neutral">Projection annuelle</div>
+      </div>
+      ${income > 0 ? `<div class="card">
+        <div class="section-title">Solde disponible / mois</div>
+        <div class="stat-val ${remaining >= 0 ? 'positive' : 'negative'}">${fc(remaining)}</div>
+        <div class="stat-sub ${savingsRate >= 0 ? 'positive' : 'negative'}">Taux d'épargne : ${savingsRate.toFixed(1)}%</div>
+      </div>` : ''}
+    </div>`;
+
+  // Répartition par catégorie
+  const catRows = Object.entries(bycat)
+    .sort((a, b) => b[1] - a[1])
+    .map(([cat, amt]) => {
+      const meta = BUDGET_CATS[cat] || { label: cat, icon: '📦' };
+      const pct = totalMonthly > 0 ? (amt / totalMonthly * 100) : 0;
+      const incomePct = income > 0 ? (amt / income * 100).toFixed(1) : null;
+      return `<tr>
+        <td>${meta.icon} <strong>${meta.label}</strong></td>
+        <td>${fc(amt)}</td>
+        <td>${fc(amt * 12)}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="flex:1;background:var(--border);border-radius:4px;height:6px;min-width:60px">
+              <div style="width:${pct.toFixed(1)}%;background:var(--accent);height:6px;border-radius:4px"></div>
+            </div>
+            <span style="font-size:0.75rem;color:var(--muted);min-width:36px">${pct.toFixed(0)}%${incomePct ? ` · ${incomePct}% rev.` : ''}</span>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+
+  // Liste détaillée des dépenses
+  const expRows = [...exps]
+    .sort((a, b) => budgetMonthlyAmount(b) - budgetMonthlyAmount(a))
+    .map(exp => {
+      const meta = BUDGET_CATS[exp.category] || { label: exp.category, icon: '📦' };
+      const monthly = budgetMonthlyAmount(exp);
+      return `<tr>
+        <td><strong>${esc(exp.name)}</strong>${exp.notes ? `<br><span style="font-size:0.72rem;color:var(--muted)">${esc(exp.notes)}</span>` : ''}</td>
+        <td><span class="badge" style="background:rgba(59,130,246,0.12);color:var(--accent)">${meta.icon} ${meta.label}</span></td>
+        <td>${exp.frequency === 'yearly' ? `${fc(exp.amount)}/an` : `${fc(exp.amount)}/mois`}</td>
+        <td class="neutral">${exp.frequency === 'yearly' ? fc(monthly) + '/mois' : fc(exp.amount * 12) + '/an'}</td>
+        <td>
+          <button class="btn-icon" onclick="openBudgetExpenseModal('${exp.id}')" title="Modifier" style="color:var(--muted)">✏️</button>
+          <button class="btn-icon" onclick="delBudgetExpense('${exp.id}')" title="Supprimer">🗑</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+  document.getElementById('page-budget').innerHTML = `
+    <div class="page-header">
+      <div><h2>Budget Personnel</h2><div class="page-sub">Suivi de vos frais mensuels et taux d'épargne</div></div>
+      <div class="page-actions">
+        ${income === 0 ? `<button class="btn btn-secondary" onclick="openBudgetIncomeModal()">💼 Saisir mon revenu</button>` : ''}
+        <button class="btn btn-primary" onclick="openBudgetExpenseModal()">+ Ajouter une dépense</button>
+      </div>
+    </div>
+    ${summaryCards}
+    ${Object.keys(bycat).length > 0 ? `
+    <div class="card mb16">
+      <div class="section-title mb16">Répartition par catégorie</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Catégorie</th><th>/ mois</th><th>/ an</th><th>Part</th></tr></thead>
+        <tbody>${catRows}</tbody>
+      </table></div>
+    </div>` : ''}
+    <div class="card">
+      <div class="section-title mb16">Détail des dépenses</div>
+      ${exps.length ? `
+        <div class="table-wrap"><table>
+          <thead><tr><th>Dépense</th><th>Catégorie</th><th>Montant saisi</th><th>Équivalent</th><th></th></tr></thead>
+          <tbody>${expRows}</tbody>
+        </table></div>
+      ` : `<div class="empty"><div class="ico">🏠</div><p>Aucune dépense enregistrée</p><p style="font-size:0.8rem;color:var(--muted);margin-top:8px">Ajoutez vos frais fixes (loyer, EDF, abonnements…) pour calculer votre capacité d'épargne.</p></div>`}
+    </div>
+  `;
+}
+
+function openBudgetExpenseModal(id) {
+  const exp = id ? (S.data.budgetExpenses || []).find(e => e.id === id) : null;
+  document.getElementById('modal-budget-title').textContent = exp ? '✏️ Modifier la dépense' : '+ Nouvelle dépense';
+  document.getElementById('budget-expense-id').value = id || '';
+  document.getElementById('budget-expense-name').value = exp?.name || '';
+  document.getElementById('budget-expense-cat').value = exp?.category || 'logement';
+  document.getElementById('budget-expense-freq').value = exp?.frequency || 'monthly';
+  document.getElementById('budget-expense-amount').value = exp?.amount || '';
+  document.getElementById('budget-expense-notes').value = exp?.notes || '';
+  openModal('modal-budget-expense');
+}
+
+function saveBudgetExpense(e) {
+  e.preventDefault();
+  const id = document.getElementById('budget-expense-id').value;
+  const entry = {
+    id: id || uid(),
+    name: document.getElementById('budget-expense-name').value.trim(),
+    category: document.getElementById('budget-expense-cat').value,
+    frequency: document.getElementById('budget-expense-freq').value,
+    amount: parseFloat(document.getElementById('budget-expense-amount').value),
+    notes: document.getElementById('budget-expense-notes').value.trim(),
+  };
+  if (!S.data.budgetExpenses) S.data.budgetExpenses = [];
+  if (id) {
+    const idx = S.data.budgetExpenses.findIndex(e => e.id === id);
+    if (idx !== -1) S.data.budgetExpenses[idx] = entry;
+  } else {
+    S.data.budgetExpenses.push(entry);
+  }
+  saveData();
+  closeModal('modal-budget-expense');
+  toast(id ? 'Dépense modifiée' : 'Dépense ajoutée', 'success');
+  renderBudget();
+}
+
+function delBudgetExpense(id) {
+  S.data.budgetExpenses = (S.data.budgetExpenses || []).filter(e => e.id !== id);
+  saveData();
+  toast('Dépense supprimée', 'success');
+  renderBudget();
+}
+
+function openBudgetIncomeModal() {
+  document.getElementById('budget-income-val').value = (S.data.budgetSettings || {}).monthlyIncome || '';
+  openModal('modal-budget-income');
+}
+
+function saveBudgetIncome(e) {
+  e.preventDefault();
+  if (!S.data.budgetSettings) S.data.budgetSettings = {};
+  S.data.budgetSettings.monthlyIncome = parseFloat(document.getElementById('budget-income-val').value) || 0;
+  saveData();
+  closeModal('modal-budget-income');
+  toast('Revenu enregistré', 'success');
+  renderBudget();
+}
+
+// ======================================================
 // ROUTER
 // ======================================================
-const PAGE_TITLES = { dashboard:'Dashboard', portfolio:'Portefeuille', transactions:'Transactions', treasury:'Trésorerie', planning:'Planning', simulation:'Simulation', performance:'Performance', technical:'Technique', news:'Actualités', ai:'IA Claude', settings:'Paramètres' };
-const MORE_PAGES = new Set(['transactions','treasury','simulation','performance','technical','news','settings']);
+const PAGE_TITLES = { dashboard:'Dashboard', portfolio:'Portefeuille', transactions:'Transactions', treasury:'Trésorerie', budget:'Budget', planning:'Planning', simulation:'Simulation', performance:'Performance', technical:'Technique', news:'Actualités', ai:'IA Claude', settings:'Paramètres' };
+const MORE_PAGES = new Set(['transactions','treasury','budget','simulation','performance','technical','news','settings']);
 
 function navigate(page) {
   S.page = page;
@@ -7620,7 +7890,7 @@ function updateFiscalCalc(amountStr) {
 
 function renderPage(page) {
   ({ dashboard:renderDashboard, portfolio:renderPortfolio, transactions:renderTransactions,
-     treasury:renderTreasury, planning:renderPlanning, simulation:renderSimulation,
+     treasury:renderTreasury, budget:renderBudget, planning:renderPlanning, simulation:renderSimulation,
      performance:renderPerformance, technical:renderTechnical, news:renderNews, ai:renderAI, settings:renderSettings })[page]?.();
 }
 

@@ -929,7 +929,13 @@ async function pushGist() {
   if (!token) return;
   setSyncStatus('syncing');
   try {
-    const content = JSON.stringify(S.data);
+    // Les clés API ne quittent JAMAIS l'appareil — on les retire avant l'envoi
+    const safeData = JSON.parse(JSON.stringify(S.data));
+    safeData.settings.claudeApiKey  = '';
+    safeData.settings.geminiApiKey  = '';
+    safeData.settings.groqApiKey    = '';
+    safeData.settings.grokXaiApiKey = '';
+    const content = JSON.stringify(safeData);
     let id = getGistId();
     const body = { description: 'PEA Manager — données privées', public: false, files: { [GIST_FILENAME]: { content } } };
     const res = await fetch(
@@ -956,7 +962,9 @@ async function pullGist() {
     const raw = json.files?.[GIST_FILENAME]?.content;
     if (!raw) throw new Error('Fichier introuvable dans le gist');
     const p = JSON.parse(raw);
-    S.data = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings }, snapshots: p.snapshots||[], savedPlans: p.savedPlans||[], priceCache: p.priceCache||{}, pruOverrides: p.pruOverrides||{}, terCache: p.terCache||{}, budgetExpenses: p.budgetExpenses||[], budgetSettings: { ...defData().budgetSettings, ...(p.budgetSettings||{}) } };
+    // Préserver les clés API locales — elles ne sont jamais dans le Gist
+    const localKeys = { claudeApiKey: S.data.settings.claudeApiKey, geminiApiKey: S.data.settings.geminiApiKey, groqApiKey: S.data.settings.groqApiKey, grokXaiApiKey: S.data.settings.grokXaiApiKey };
+    S.data = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings, ...localKeys }, snapshots: p.snapshots||[], savedPlans: p.savedPlans||[], priceCache: p.priceCache||{}, pruOverrides: p.pruOverrides||{}, terCache: p.terCache||{}, budgetExpenses: p.budgetExpenses||[], budgetSettings: { ...defData().budgetSettings, ...(p.budgetSettings||{}) } };
     migrateFees(S.data);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(S.data));
     setSyncStatus('ok');

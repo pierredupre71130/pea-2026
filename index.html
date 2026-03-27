@@ -7842,21 +7842,20 @@ async function renderPerformance() {
 
   // Benchmark
   let bench = null, benchTRI = null;
-  if (firstDate) {
-    const prices = await fetchBenchmarkHistory(firstDate);
+  const firstTxDate = (S.data.transactions||[]).filter(t => t.type==='buy').map(t => t.date).sort()[0];
+  const benchStartDate = firstTxDate && (!firstDate || firstTxDate < firstDate) ? firstTxDate : firstDate;
+  if (benchStartDate) {
+    const prices = await fetchBenchmarkHistory(benchStartDate);
     if (prices) {
-      // Construire les flux DCA depuis les transactions réelles si les dépôts sont insuffisants
-      // (1 seul dépôt global ≠ DCA — on simule : "si j'avais acheté IWDA.L le même jour pour le même montant")
-      const deposits = S.data.deposits || [];
-      const depositDates = deposits.filter(d => d.type === 'deposit').map(d => d.date);
-      const txDates = [...new Set((S.data.transactions||[]).filter(t => t.type==='buy').map(t => t.date))].sort();
-      const dcaDeposits = (depositDates.length <= 1 && txDates.length > 1)
-        ? txDates.map(date => ({
+      // Toujours reconstruire depuis les transactions d'achat réelles :
+      // "Si j'avais investi le même montant le même jour dans IWDA.L"
+      const buyTxs = (S.data.transactions||[]).filter(t => t.type === 'buy');
+      const dcaDeposits = buyTxs.length > 0
+        ? [...new Set(buyTxs.map(t => t.date))].sort().map(date => ({
             date, type: 'deposit',
-            amount: (S.data.transactions||[]).filter(t => t.type==='buy' && t.date===date)
-              .reduce((s, t) => s + t.quantity * t.price + (t.fees||0), 0)
+            amount: buyTxs.filter(t => t.date === date).reduce((s, t) => s + t.quantity * t.price + (t.fees||0), 0)
           }))
-        : deposits;
+        : (S.data.deposits || []);
       bench = simulateDCABenchmark(dcaDeposits, prices);
       if (bench) benchTRI = computeXIRR(bench.cashflows);
     }

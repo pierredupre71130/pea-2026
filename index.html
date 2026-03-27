@@ -338,6 +338,7 @@
       <div class="progress-fill" id="sb-ceiling-bar" style="width:0%;background:var(--success)"></div>
     </div>
     <div class="ceiling-amount" id="sb-ceiling-amt">0 / 150 000 €</div>
+    <div id="sync-indicator" style="font-size:0.68rem;margin-top:8px;min-height:14px"></div>
   </div>
 </nav>
 
@@ -761,6 +762,9 @@
 // CONFIG & CONSTANTS
 // ======================================================
 const STORAGE_KEY = 'pea_2026';
+const GIST_TOKEN_KEY = 'pea_gist_token';
+const GIST_ID_KEY    = 'pea_gist_id';
+const GIST_FILENAME  = 'pea-manager-data.json';
 const PROXY = 'https://api.allorigins.win/get?url=';
 const YF_CHART = 'https://query2.finance.yahoo.com/v8/finance/chart/';
 const YF_RSS   = 'https://feeds.finance.yahoo.com/rss/2.0/headline?s=';
@@ -885,9 +889,119 @@ function loadData() {
   } catch(e) {}
   return defData();
 }
+// ======================================================
+// GIST SYNC
+// ======================================================
+function getGistToken() { return localStorage.getItem(GIST_TOKEN_KEY) || ''; }
+function setGistToken(t) { if (t) localStorage.setItem(GIST_TOKEN_KEY, t); else localStorage.removeItem(GIST_TOKEN_KEY); }
+function getGistId()    { return localStorage.getItem(GIST_ID_KEY) || ''; }
+function setGistId(id)  { if (id) localStorage.setItem(GIST_ID_KEY, id); else localStorage.removeItem(GIST_ID_KEY); }
+
+function setSyncStatus(status, msg) {
+  S.syncStatus = status;
+  const el = document.getElementById('sync-indicator');
+  if (!el) return;
+  const map = { ok: ['☁ Synchronisé', 'var(--success)'], syncing: ['⏳ Sync…', 'var(--muted)'], error: ['⚠ Sync échouée', 'var(--danger)'], off: ['', 'var(--muted)'] };
+  const [label, color] = map[status] || map.off;
+  el.textContent = msg || label;
+  el.style.color = color;
+}
+
+async function gistHeaders(token) {
+  return { 'Authorization': `token ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/vnd.github+json' };
+}
+
+async function findGistId(token) {
+  // Cherche un gist existant avec notre fichier
+  for (let page = 1; page <= 5; page++) {
+    const res = await fetch(`https://api.github.com/gists?per_page=100&page=${page}`, { headers: await gistHeaders(token) });
+    if (!res.ok) return null;
+    const list = await res.json();
+    const found = list.find(g => g.files && g.files[GIST_FILENAME]);
+    if (found) return found.id;
+    if (list.length < 100) break;
+  }
+  return null;
+}
+
+async function pushGist() {
+  const token = getGistToken();
+  if (!token) return;
+  setSyncStatus('syncing');
+  try {
+    const content = JSON.stringify(S.data);
+    let id = getGistId();
+    const body = { description: 'PEA Manager — données privées', public: false, files: { [GIST_FILENAME]: { content } } };
+    const res = await fetch(
+      id ? `https://api.github.com/gists/${id}` : 'https://api.github.com/gists',
+      { method: id ? 'PATCH' : 'POST', headers: await gistHeaders(token), body: JSON.stringify(body) }
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    if (!id) setGistId(json.id);
+    setSyncStatus('ok');
+  } catch(e) { setSyncStatus('error'); }
+}
+
+async function pullGist() {
+  const token = getGistToken();
+  if (!token) return false;
+  setSyncStatus('syncing');
+  try {
+    let id = getGistId();
+    if (!id) { id = await findGistId(token); if (id) setGistId(id); else { setSyncStatus('off'); return false; } }
+    const res = await fetch(`https://api.github.com/gists/${id}`, { headers: await gistHeaders(token) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    const raw = json.files?.[GIST_FILENAME]?.content;
+    if (!raw) throw new Error('Fichier introuvable dans le gist');
+    const p = JSON.parse(raw);
+    S.data = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings }, snapshots: p.snapshots||[], savedPlans: p.savedPlans||[], priceCache: p.priceCache||{}, pruOverrides: p.pruOverrides||{}, terCache: p.terCache||{}, budgetExpenses: p.budgetExpenses||[], budgetSettings: { ...defData().budgetSettings, ...(p.budgetSettings||{}) } };
+    migrateFees(S.data);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(S.data));
+    setSyncStatus('ok');
+    return true;
+  } catch(e) { setSyncStatus('error'); return false; }
+}
+
+let _gistTimer = null;
+function debouncedPush() {
+  if (!getGistToken()) return;
+  setSyncStatus('syncing');
+  clearTimeout(_gistTimer);
+  _gistTimer = setTimeout(pushGist, 3000);
+}
+
+async function testGistToken() {
+  const token = document.getElementById('inp-gist-token')?.value.trim();
+  if (!token) { toast('Saisis un token d\'abord', 'error'); return; }
+  setSyncStatus('syncing');
+  try {
+    const res = await fetch('https://api.github.com/user', { headers: await gistHeaders(token) });
+    if (!res.ok) throw new Error();
+    const u = await res.json();
+    setGistToken(token);
+    setGistId(''); // reset pour forcer la recherche
+    toast(`✓ Connecté en tant que ${u.login}`, 'success');
+    setSyncStatus('syncing');
+    const pulled = await pullGist();
+    if (pulled) { navigate(S.page); toast('Données récupérées depuis le Gist', 'success'); }
+    else { await pushGist(); toast('Nouveau Gist créé', 'success'); }
+    renderSettings();
+  } catch(e) { setSyncStatus('error'); toast('Token invalide ou sans permission "gist"', 'error'); }
+}
+
+function disconnectGist() {
+  setGistToken(''); setGistId('');
+  setSyncStatus('off');
+  toast('Synchronisation désactivée', 'success');
+  renderSettings();
+}
+
 function saveData() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(S.data)); }
   catch(e) { toast('Erreur de sauvegarde locale', 'error'); }
+  debouncedPush();
 }
 
 function takeSnapshot() {
@@ -5003,6 +5117,29 @@ function renderSettings() {
       </div>
       <div style="display:flex;flex-direction:column;gap:14px">
         <div class="card">
+          <div class="section-title mb16">☁ Synchronisation multi-appareils</div>
+          ${getGistToken() ? `
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+            <span style="background:rgba(22,201,93,0.15);color:var(--success);border-radius:6px;padding:3px 10px;font-size:0.75rem;font-weight:700">✓ Activée</span>
+            <span id="sync-indicator-settings" style="font-size:0.75rem;color:var(--muted)"></span>
+          </div>
+          <div style="font-size:0.78rem;color:var(--muted);margin-bottom:12px">Tes données sont synchronisées automatiquement entre tous tes appareils via un Gist GitHub privé.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-secondary btn-sm" onclick="pushGist().then(()=>toast('Synchronisé !','success'))">🔄 Sync maintenant</button>
+            <button class="btn btn-danger btn-sm" onclick="disconnectGist()">Déconnecter</button>
+          </div>
+          ` : `
+          <div style="font-size:0.78rem;color:var(--muted);margin-bottom:12px">Saisis un token GitHub (PAT) pour synchroniser tes données entre iPhone, PC, etc. via un Gist privé.</div>
+          <div class="form-group">
+            <label>Token GitHub <span style="font-weight:400">(Settings → Developer settings → Personal access tokens → <strong>Gist</strong>)</span></label>
+            <input type="password" id="inp-gist-token" placeholder="github_pat_…" autocomplete="off">
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-primary btn-sm" onclick="testGistToken()">Connecter & synchroniser</button>
+            <a href="https://github.com/settings/tokens/new?scopes=gist&description=PEA+Manager+Sync" target="_blank" style="font-size:0.75rem;color:var(--accent)">Créer un token →</a>
+          </div>`}
+        </div>
+        <div class="card">
           <div class="section-title mb16">Import / Export</div>
           <div style="display:flex;flex-direction:column;gap:9px">
             <button class="btn btn-secondary w-full" onclick="exportJSON()">⬇ Exporter toutes les données (JSON)</button>
@@ -8040,7 +8177,7 @@ function renderPage(page) {
 // ======================================================
 // INIT
 // ======================================================
-function init() {
+async function init() {
   S.data = loadData();
   S.txFilter = 'all'; S.txSearch = ''; S.newsCache = {}; S.evolFilter = '1M';
 
@@ -8061,6 +8198,17 @@ function init() {
 
   takeSnapshot();
   navigate('dashboard');
+
+  // Sync Gist au démarrage (en arrière-plan)
+  if (getGistToken()) {
+    const pulled = await pullGist();
+    if (pulled) {
+      document.getElementById('sidebar-broker').textContent = S.data.settings.brokerName || 'Mon PEA';
+      navigate(S.page || 'dashboard');
+    }
+  } else {
+    setSyncStatus('off');
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);

@@ -700,16 +700,16 @@
 <div id="modal-budget-income" class="modal-overlay">
   <div class="modal" style="max-width:360px">
     <div class="modal-header">
-      <span class="modal-title">🏦 Solde du compte actuel</span>
+      <span class="modal-title">🏦 Solde de départ du mois</span>
       <button class="modal-close" onclick="closeModal('modal-budget-income')">×</button>
     </div>
     <form onsubmit="saveBudgetIncome(event)">
       <div class="modal-body">
         <div class="form-group">
-          <label>Solde du compte (€)</label>
+          <label>Solde de départ du mois (€)</label>
           <input type="number" id="budget-income-val" step="0.01" min="0" placeholder="Ex: 2500">
         </div>
-        <div style="font-size:0.74rem;color:var(--muted)">Montant actuel sur votre compte, avant prélèvement des charges et de l'encours carte.</div>
+        <div style="font-size:0.74rem;color:var(--muted)">Montant sur votre compte en début de période, avant tout prélèvement du mois (loyer, charges, encours carte…).</div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" onclick="closeModal('modal-budget-income')">Annuler</button>
@@ -7194,15 +7194,22 @@ function renderBudget() {
   // Totaux charges fixes par catégorie
   const bycat = {};
   let totalFixed = 0;
+  let totalOnce = 0;
   for (const exp of exps) {
-    const m = budgetMonthlyAmount(exp);
-    totalFixed += m;
-    if (!bycat[exp.category]) bycat[exp.category] = 0;
-    bycat[exp.category] += m;
+    if (exp.frequency === 'once') {
+      totalOnce += exp.amount;
+      if (!bycat[exp.category]) bycat[exp.category] = 0;
+      bycat[exp.category] += exp.amount;
+    } else {
+      const m = budgetMonthlyAmount(exp);
+      totalFixed += m;
+      if (!bycat[exp.category]) bycat[exp.category] = 0;
+      bycat[exp.category] += m;
+    }
   }
 
-  const afterFixed   = income > 0 ? income - totalFixed : null;
-  const afterAll     = income > 0 ? income - totalFixed - cardEncours : null;
+  const afterFixed   = income > 0 ? income - totalFixed - totalOnce : null;
+  const afterAll     = income > 0 ? income - totalFixed - totalOnce - cardEncours : null;
   const savingsRate  = income > 0 && afterAll !== null ? (afterAll / income * 100) : null;
 
   // Bloc récapitulatif du mois
@@ -7211,13 +7218,17 @@ function renderBudget() {
       <div class="section-title mb16">Récapitulatif du mois</div>
       <div style="display:flex;flex-direction:column;gap:10px">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <span>🏦 Solde du compte actuel</span>
+          <span>🏦 Solde de départ du mois</span>
           <span class="positive" style="font-weight:700;font-size:1rem">${fc(income)}</span>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <span style="color:var(--muted)">− Charges fixes (${exps.length} postes)</span>
+          <span style="color:var(--muted)">− Charges fixes (${exps.filter(e=>e.frequency!=='once').length} poste${exps.filter(e=>e.frequency!=='once').length!==1?'s':''})</span>
           <span class="negative">−${fc(totalFixed)}</span>
         </div>
+        ${totalOnce > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--muted)">− Ponctuelles (${exps.filter(e=>e.frequency==='once').length} poste${exps.filter(e=>e.frequency==='once').length!==1?'s':''})</span>
+          <span class="negative">−${fc(totalOnce)}</span>
+        </div>` : ''}
         <div style="border-top:1px dashed var(--border);padding-top:10px;display:flex;justify-content:space-between;align-items:center">
           <span>Solde avant encours carte</span>
           <span style="font-weight:600;color:${afterFixed >= 0 ? 'var(--success)' : 'var(--danger)'}">${fc(afterFixed)}</span>
@@ -7234,8 +7245,8 @@ function renderBudget() {
     </div>` : `
     <div class="card mb16" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
       <div style="flex:1;min-width:200px">
-        <div style="font-weight:600;margin-bottom:4px">Pour commencer, saisissez le solde de votre compte</div>
-        <div style="font-size:0.8rem;color:var(--muted)">Il servira à calculer ce qu'il vous restera après charges et encours carte.</div>
+        <div style="font-weight:600;margin-bottom:4px">Pour commencer, saisissez le solde de départ du mois</div>
+        <div style="font-size:0.8rem;color:var(--muted)">Montant disponible en début de période, avant tous les prélèvements du mois.</div>
       </div>
       <button class="btn btn-primary" onclick="openBudgetIncomeModal()">🏦 Saisir le solde</button>
     </div>`;
@@ -7288,33 +7299,33 @@ function renderBudget() {
   if (cardDebitDay && cardEncours > 0) timelineEvents.push({ day: cardDebitDay, label: cardName, amount: cardEncours, icon: '💳', id: null });
   timelineEvents.sort((a, b) => a.day - b.day);
 
-  // Le solde saisi = solde ACTUEL (après tous les prélèvements déjà effectués aujourd'hui et avant)
-  // Seuls les prélèvements futurs (day > today) sont soustraits du solde courant
+  // Le solde saisi = solde de départ du mois (avant tous les prélèvements)
+  // Tous les prélèvements (passés et futurs) sont déduits chronologiquement
   let runningBalance = income;
   const timelineRows = timelineEvents.map(ev => {
-    const isPast = ev.day <= today;
+    const isPast = ev.day < today;
     const isToday = ev.day === today;
-    if (!isPast) runningBalance -= ev.amount;
-    return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);opacity:${isPast ? '0.45' : '1'}">
+    runningBalance -= ev.amount;
+    return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);opacity:${isPast ? '0.55' : '1'}">
       <div style="min-width:36px;text-align:center;background:${isToday ? 'var(--accent)' : 'var(--surface2)'};color:${isToday ? '#fff' : 'var(--muted)'};border-radius:8px;padding:4px 6px;font-size:0.75rem;font-weight:700">J. ${ev.day}</div>
       <div style="flex:1">
         <span style="font-weight:600">${ev.icon} ${esc(ev.label)}</span>
-        ${ev.once && !isPast ? '<span style="font-size:0.7rem;background:rgba(245,166,35,0.15);color:var(--warning);border-radius:4px;padding:1px 5px;margin-left:6px">ponctuel</span>' : ''}
+        ${ev.once ? '<span style="font-size:0.7rem;background:rgba(245,166,35,0.15);color:var(--warning);border-radius:4px;padding:1px 5px;margin-left:6px">ponctuel</span>' : ''}
         ${isPast ? '<span style="font-size:0.7rem;color:var(--muted);margin-left:6px">prélevé</span>' : ''}
       </div>
       <div style="text-align:right">
         <div class="${isPast ? 'neutral' : 'negative'}" style="font-weight:600">−${fc(ev.amount)}</div>
-        ${isPast ? '' : `<div style="font-size:0.72rem;color:${runningBalance >= 0 ? 'var(--muted)' : 'var(--danger)'}">→ ${fc(runningBalance)}</div>`}
+        <div style="font-size:0.72rem;color:${runningBalance >= 0 ? 'var(--muted)' : 'var(--danger)'}">→ ${fc(runningBalance)}</div>
       </div>
     </div>`;
   });
 
-  const futureEvents = timelineEvents.filter(ev => ev.day > today);
+  const futureEvents = timelineEvents.filter(ev => ev.day >= today);
   const timelineHtml = income > 0 && timelineEvents.length > 0 ? `
     <div class="card mb16">
       <div class="section-title mb16">📅 Calendrier des prélèvements</div>
       <div style="display:flex;justify-content:space-between;font-size:0.78rem;color:var(--muted);margin-bottom:10px;padding:6px 10px;background:var(--surface2);border-radius:8px">
-        <span>Solde actuel (après prélèvements du jour)</span><span class="positive" style="font-weight:600">${fc(income)}</span>
+        <span>Solde de départ du mois</span><span class="positive" style="font-weight:600">${fc(income)}</span>
       </div>
       ${timelineRows.join('')}
       ${futureEvents.length > 0 ? `
@@ -7349,7 +7360,7 @@ function renderBudget() {
     <div class="page-header">
       <div><h2>Budget Personnel</h2><div class="page-sub">Suivi de vos charges fixes et encours carte</div></div>
       <div class="page-actions">
-        ${income > 0 ? `<button class="btn btn-secondary" onclick="openBudgetIncomeModal()">🏦 Solde : ${fc(income)}</button>` : ''}
+        ${income > 0 ? `<button class="btn btn-secondary" onclick="openBudgetIncomeModal()">🏦 Départ : ${fc(income)}</button>` : ''}
         <button class="btn btn-primary" onclick="openBudgetExpenseModal()">+ Charge fixe</button>
       </div>
     </div>

@@ -668,6 +668,7 @@
             <select id="budget-expense-freq">
               <option value="monthly">Mensuelle</option>
               <option value="yearly">Annuelle</option>
+              <option value="once">Ponctuelle (unique)</option>
             </select>
           </div>
         </div>
@@ -7033,6 +7034,7 @@ const BUDGET_CATS = {
 };
 
 function budgetMonthlyAmount(exp) {
+  if (exp.frequency === 'once') return 0;       // ponctuelle : hors totaux récurrents
   return exp.frequency === 'yearly' ? exp.amount / 12 : exp.amount;
 }
 
@@ -7134,7 +7136,9 @@ function renderBudget() {
   const today = new Date().getDate();
   const timelineEvents = [];
   for (const exp of exps) {
-    if (exp.debitDay) timelineEvents.push({ day: exp.debitDay, label: exp.name, amount: budgetMonthlyAmount(exp), icon: (BUDGET_CATS[exp.category] || {}).icon || '📦', id: exp.id });
+    // Les ponctuelles utilisent leur montant direct ; les récurrentes leur montant mensuel
+    const amt = exp.frequency === 'once' ? exp.amount : budgetMonthlyAmount(exp);
+    if (exp.debitDay) timelineEvents.push({ day: exp.debitDay, label: exp.name, amount: amt, icon: (BUDGET_CATS[exp.category] || {}).icon || '📦', id: exp.id, once: exp.frequency === 'once' });
   }
   if (cardDebitDay && cardEncours > 0) timelineEvents.push({ day: cardDebitDay, label: cardName, amount: cardEncours, icon: '💳', id: null });
   timelineEvents.sort((a, b) => a.day - b.day);
@@ -7150,6 +7154,7 @@ function renderBudget() {
       <div style="min-width:36px;text-align:center;background:${isToday ? 'var(--accent)' : 'var(--surface2)'};color:${isToday ? '#fff' : 'var(--muted)'};border-radius:8px;padding:4px 6px;font-size:0.75rem;font-weight:700">J. ${ev.day}</div>
       <div style="flex:1">
         <span style="font-weight:600">${ev.icon} ${esc(ev.label)}</span>
+        ${ev.once && !isPast ? '<span style="font-size:0.7rem;background:rgba(245,166,35,0.15);color:var(--warning);border-radius:4px;padding:1px 5px;margin-left:6px">ponctuel</span>' : ''}
         ${isPast ? '<span style="font-size:0.7rem;color:var(--muted);margin-left:6px">prélevé</span>' : ''}
       </div>
       <div style="text-align:right">
@@ -7185,7 +7190,9 @@ function renderBudget() {
         <td><strong>${esc(exp.name)}</strong>${exp.notes ? `<br><span style="font-size:0.72rem;color:var(--muted)">${esc(exp.notes)}</span>` : ''}</td>
         <td><span class="badge" style="background:rgba(59,130,246,0.12);color:var(--accent)">${meta.icon} ${meta.label}</span></td>
         <td style="color:var(--muted);font-size:0.8rem">${exp.debitDay ? `le ${exp.debitDay}` : '—'}</td>
-        <td>${exp.frequency === 'yearly' ? `${fc(exp.amount)}/an` : `${fc(exp.amount)}/mois`}</td>
+        <td>${exp.frequency === 'once'
+          ? `<span style="color:var(--warning);font-weight:600">${fc(exp.amount)}</span> <span style="font-size:0.72rem;color:var(--muted)">ponctuel</span>`
+          : exp.frequency === 'yearly' ? `${fc(exp.amount)}/an` : `${fc(exp.amount)}/mois`}</td>
         <td>
           <button class="btn-icon" onclick="openBudgetExpenseModal('${exp.id}')" title="Modifier" style="color:var(--muted)">✏️</button>
           <button class="btn-icon" onclick="delBudgetExpense('${exp.id}')" title="Supprimer">🗑</button>

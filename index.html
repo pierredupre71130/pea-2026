@@ -677,9 +677,13 @@
             <input type="number" id="budget-expense-amount" step="0.01" min="0" placeholder="0.00" required>
           </div>
           <div class="form-group">
-            <label>Notes (optionnel)</label>
-            <input type="text" id="budget-expense-notes" placeholder="Ex: contrat renouvelable">
+            <label>Prélevé le (jour du mois)</label>
+            <input type="number" id="budget-expense-debit-day" min="1" max="31" placeholder="Ex: 7">
           </div>
+        </div>
+        <div class="form-group">
+          <label>Notes (optionnel)</label>
+          <input type="text" id="budget-expense-notes" placeholder="Ex: contrat renouvelable">
         </div>
       </div>
       <div class="modal-footer">
@@ -7126,17 +7130,52 @@ function renderBudget() {
       </tr>`;
     }).join('');
 
+  // Timeline chronologique des débits du mois
+  const today = new Date().getDate();
+  const timelineEvents = [];
+  for (const exp of exps) {
+    if (exp.debitDay) timelineEvents.push({ day: exp.debitDay, label: exp.name, amount: budgetMonthlyAmount(exp), icon: (BUDGET_CATS[exp.category] || {}).icon || '📦', id: exp.id });
+  }
+  if (cardDebitDay && cardEncours > 0) timelineEvents.push({ day: cardDebitDay, label: cardName, amount: cardEncours, icon: '💳', id: null });
+  timelineEvents.sort((a, b) => a.day - b.day);
+
+  let runningBalance = income;
+  const timelineRows = timelineEvents.map(ev => {
+    runningBalance -= ev.amount;
+    const isPast = ev.day < today;
+    const isToday = ev.day === today;
+    return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);opacity:${isPast ? '0.5' : '1'}">
+      <div style="min-width:36px;text-align:center;background:${isToday ? 'var(--accent)' : 'var(--surface2)'};color:${isToday ? '#fff' : 'var(--muted)'};border-radius:8px;padding:4px 6px;font-size:0.75rem;font-weight:700">J. ${ev.day}</div>
+      <div style="flex:1">
+        <span style="font-weight:600">${ev.icon} ${esc(ev.label)}</span>
+        ${isPast ? '<span style="font-size:0.7rem;color:var(--muted);margin-left:6px">prélevé</span>' : ''}
+      </div>
+      <div style="text-align:right">
+        <div class="negative" style="font-weight:600">−${fc(ev.amount)}</div>
+        <div style="font-size:0.72rem;color:${runningBalance >= 0 ? 'var(--muted)' : 'var(--danger)'}">→ ${fc(runningBalance)}</div>
+      </div>
+    </div>`;
+  });
+  const timelineHtml = income > 0 && timelineEvents.length > 0 ? `
+    <div class="card mb16">
+      <div class="section-title mb16">📅 Calendrier des prélèvements</div>
+      <div style="display:flex;justify-content:space-between;font-size:0.78rem;color:var(--muted);margin-bottom:10px;padding:6px 10px;background:var(--surface2);border-radius:8px">
+        <span>Solde de départ</span><span class="positive" style="font-weight:600">${fc(income)}</span>
+      </div>
+      ${timelineRows.join('')}
+    </div>` : '';
+
   // Liste détaillée des dépenses
   const expRows = [...exps]
-    .sort((a, b) => budgetMonthlyAmount(b) - budgetMonthlyAmount(a))
+    .sort((a, b) => (a.debitDay || 99) - (b.debitDay || 99))
     .map(exp => {
       const meta = BUDGET_CATS[exp.category] || { label: exp.category, icon: '📦' };
       const monthly = budgetMonthlyAmount(exp);
       return `<tr>
         <td><strong>${esc(exp.name)}</strong>${exp.notes ? `<br><span style="font-size:0.72rem;color:var(--muted)">${esc(exp.notes)}</span>` : ''}</td>
         <td><span class="badge" style="background:rgba(59,130,246,0.12);color:var(--accent)">${meta.icon} ${meta.label}</span></td>
+        <td style="color:var(--muted);font-size:0.8rem">${exp.debitDay ? `le ${exp.debitDay}` : '—'}</td>
         <td>${exp.frequency === 'yearly' ? `${fc(exp.amount)}/an` : `${fc(exp.amount)}/mois`}</td>
-        <td class="neutral">${exp.frequency === 'yearly' ? fc(monthly) + '/mois' : fc(exp.amount * 12) + '/an'}</td>
         <td>
           <button class="btn-icon" onclick="openBudgetExpenseModal('${exp.id}')" title="Modifier" style="color:var(--muted)">✏️</button>
           <button class="btn-icon" onclick="delBudgetExpense('${exp.id}')" title="Supprimer">🗑</button>
@@ -7154,6 +7193,7 @@ function renderBudget() {
     </div>
     ${recapHtml}
     ${carteHtml}
+    ${timelineHtml}
     ${Object.keys(bycat).length > 0 ? `
     <div class="card mb16">
       <div class="section-title mb16">Répartition des charges fixes</div>
@@ -7166,7 +7206,7 @@ function renderBudget() {
       <div class="section-title mb16">Détail des charges fixes</div>
       ${exps.length ? `
         <div class="table-wrap"><table>
-          <thead><tr><th>Dépense</th><th>Catégorie</th><th>Montant saisi</th><th>Équivalent</th><th></th></tr></thead>
+          <thead><tr><th>Dépense</th><th>Catégorie</th><th>Prélevé le</th><th>Montant</th><th></th></tr></thead>
           <tbody>${expRows}</tbody>
         </table></div>
       ` : `<div class="empty"><div class="ico">🏠</div><p>Aucune charge fixe enregistrée</p><p style="font-size:0.8rem;color:var(--muted);margin-top:8px">Ajoutez vos frais récurrents (loyer, EDF, abonnements…).</p></div>`}
@@ -7182,6 +7222,7 @@ function openBudgetExpenseModal(id) {
   document.getElementById('budget-expense-cat').value = exp?.category || 'logement';
   document.getElementById('budget-expense-freq').value = exp?.frequency || 'monthly';
   document.getElementById('budget-expense-amount').value = exp?.amount || '';
+  document.getElementById('budget-expense-debit-day').value = exp?.debitDay || '';
   document.getElementById('budget-expense-notes').value = exp?.notes || '';
   openModal('modal-budget-expense');
 }
@@ -7195,6 +7236,7 @@ function saveBudgetExpense(e) {
     category: document.getElementById('budget-expense-cat').value,
     frequency: document.getElementById('budget-expense-freq').value,
     amount: parseFloat(document.getElementById('budget-expense-amount').value),
+    debitDay: parseInt(document.getElementById('budget-expense-debit-day').value) || null,
     notes: document.getElementById('budget-expense-notes').value.trim(),
   };
   if (!S.data.budgetExpenses) S.data.budgetExpenses = [];

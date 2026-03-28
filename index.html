@@ -8418,7 +8418,7 @@ function renderPage(page) {
 async function init() {
   S.data = loadData();
   cleanCorruptedSnapshots();
-  S.txFilter = 'all'; S.txSearch = ''; S.newsCache = {}; S.evolFilter = '1M';
+  S.txFilter = 'all'; S.txSearch = ''; S.newsCache = {}; S.evolFilter = 'MAX';
 
   document.getElementById('sidebar-broker').textContent = S.data.settings.brokerName || 'Mon PEA';
   document.querySelectorAll('.nav-item, .bnav-item').forEach(el => { if (!el.id?.includes('more')) el.addEventListener('click', () => navigate(el.dataset.page)); });

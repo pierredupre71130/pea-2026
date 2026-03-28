@@ -716,8 +716,8 @@
             <input type="number" id="modal-budget-op-amount" step="0.01" min="0" placeholder="0.00" required>
           </div>
           <div class="form-group">
-            <label>Jour du mois</label>
-            <input type="number" id="modal-budget-op-day" min="1" max="31" placeholder="Ex: 27">
+            <label>Date</label>
+            <input type="date" id="modal-budget-op-date">
           </div>
         </div>
         <div class="form-group">
@@ -7404,11 +7404,12 @@ function renderBudget() {
   const periodPos = day => day >= paydayStart ? day - paydayStart : (32 - paydayStart) + day;
   const todayPos  = periodPos(today);
 
+  const todayIso = new Date().toISOString().slice(0, 10);
   const timelineEvents = [];
   for (const exp of exps) {
     // Les ponctuelles utilisent leur montant direct ; les récurrentes leur montant mensuel
     const amt = exp.frequency === 'once' ? exp.amount : budgetMonthlyAmount(exp);
-    if (exp.debitDay) timelineEvents.push({ day: exp.debitDay, label: exp.name, amount: amt, icon: (BUDGET_CATS[exp.category] || {}).icon || '📦', id: exp.id, once: exp.frequency === 'once' });
+    if (exp.debitDay) timelineEvents.push({ day: exp.debitDay, label: exp.name, amount: amt, icon: (BUDGET_CATS[exp.category] || {}).icon || '📦', id: exp.id, once: exp.frequency === 'once', opDate: exp.opDate || null });
   }
   if (cardDebitDay && cardEncours > 0) timelineEvents.push({ day: cardDebitDay, label: cardName, amount: cardEncours, icon: '💳', id: null });
   timelineEvents.sort((a, b) => periodPos(a.day) - periodPos(b.day));
@@ -7431,13 +7432,18 @@ function renderBudget() {
   // Tous les prélèvements (passés et futurs) sont déduits chronologiquement
   let runningBalance = income;
   const timelineRows = timelineEvents.map(ev => {
+    // Pour les opérations avec date complète : isPast basé sur la date réelle
     const evPos   = periodPos(ev.day);
-    const isPast   = evPos < todayPos;
-    const isToday  = ev.day === today;
-    const isFuture = evPos > todayPos;
+    const isPast   = ev.opDate ? ev.opDate < todayIso : evPos < todayPos;
+    const isToday  = ev.opDate ? ev.opDate === todayIso : ev.day === today;
+    const isFuture = ev.opDate ? ev.opDate > todayIso  : evPos > todayPos;
+    // Libellé de la puce de date
+    const dayLabel = ev.opDate
+      ? new Date(ev.opDate + 'T12:00:00').toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })
+      : `J. ${ev.day}`;
     runningBalance -= ev.amount;
     return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);opacity:${isPast ? '0.55' : '1'}">
-      <div style="min-width:36px;text-align:center;background:${isToday ? 'var(--accent)' : 'var(--surface2)'};color:${isToday ? '#fff' : 'var(--muted)'};border-radius:8px;padding:4px 6px;font-size:0.75rem;font-weight:700">J. ${ev.day}</div>
+      <div style="min-width:44px;text-align:center;background:${isToday ? 'var(--accent)' : 'var(--surface2)'};color:${isToday ? '#fff' : 'var(--muted)'};border-radius:8px;padding:4px 6px;font-size:0.72rem;font-weight:700">${dayLabel}</div>
       <div style="flex:1">
         <span style="font-weight:600">${ev.icon} ${esc(ev.label)}</span>
         ${ev.once ? '<span style="font-size:0.7rem;background:rgba(245,166,35,0.15);color:var(--warning);border-radius:4px;padding:1px 5px;margin-left:6px">ponctuel</span>' : ''}
@@ -7550,11 +7556,12 @@ function renderBudget() {
 
 function openBudgetOpModal(id) {
   const exp = id ? (S.data.budgetExpenses || []).find(e => e.id === id) : null;
+  const todayIso = new Date().toISOString().slice(0, 10);
   document.getElementById('modal-budget-op-id').value = id || '';
   document.getElementById('modal-budget-op-name').value = exp?.name || '';
   document.getElementById('modal-budget-op-cat').value = exp?.category || 'autres';
   document.getElementById('modal-budget-op-amount').value = exp?.amount || '';
-  document.getElementById('modal-budget-op-day').value = exp?.debitDay || new Date().getDate();
+  document.getElementById('modal-budget-op-date').value = exp?.opDate || todayIso;
   document.getElementById('modal-budget-op-notes').value = exp?.notes || '';
   openModal('modal-budget-op');
 }
@@ -7562,13 +7569,15 @@ function openBudgetOpModal(id) {
 function saveBudgetOp(e) {
   e.preventDefault();
   const id = document.getElementById('modal-budget-op-id').value;
+  const opDate = document.getElementById('modal-budget-op-date').value || new Date().toISOString().slice(0, 10);
   const entry = {
     id: id || uid(),
     name: document.getElementById('modal-budget-op-name').value.trim(),
     category: document.getElementById('modal-budget-op-cat').value,
     frequency: 'once',
     amount: parseFloat(document.getElementById('modal-budget-op-amount').value),
-    debitDay: parseInt(document.getElementById('modal-budget-op-day').value) || null,
+    opDate,
+    debitDay: parseInt(opDate.slice(8, 10)),  // jour extrait de la date
     notes: document.getElementById('modal-budget-op-notes').value.trim(),
   };
   if (!S.data.budgetExpenses) S.data.budgetExpenses = [];

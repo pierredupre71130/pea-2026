@@ -755,20 +755,37 @@
     </div>
     <form onsubmit="saveBudgetIncome(event)">
       <div class="modal-body">
-        <div class="form-row">
-          <div class="form-group">
-            <label>Solde de départ (€)</label>
-            <input type="number" id="budget-income-val" step="0.01" min="0" placeholder="Ex: 2500">
-          </div>
-          <div class="form-group">
-            <label>Versement le (jour du mois)</label>
-            <input type="number" id="budget-income-payday" min="1" max="31" placeholder="Ex: 25">
-          </div>
+        <div class="form-group">
+          <label>Solde de départ (€)</label>
+          <input type="number" id="budget-income-val" step="0.01" min="0" placeholder="Ex: 2500">
         </div>
-        <div style="font-size:0.74rem;color:var(--muted)">Indiquez le jour où vous percevez votre salaire — la période budgétaire démarrera ce jour-là chaque mois.</div>
+        <div style="font-size:0.74rem;color:var(--muted)">Montant sur votre compte en début de période, avant tout prélèvement du mois (loyer, charges, encours carte…).</div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" onclick="closeModal('modal-budget-income')">Annuler</button>
+        <button type="submit" class="btn btn-primary">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ===== MODAL: BUDGET PAYDAY ===== -->
+<div id="modal-budget-payday" class="modal-overlay">
+  <div class="modal" style="max-width:320px">
+    <div class="modal-header">
+      <span class="modal-title">📅 Jour de versement du salaire</span>
+      <button class="modal-close" onclick="closeModal('modal-budget-payday')">×</button>
+    </div>
+    <form onsubmit="saveBudgetPayday(event)">
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Versement le (jour du mois)</label>
+          <input type="number" id="budget-payday-val" min="1" max="31" placeholder="Ex: 25" required>
+        </div>
+        <div style="font-size:0.74rem;color:var(--muted)">La période budgétaire démarrera ce jour-là chaque mois.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-budget-payday')">Annuler</button>
         <button type="submit" class="btn btn-primary">Enregistrer</button>
       </div>
     </form>
@@ -7502,7 +7519,8 @@ function renderBudget() {
     <div class="page-header">
       <div><h2>Budget Personnel</h2><div class="page-sub">Suivi de vos charges fixes et encours carte</div></div>
       <div class="page-actions">
-        ${income > 0 ? `<button class="btn btn-secondary" onclick="openBudgetIncomeModal()">🏦 Départ : ${fc(income)}${paydayStart > 1 ? ` · J.${paydayStart}` : ''}</button>` : ''}
+        ${income > 0 ? `<button class="btn btn-secondary" onclick="openBudgetIncomeModal()">🏦 Départ : ${fc(income)}</button>` : ''}
+        <button class="btn btn-secondary" onclick="openBudgetPaydayModal()" title="Définir le jour de versement du salaire">📅 J.${paydayStart}</button>
         <button class="btn btn-secondary" onclick="openBudgetOpModal()">+ Opération</button>
         <button class="btn btn-primary" onclick="openBudgetExpenseModal()">+ Charge fixe</button>
       </div>
@@ -7612,9 +7630,7 @@ function delBudgetExpense(id) {
 }
 
 function openBudgetIncomeModal() {
-  const bs = S.data.budgetSettings || {};
-  document.getElementById('budget-income-val').value = bs.monthlyIncome || '';
-  document.getElementById('budget-income-payday').value = bs.paydayStart || '';
+  document.getElementById('budget-income-val').value = (S.data.budgetSettings || {}).monthlyIncome || '';
   openModal('modal-budget-income');
 }
 
@@ -7622,10 +7638,24 @@ function saveBudgetIncome(e) {
   e.preventDefault();
   if (!S.data.budgetSettings) S.data.budgetSettings = {};
   S.data.budgetSettings.monthlyIncome = parseFloat(document.getElementById('budget-income-val').value) || 0;
-  S.data.budgetSettings.paydayStart   = parseInt(document.getElementById('budget-income-payday').value) || 1;
   saveData();
   closeModal('modal-budget-income');
   toast('Solde enregistré', 'success');
+  renderBudget();
+}
+
+function openBudgetPaydayModal() {
+  document.getElementById('budget-payday-val').value = (S.data.budgetSettings || {}).paydayStart || '';
+  openModal('modal-budget-payday');
+}
+
+function saveBudgetPayday(e) {
+  e.preventDefault();
+  if (!S.data.budgetSettings) S.data.budgetSettings = {};
+  S.data.budgetSettings.paydayStart = parseInt(document.getElementById('budget-payday-val').value) || 1;
+  saveData();
+  closeModal('modal-budget-payday');
+  toast('Jour de versement enregistré', 'success');
   renderBudget();
 }
 

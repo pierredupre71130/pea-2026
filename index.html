@@ -1013,10 +1013,21 @@ function saveData() {
 }
 
 function takeSnapshot() {
+  const positions = computePositions();
+  // Ne pas enregistrer si une position n'a pas de prix courant (évite de stocker costBasis comme valeur marché)
+  if (positions.length > 0 && positions.some(p => p.currentPrice === null)) {
+    console.warn('takeSnapshot: ignoré – prix manquants pour certaines positions');
+    return;
+  }
   const { portValue, cash, deposited } = computeSummary();
   // Fallback si deposited=0 (aucun dépôt enregistré) : utiliser le coût total des achats
   const effectiveDeposited = deposited > 0 ? deposited
     : (S.data.transactions||[]).filter(t=>t.type==='buy').reduce((s,t) => s + t.quantity*t.price + (t.fees||0), 0);
+  // Sanity check : portValue ne doit pas dépasser 5× le capital investi (prix aberrant détecté)
+  if (effectiveDeposited > 0 && portValue > effectiveDeposited * 5) {
+    console.warn(`takeSnapshot: ignoré – portValue ${portValue.toFixed(2)}€ suspect vs deposited ${effectiveDeposited.toFixed(2)}€`);
+    return;
+  }
   const date = today();
   const snaps = S.data.snapshots || [];
   const idx = snaps.findIndex(s => s.date === date);
@@ -1025,6 +1036,20 @@ function takeSnapshot() {
   snaps.sort((a,b) => a.date.localeCompare(b.date));
   S.data.snapshots = snaps.slice(-730);
   saveData();
+}
+
+function cleanCorruptedSnapshots() {
+  const snaps = S.data.snapshots || [];
+  const before = snaps.length;
+  S.data.snapshots = snaps.filter(s => {
+    if (!s.deposited || s.deposited <= 0) return true;
+    return (s.portValue + (s.cash || 0)) <= s.deposited * 5;
+  });
+  const removed = before - S.data.snapshots.length;
+  if (removed > 0) {
+    console.warn(`cleanCorruptedSnapshots: ${removed} snapshot(s) aberrant(s) supprimé(s)`);
+    saveData();
+  }
 }
 
 // ======================================================
@@ -1662,6 +1687,15 @@ async function fetchPrice(ticker) {
     try {
       const r = await src.fn();
       if (r) {
+        // Sanity check : prix aberrant par rapport au PRU moyen connu (facteur 20×)
+        const pos = computePositions().find(p => p.ticker === ticker);
+        if (pos && pos.computedAvgPrice > 0) {
+          const ratio = r.price / pos.computedAvgPrice;
+          if (ratio > 20 || ratio < 0.05) {
+            console.warn(`fetchPrice: prix ${r.price}€ pour ${ticker} suspect vs PRU ${pos.computedAvgPrice.toFixed(2)}€ (ratio ${ratio.toFixed(1)}×), ignoré`);
+            continue;
+          }
+        }
         S.data.priceCache[ticker] = r;
         checkPriceAlerts(ticker, r.price);
         saveData();
@@ -2234,6 +2268,7 @@ async function doRefreshAll() {
   const { ok, fail, manual } = await refreshPrices(positions.map(p=>p.ticker));
   if (btn) { btn.disabled = false; btn.innerHTML = '⟳ Actualiser les cours'; }
   toast(`${ok} cours mis à jour${fail?`, ${fail} échec(s)`:''}${manual?`, ${manual} manuel(s) ignoré(s)`:''}`, fail ? 'error' : 'success');
+  cleanCorruptedSnapshots();
   takeSnapshot();
   renderPage(S.page);
 }
@@ -8198,6 +8233,7 @@ function renderPage(page) {
 // ======================================================
 async function init() {
   S.data = loadData();
+  cleanCorruptedSnapshots();
   S.txFilter = 'all'; S.txSearch = ''; S.newsCache = {}; S.evolFilter = '1M';
 
   document.getElementById('sidebar-broker').textContent = S.data.settings.brokerName || 'Mon PEA';

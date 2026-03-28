@@ -7341,6 +7341,7 @@ function renderBudget() {
   const timelineRows = timelineEvents.map(ev => {
     const isPast = ev.day < today;
     const isToday = ev.day === today;
+    const isFuture = ev.day > today;
     runningBalance -= ev.amount;
     return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);opacity:${isPast ? '0.55' : '1'}">
       <div style="min-width:36px;text-align:center;background:${isToday ? 'var(--accent)' : 'var(--surface2)'};color:${isToday ? '#fff' : 'var(--muted)'};border-radius:8px;padding:4px 6px;font-size:0.75rem;font-weight:700">J. ${ev.day}</div>
@@ -7348,6 +7349,7 @@ function renderBudget() {
         <span style="font-weight:600">${ev.icon} ${esc(ev.label)}</span>
         ${ev.once ? '<span style="font-size:0.7rem;background:rgba(245,166,35,0.15);color:var(--warning);border-radius:4px;padding:1px 5px;margin-left:6px">ponctuel</span>' : ''}
         ${isPast ? '<span style="font-size:0.7rem;color:var(--muted);margin-left:6px">prélevé</span>' : ''}
+        ${isFuture ? '<span style="font-size:0.7rem;color:var(--accent);margin-left:6px">va être prélevé</span>' : ''}
       </div>
       <div style="text-align:right">
         <div class="${isPast ? 'neutral' : 'negative'}" style="font-weight:600">−${fc(ev.amount)}</div>
@@ -7357,6 +7359,32 @@ function renderBudget() {
   });
 
   const futureEvents = timelineEvents.filter(ev => ev.day >= today);
+
+  // Prochains prélèvements (mois suivant) quand tout le mois courant est effectué
+  const nextMonthPreviewHtml = (() => {
+    if (futureEvents.length > 0) return '';
+    const recurringEvents = timelineEvents.filter(ev => !ev.once);
+    if (!recurringEvents.length) return '';
+    const nextMonthDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
+    const nextMonthName = nextMonthDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+    const rows = recurringEvents.map(ev => `
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div style="min-width:36px;text-align:center;background:var(--surface2);color:var(--muted);border-radius:8px;padding:4px 6px;font-size:0.75rem;font-weight:700">J. ${ev.day}</div>
+        <div style="flex:1">
+          <span style="font-weight:600">${ev.icon} ${esc(ev.label)}</span>
+          <span style="font-size:0.7rem;color:var(--accent);margin-left:6px">va être prélevé</span>
+        </div>
+        <div style="text-align:right">
+          <div class="negative" style="font-weight:600">−${fc(ev.amount)}</div>
+        </div>
+      </div>`).join('');
+    return `
+    <div class="card mb16">
+      <div class="section-title mb16">📅 Prochains prélèvements — ${nextMonthName.charAt(0).toUpperCase() + nextMonthName.slice(1)}</div>
+      ${rows}
+    </div>`;
+  })();
+
   const timelineHtml = income > 0 && timelineEvents.length > 0 ? `
     <div class="card mb16">
       <div class="section-title mb16">📅 Calendrier des prélèvements</div>
@@ -7370,7 +7398,8 @@ function renderBudget() {
         <span style="color:${runningBalance >= 0 ? 'var(--success)' : 'var(--danger)'}">${fc(runningBalance)}</span>
       </div>` : `
       <div style="font-size:0.78rem;color:var(--success);margin-top:10px;text-align:center">✓ Tous les prélèvements du mois sont effectués</div>`}
-    </div>` : '';
+    </div>
+    ${nextMonthPreviewHtml}` : '';
 
   // Liste détaillée des dépenses
   const expRows = [...exps]

@@ -7307,8 +7307,7 @@ function renderBudget() {
   for (const exp of exps) {
     if (exp.frequency === 'once') {
       totalOnce += exp.amount;
-      if (!bycat[exp.category]) bycat[exp.category] = 0;
-      bycat[exp.category] += exp.amount;
+      // Les ponctuelles sont hors répartition des charges fixes
     } else {
       const m = budgetMonthlyAmount(exp);
       totalFixed += m;

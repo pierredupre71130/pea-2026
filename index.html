@@ -696,6 +696,56 @@
   </div>
 </div>
 
+<!-- ===== MODAL: BUDGET OPÉRATION PONCTUELLE ===== -->
+<div id="modal-budget-op" class="modal-overlay">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <span class="modal-title">💸 Opération ponctuelle</span>
+      <button class="modal-close" onclick="closeModal('modal-budget-op')">×</button>
+    </div>
+    <form onsubmit="saveBudgetOp(event)">
+      <div class="modal-body">
+        <input type="hidden" id="modal-budget-op-id">
+        <div class="form-group">
+          <label>Libellé</label>
+          <input type="text" id="modal-budget-op-name" placeholder="Ex: Virement, remboursement, achat…" required>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Montant (€)</label>
+            <input type="number" id="modal-budget-op-amount" step="0.01" min="0" placeholder="0.00" required>
+          </div>
+          <div class="form-group">
+            <label>Jour du mois</label>
+            <input type="number" id="modal-budget-op-day" min="1" max="31" placeholder="Ex: 27">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Catégorie</label>
+          <select id="modal-budget-op-cat">
+            <option value="autres">📦 Autres</option>
+            <option value="logement">🏠 Logement</option>
+            <option value="alimentation">🛒 Alimentation</option>
+            <option value="transport">🚗 Transport</option>
+            <option value="sante">💊 Santé</option>
+            <option value="loisirs">🎮 Loisirs</option>
+            <option value="abonnements">📱 Abonnements</option>
+            <option value="epargne">💎 Épargne / Investissement</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Notes (optionnel)</label>
+          <input type="text" id="modal-budget-op-notes" placeholder="Ex: remboursement médecin, virement épargne…">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-budget-op')">Annuler</button>
+        <button type="submit" class="btn btn-primary">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- ===== MODAL: BUDGET INCOME ===== -->
 <div id="modal-budget-income" class="modal-overlay">
   <div class="modal" style="max-width:360px">
@@ -7415,7 +7465,7 @@ function renderBudget() {
           ? `<span style="color:var(--warning);font-weight:600">${fc(exp.amount)}</span> <span style="font-size:0.72rem;color:var(--muted)">ponctuel</span>`
           : exp.frequency === 'yearly' ? `${fc(exp.amount)}/an` : `${fc(exp.amount)}/mois`}</td>
         <td>
-          <button class="btn-icon" onclick="openBudgetExpenseModal('${exp.id}')" title="Modifier" style="color:var(--muted)">✏️</button>
+          <button class="btn-icon" onclick="${exp.frequency === 'once' ? `openBudgetOpModal('${exp.id}')` : `openBudgetExpenseModal('${exp.id}')`}" title="Modifier" style="color:var(--muted)">✏️</button>
           <button class="btn-icon" onclick="delBudgetExpense('${exp.id}')" title="Supprimer">🗑</button>
         </td>
       </tr>`;
@@ -7426,6 +7476,7 @@ function renderBudget() {
       <div><h2>Budget Personnel</h2><div class="page-sub">Suivi de vos charges fixes et encours carte</div></div>
       <div class="page-actions">
         ${income > 0 ? `<button class="btn btn-secondary" onclick="openBudgetIncomeModal()">🏦 Départ : ${fc(income)}</button>` : ''}
+        <button class="btn btn-secondary" onclick="openBudgetOpModal()">+ Opération</button>
         <button class="btn btn-primary" onclick="openBudgetExpenseModal()">+ Charge fixe</button>
       </div>
     </div>
@@ -7450,6 +7501,42 @@ function renderBudget() {
       ` : `<div class="empty"><div class="ico">🏠</div><p>Aucune charge fixe enregistrée</p><p style="font-size:0.8rem;color:var(--muted);margin-top:8px">Ajoutez vos frais récurrents (loyer, EDF, abonnements…).</p></div>`}
     </div>
   `;
+}
+
+function openBudgetOpModal(id) {
+  const exp = id ? (S.data.budgetExpenses || []).find(e => e.id === id) : null;
+  document.getElementById('modal-budget-op-id').value = id || '';
+  document.getElementById('modal-budget-op-name').value = exp?.name || '';
+  document.getElementById('modal-budget-op-cat').value = exp?.category || 'autres';
+  document.getElementById('modal-budget-op-amount').value = exp?.amount || '';
+  document.getElementById('modal-budget-op-day').value = exp?.debitDay || new Date().getDate();
+  document.getElementById('modal-budget-op-notes').value = exp?.notes || '';
+  openModal('modal-budget-op');
+}
+
+function saveBudgetOp(e) {
+  e.preventDefault();
+  const id = document.getElementById('modal-budget-op-id').value;
+  const entry = {
+    id: id || uid(),
+    name: document.getElementById('modal-budget-op-name').value.trim(),
+    category: document.getElementById('modal-budget-op-cat').value,
+    frequency: 'once',
+    amount: parseFloat(document.getElementById('modal-budget-op-amount').value),
+    debitDay: parseInt(document.getElementById('modal-budget-op-day').value) || null,
+    notes: document.getElementById('modal-budget-op-notes').value.trim(),
+  };
+  if (!S.data.budgetExpenses) S.data.budgetExpenses = [];
+  if (id) {
+    const idx = S.data.budgetExpenses.findIndex(e => e.id === id);
+    if (idx !== -1) S.data.budgetExpenses[idx] = entry;
+  } else {
+    S.data.budgetExpenses.push(entry);
+  }
+  saveData();
+  closeModal('modal-budget-op');
+  toast(id ? 'Opération modifiée' : 'Opération ajoutée', 'success');
+  renderBudget();
 }
 
 function openBudgetExpenseModal(id) {

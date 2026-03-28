@@ -2103,11 +2103,12 @@ function renderDashboard() {
     <div class="card mb16">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <div class="section-title" style="margin:0">Évolution du PEA</div>
-        <div style="display:flex;gap:4px">
+        <div style="display:flex;gap:4px;align-items:center">
           ${['1S','1M','3M','1A','MAX'].map(f => `
             <button class="btn btn-sm evol-filter-btn ${S.evolFilter===f?'btn-primary':'btn-secondary'}"
               data-filter="${f}" onclick="setEvolFilter('${f}')">${f}</button>
           `).join('')}
+          <button class="btn btn-sm btn-secondary" onclick="makeEvolutionChart(S.evolFilter)" title="Rafraîchir le graphique" style="padding:4px 8px;font-size:1rem;line-height:1">🔄</button>
         </div>
       </div>
       ${(S.data.snapshots||[]).length >= 2

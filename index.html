@@ -755,11 +755,17 @@
     </div>
     <form onsubmit="saveBudgetIncome(event)">
       <div class="modal-body">
-        <div class="form-group">
-          <label>Solde de départ du mois (€)</label>
-          <input type="number" id="budget-income-val" step="0.01" min="0" placeholder="Ex: 2500">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Solde de départ (€)</label>
+            <input type="number" id="budget-income-val" step="0.01" min="0" placeholder="Ex: 2500">
+          </div>
+          <div class="form-group">
+            <label>Versement le (jour du mois)</label>
+            <input type="number" id="budget-income-payday" min="1" max="31" placeholder="Ex: 25">
+          </div>
         </div>
-        <div style="font-size:0.74rem;color:var(--muted)">Montant sur votre compte en début de période, avant tout prélèvement du mois (loyer, charges, encours carte…).</div>
+        <div style="font-size:0.74rem;color:var(--muted)">Indiquez le jour où vous percevez votre salaire — la période budgétaire démarrera ce jour-là chaque mois.</div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" onclick="closeModal('modal-budget-income')">Annuler</button>
@@ -899,7 +905,7 @@ function defData() {
     userDecisions: [],
     terCache: {},
     budgetExpenses: [],
-    budgetSettings: { monthlyIncome: 0, cardName: '', cardDebitDay: null, cardEncours: 0 }
+    budgetSettings: { monthlyIncome: 0, paydayStart: 1, cardName: '', cardDebitDay: null, cardEncours: 0 }
   };
 }
 
@@ -7374,8 +7380,13 @@ function renderBudget() {
       </tr>`;
     }).join('');
 
-  // Timeline chronologique des débits du mois
+  // Timeline chronologique des débits de la période (respecte le jour de versement du salaire)
   const today = new Date().getDate();
+  const paydayStart = bs.paydayStart || 1;
+  // Position d'un jour dans la période (ex: paydayStart=25 → j.25=0, j.26=1, j.1=7, j.24=30)
+  const periodPos = day => day >= paydayStart ? day - paydayStart : (32 - paydayStart) + day;
+  const todayPos  = periodPos(today);
+
   const timelineEvents = [];
   for (const exp of exps) {
     // Les ponctuelles utilisent leur montant direct ; les récurrentes leur montant mensuel
@@ -7383,15 +7394,30 @@ function renderBudget() {
     if (exp.debitDay) timelineEvents.push({ day: exp.debitDay, label: exp.name, amount: amt, icon: (BUDGET_CATS[exp.category] || {}).icon || '📦', id: exp.id, once: exp.frequency === 'once' });
   }
   if (cardDebitDay && cardEncours > 0) timelineEvents.push({ day: cardDebitDay, label: cardName, amount: cardEncours, icon: '💳', id: null });
-  timelineEvents.sort((a, b) => a.day - b.day);
+  timelineEvents.sort((a, b) => periodPos(a.day) - periodPos(b.day));
+
+  // Libellé de la période courante (ex: "25 mars → 24 avril")
+  const now = new Date();
+  const periodLabelHtml = (() => {
+    if (paydayStart === 1) return '';
+    const startDay = paydayStart;
+    const endDay   = paydayStart - 1 || 31;
+    const startMonth = today >= paydayStart ? now : new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const endMonth   = today >= paydayStart ? new Date(now.getFullYear(), now.getMonth() + 1, 1) : now;
+    const fmt = d => d.toLocaleDateString('fr-FR', { month: 'short' });
+    return `<div style="font-size:0.75rem;color:var(--muted);margin-bottom:10px;text-align:center">
+      Période : ${startDay} ${fmt(startMonth)} → ${endDay} ${fmt(endMonth)}
+    </div>`;
+  })();
 
   // Le solde saisi = solde de départ du mois (avant tous les prélèvements)
   // Tous les prélèvements (passés et futurs) sont déduits chronologiquement
   let runningBalance = income;
   const timelineRows = timelineEvents.map(ev => {
-    const isPast = ev.day < today;
-    const isToday = ev.day === today;
-    const isFuture = ev.day > today;
+    const evPos   = periodPos(ev.day);
+    const isPast   = evPos < todayPos;
+    const isToday  = ev.day === today;
+    const isFuture = evPos > todayPos;
     runningBalance -= ev.amount;
     return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);opacity:${isPast ? '0.55' : '1'}">
       <div style="min-width:36px;text-align:center;background:${isToday ? 'var(--accent)' : 'var(--surface2)'};color:${isToday ? '#fff' : 'var(--muted)'};border-radius:8px;padding:4px 6px;font-size:0.75rem;font-weight:700">J. ${ev.day}</div>
@@ -7408,7 +7434,7 @@ function renderBudget() {
     </div>`;
   });
 
-  const futureEvents = timelineEvents.filter(ev => ev.day >= today);
+  const futureEvents = timelineEvents.filter(ev => periodPos(ev.day) >= todayPos);
 
   // Prochains prélèvements (mois suivant) quand tout le mois courant est effectué
   const nextMonthPreviewHtml = (() => {
@@ -7438,8 +7464,9 @@ function renderBudget() {
   const timelineHtml = income > 0 && timelineEvents.length > 0 ? `
     <div class="card mb16">
       <div class="section-title mb16">📅 Calendrier des prélèvements</div>
+      ${periodLabelHtml}
       <div style="display:flex;justify-content:space-between;font-size:0.78rem;color:var(--muted);margin-bottom:10px;padding:6px 10px;background:var(--surface2);border-radius:8px">
-        <span>Solde de départ du mois</span><span class="positive" style="font-weight:600">${fc(income)}</span>
+        <span>Solde de départ de période</span><span class="positive" style="font-weight:600">${fc(income)}</span>
       </div>
       ${timelineRows.join('')}
       ${futureEvents.length > 0 ? `
@@ -7475,7 +7502,7 @@ function renderBudget() {
     <div class="page-header">
       <div><h2>Budget Personnel</h2><div class="page-sub">Suivi de vos charges fixes et encours carte</div></div>
       <div class="page-actions">
-        ${income > 0 ? `<button class="btn btn-secondary" onclick="openBudgetIncomeModal()">🏦 Départ : ${fc(income)}</button>` : ''}
+        ${income > 0 ? `<button class="btn btn-secondary" onclick="openBudgetIncomeModal()">🏦 Départ : ${fc(income)}${paydayStart > 1 ? ` · J.${paydayStart}` : ''}</button>` : ''}
         <button class="btn btn-secondary" onclick="openBudgetOpModal()">+ Opération</button>
         <button class="btn btn-primary" onclick="openBudgetExpenseModal()">+ Charge fixe</button>
       </div>
@@ -7585,7 +7612,9 @@ function delBudgetExpense(id) {
 }
 
 function openBudgetIncomeModal() {
-  document.getElementById('budget-income-val').value = (S.data.budgetSettings || {}).monthlyIncome || '';
+  const bs = S.data.budgetSettings || {};
+  document.getElementById('budget-income-val').value = bs.monthlyIncome || '';
+  document.getElementById('budget-income-payday').value = bs.paydayStart || '';
   openModal('modal-budget-income');
 }
 
@@ -7593,6 +7622,7 @@ function saveBudgetIncome(e) {
   e.preventDefault();
   if (!S.data.budgetSettings) S.data.budgetSettings = {};
   S.data.budgetSettings.monthlyIncome = parseFloat(document.getElementById('budget-income-val').value) || 0;
+  S.data.budgetSettings.paydayStart   = parseInt(document.getElementById('budget-income-payday').value) || 1;
   saveData();
   closeModal('modal-budget-income');
   toast('Solde enregistré', 'success');

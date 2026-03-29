@@ -1968,6 +1968,26 @@ PLAN EXTRACTABLE : Si tu proposes ou modifies un plan d'allocation COMPLET (plus
 Règles : isEtf=true → utilise allocationPct (0-100, somme libre) ; isEtf=false → utilise monthlyShares (entier ≥1). N'inclus ce bloc QUE pour un plan complet actionnable, jamais pour une analyse ou un commentaire partiel.`;
 }
 
+// Supprime les surrogates Unicode isolés qui rendent le JSON invalide
+// (peut apparaître dans des noms d'ETF ou des titres d'actualités)
+function stripLoneSurrogates(str) {
+  let out = '';
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    if (c >= 0xD800 && c <= 0xDBFF) {
+      // Surrogate haut : valide seulement s'il est suivi d'un surrogate bas
+      const n = i + 1 < str.length ? str.charCodeAt(i + 1) : 0;
+      if (n >= 0xDC00 && n <= 0xDFFF) { out += str[i] + str[i + 1]; i++; }
+      // sinon surrogate isolé → ignoré
+    } else if (c >= 0xDC00 && c <= 0xDFFF) {
+      // Surrogate bas isolé → ignoré
+    } else {
+      out += str[i];
+    }
+  }
+  return out;
+}
+
 async function callClaude(messages, opts = {}) {
   const key = S.data.settings.claudeApiKey;
   if (!key) throw new Error('Clé API Anthropic non configurée. Allez dans ⚙️ Paramètres.');
@@ -1975,12 +1995,12 @@ async function callClaude(messages, opts = {}) {
   const resp = await fetch(CLAUDE_URL, {
     method: 'POST',
     headers: { 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
-    body: JSON.stringify({
+    body: stripLoneSurrogates(JSON.stringify({
       model: getClaudeModel(),
       max_tokens: opts.maxTokens ?? 1500,
       system: opts.system ?? (opts.portContext ? defaultSystem + '\n\n' + opts.portContext : defaultSystem),
       messages: Array.isArray(messages) ? messages : [{ role: 'user', content: messages }]
-    })
+    }))
   });
   if (resp.status === 529 || resp.status === 503) {
     // Overloaded — retry once after 5 seconds
@@ -1988,7 +2008,7 @@ async function callClaude(messages, opts = {}) {
     const resp2 = await fetch(CLAUDE_URL, {
       method: 'POST',
       headers: { 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
-      body: JSON.stringify({ model:getClaudeModel(), max_tokens:opts.maxTokens??1500, system:opts.system??(opts.portContext?defaultSystem+'\n\n'+opts.portContext:defaultSystem), messages:Array.isArray(messages)?messages:[{role:'user',content:messages}] })
+      body: stripLoneSurrogates(JSON.stringify({ model:getClaudeModel(), max_tokens:opts.maxTokens??1500, system:opts.system??(opts.portContext?defaultSystem+'\n\n'+opts.portContext:defaultSystem), messages:Array.isArray(messages)?messages:[{role:'user',content:messages}] }))
     });
     if (!resp2.ok) {
       const e = await resp2.json().catch(()=>({}));

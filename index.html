@@ -3293,11 +3293,34 @@ function renderAI() {
         <button class="btn btn-secondary" onclick="aiMonthly()" ${!hasKey?'disabled':''}>📅 Conseil achat mensuel</button>
         <button class="btn btn-secondary" onclick="aiRisk()" ${!hasKey?'disabled':''}>⚡ Analyse des risques</button>
         <button class="btn btn-secondary" onclick="aiPlanAnalysis()" ${!hasKey?'disabled':''}>📋 Analyser le plan mensuel</button>
+        <button class="btn btn-secondary" onclick="aiQuarterlyReport()" ${!hasKey?'disabled':''}>📈 Rapport trimestriel</button>
+        <button class="btn btn-secondary" onclick="aiSectorialAnalysis()" ${!hasKey?'disabled':''}>🏭 Analyse sectorielle</button>
+        <button class="btn btn-secondary" onclick="toggleThesisForm()" style="${S._thesisOpen?'background:var(--accent);color:#fff;border-color:var(--accent)':''}">📝 Thèse</button>
         <button class="btn btn-secondary" onclick="toggleValForm()" style="${S._valOpen?'background:var(--accent);color:#fff;border-color:var(--accent)':''}">💰 Valoriser</button>
         <button class="btn btn-secondary" onclick="toggleCompareForm()" style="${S._compareOpen?'background:var(--accent);color:#fff;border-color:var(--accent)':''}">🔄 Comparer plans</button>
         <button class="btn btn-secondary btn-sm" onclick="clearAI()" style="margin-left:auto">🗑 Effacer</button>
       </div>
     </div>
+    ${S._thesisOpen ? (() => {
+      const { positions } = computeSummary();
+      const opts = positions.map(p => {
+        const cache = S.data.priceCache[p.ticker];
+        const prix = cache?.price ? ` — ${fc(cache.price)}` : '';
+        const pru  = p.avgPrice ?? '';
+        const qty  = p.totalQty ?? '';
+        return `<option value="${esc(p.ticker)}|${esc(p.name||p.ticker)}|${pru}|${qty}">${esc(p.ticker)} · ${esc(p.name||p.ticker)}${prix}</option>`;
+      }).join('');
+      return `<div class="card mb16" style="padding:14px 16px;border:1px solid var(--accent)44">
+        <div class="section-title" style="margin-bottom:10px">📝 Thèse d'investissement — Analyse bull/bear</div>
+        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+          <div style="flex:1;min-width:200px">
+            <label style="font-size:0.75rem;color:var(--muted);display:block;margin-bottom:4px">Position à analyser</label>
+            <select id="thesis-ticker-select" style="width:100%">${opts}</select>
+          </div>
+          <button class="btn btn-primary" onclick="aiThesis()">Générer la thèse</button>
+        </div>
+      </div>`;
+    })() : ''}
     ${S._valOpen ? (() => {
       const { positions } = computeSummary();
       const opts = positions.map(p => {
@@ -3660,6 +3683,9 @@ function renderAnalysisCard(data, type) {
     else if (type==='valuation') html = renderValuationCard(data);
     else if (type==='plan')      html = renderPlanAnalysisCard(data);
     else if (type==='compare')   html = renderCompareCard(data);
+    else if (type==='quarterly') html = renderQuarterlyCard(data);
+    else if (type==='sectorial') html = renderSectorialCard(data);
+    else if (type==='thesis')    html = renderThesisCard(data);
     // === PLAN ASSEMBLÉ (affiché après que tous les choix inline sont répondus) ===
     if (type === 'plan' && data.etfs_base?.length) {
       const optionsChoix = (data.optimisations||[]).filter(o => o.choix_id && o.options?.length);
@@ -3770,6 +3796,66 @@ function renderRiskCard(d) {
     ${d.stress?.length?`<div><div class="section-title" style="margin-bottom:6px">💥 Stress tests</div><div style="overflow-x:auto"><table style="width:100%;font-size:0.78rem;border-collapse:collapse"><thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px 8px">Scénario</th><th style="text-align:right;padding:4px 8px">Perte €</th><th style="text-align:right;padding:4px 8px">%</th></tr></thead><tbody>${d.stress.map(s=>`<tr style="border-bottom:1px solid rgba(255,255,255,0.04)"><td style="padding:6px 8px">${esc(s.scenario)}</td><td style="padding:6px 8px;text-align:right;color:#ef4444;font-weight:600">${s.perte_eur!==undefined?fc(s.perte_eur):'—'}</td><td style="padding:6px 8px;text-align:right;color:#ef4444">${s.perte_pct!==undefined?s.perte_pct+'%':'—'}</td></tr>${s.detail?`<tr><td colspan="3" style="padding:2px 8px 6px;font-size:0.72rem;color:var(--muted)">${esc(s.detail)}</td></tr>`:''}`).join('')}</tbody></table></div></div>`:''}
     ${d.recommandations_etf?.length||d.recommandations_titres?.length?`<div><div class="section-title" style="margin-bottom:6px">🛡 Recommandations</div>${d.recommandations_etf?.length?`<div style="margin-bottom:6px"><div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;margin-bottom:4px">ETFs</div>${d.recommandations_etf.map(r=>`<div style="background:var(--surface2);border-radius:6px;padding:6px 11px;font-size:0.8rem;margin-bottom:3px">→ ${esc(r)}</div>`).join('')}</div>`:''}${d.recommandations_titres?.length?`<div><div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Titres directs</div>${d.recommandations_titres.map(r=>`<div style="background:var(--surface2);border-radius:6px;padding:6px 11px;font-size:0.8rem;margin-bottom:3px">→ ${esc(r)}</div>`).join('')}</div>`:''}</div>`:''}
     ${d.alertes?.length?`<div><div class="section-title" style="margin-bottom:6px">🔔 Déclencheurs</div>${d.alertes.map(a=>`<div style="background:var(--surface2);border-radius:7px;padding:8px 12px;margin-bottom:4px;display:flex;gap:10px;align-items:flex-start"><span style="font-weight:700;color:var(--accent);font-size:0.83rem;flex-shrink:0">${esc(a.ticker)}</span><span style="font-size:0.8rem;color:var(--muted)">${esc(a.declencheur)}</span></div>`).join('')}</div>`:''}
+  </div>`;
+}
+
+function renderQuarterlyCard(d) {
+  const perfPos = (d.perf_trimestre_pct||0) >= 0;
+  const perfColor = perfPos ? '#22c55e' : '#ef4444';
+  const perfSign  = perfPos ? '+' : '';
+  return `<div style="display:flex;flex-direction:column;gap:10px">
+    <div style="background:var(--surface2);border-radius:10px;padding:14px;display:flex;gap:14px;align-items:center">
+      <div style="flex:1">
+        <div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Rapport · ${esc(d.periode||'')}</div>
+        <div style="font-size:1.5rem;font-weight:800;color:${perfColor}">${perfSign}${d.perf_trimestre_pct?.toFixed(2)||'—'}%</div>
+        <div style="font-size:0.83rem;color:${perfColor};margin-top:1px">${perfSign}${d.perf_trimestre_eur!=null?fc(d.perf_trimestre_eur):'—'}</div>
+      </div>
+      ${d.vs_benchmark?`<div style="text-align:right;flex-shrink:0;font-size:0.78rem;color:var(--muted)">${esc(d.vs_benchmark)}</div>`:''}
+    </div>
+    ${d.resume_executif?`<div style="background:var(--surface2);border-radius:8px;padding:12px;font-size:0.83rem;line-height:1.5">${esc(d.resume_executif)}</div>`:''}
+    ${d.faits_marquants?.length?`<div><div class="section-title" style="margin-bottom:6px">⭐ Faits marquants</div>${d.faits_marquants.map(f=>`<div style="background:var(--surface2);border-radius:6px;padding:6px 11px;font-size:0.8rem;margin-bottom:3px">• ${esc(f)}</div>`).join('')}</div>`:''}
+    ${d.positions_perf?.length?`<div><div class="section-title" style="margin-bottom:6px">📊 Contributions des positions</div><div style="overflow-x:auto"><table style="width:100%;font-size:0.78rem;border-collapse:collapse"><thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px 8px">Position</th><th style="text-align:right;padding:4px 8px">Contrib</th><th style="text-align:center;padding:4px 8px">Verdict</th><th style="text-align:left;padding:4px 8px">Commentaire</th></tr></thead><tbody>${d.positions_perf.map(p=>{const vc=p.verdict==='positif'?'#22c55e':p.verdict==='négatif'?'#ef4444':'#f59e0b';return`<tr style="border-bottom:1px solid rgba(255,255,255,0.04)"><td style="padding:6px 8px;font-weight:600">${esc(p.ticker)}</td><td style="padding:6px 8px;text-align:right;color:${vc};font-weight:600">${p.contrib_pct!=null?(p.contrib_pct>0?'+':'')+p.contrib_pct.toFixed(2)+'%':'—'}</td><td style="padding:6px 8px;text-align:center;color:${vc}">${esc(p.verdict||'')}</td><td style="padding:6px 8px;font-size:0.72rem;color:var(--muted)">${esc(p.commentaire||'')}</td></tr>`;}).join('')}</tbody></table></div></div>`:''}
+    ${d.mouvements?.length?`<div><div class="section-title" style="margin-bottom:6px">📋 Mouvements du trimestre</div>${d.mouvements.map(m=>{const mt=m.type==='achat'?'#22c55e':m.type==='vente'?'#ef4444':'#818cf8';return`<div style="display:flex;gap:10px;align-items:flex-start;background:var(--surface2);border-radius:8px;padding:9px 12px;margin-bottom:4px;border-left:3px solid ${mt}"><div style="flex-shrink:0;font-size:0.72rem;color:var(--muted);min-width:70px">${esc(m.date||'')}</div><div style="flex:1"><div style="font-size:0.8rem;font-weight:600">${esc(m.type?.toUpperCase()||'')} ${esc(m.ticker||'')}</div>${m.commentaire?`<div style="font-size:0.73rem;color:var(--muted)">${esc(m.commentaire)}</div>`:''}</div><div style="flex-shrink:0;font-weight:700;color:${mt}">${m.montant!=null?fc(m.montant):'—'}</div></div>`;}).join('')}</div>`:''}
+    ${d.allocation_actuelle?.length?`<div><div class="section-title" style="margin-bottom:6px">⚖️ Allocation actuelle vs cible</div>${d.allocation_actuelle.map(a=>{const e=a.ecart||0;const ec=e>3?'#22c55e':e<-3?'#ef4444':'#f59e0b';return`<div style="background:var(--surface2);border-radius:7px;padding:8px 12px;margin-bottom:4px"><div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:0.8rem;font-weight:600">${esc(a.classe||'')}</span><span style="font-size:0.78rem;color:${ec}">${e>0?'+':''}${e}%</span></div><div style="height:5px;background:var(--border);border-radius:3px;position:relative;overflow:hidden"><div style="height:100%;width:${Math.min(100,a.pct_actuel||0)}%;background:var(--accent);border-radius:3px"></div></div><div style="display:flex;justify-content:space-between;font-size:0.68rem;color:var(--muted);margin-top:2px"><span>Actuel ${a.pct_actuel||0}%</span><span>Cible ${a.pct_cible||0}%</span></div></div>`;}).join('')}</div>`:''}
+    ${d.risques_identifies?.length?`<div><div class="section-title" style="margin-bottom:6px">⚠️ Risques identifiés</div>${d.risques_identifies.map(r=>`<div style="background:var(--surface2);border-radius:6px;padding:6px 11px;font-size:0.8rem;margin-bottom:3px;border-left:3px solid #f59e0b">• ${esc(r)}</div>`).join('')}</div>`:''}
+    ${d.perspectives?`<div style="background:var(--surface2);border-radius:8px;padding:12px"><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:5px">📅 Perspectives</div><div style="font-size:0.83rem;line-height:1.5">${esc(d.perspectives)}</div></div>`:''}
+    ${d.actions_planifiees?.length?`<div><div class="section-title" style="margin-bottom:6px">✅ Actions planifiées</div>${d.actions_planifiees.map(a=>`<div style="background:var(--surface2);border-radius:6px;padding:6px 11px;font-size:0.8rem;margin-bottom:3px">☐ ${esc(a)}</div>`).join('')}</div>`:''}
+  </div>`;
+}
+
+function renderSectorialCard(d) {
+  const trendColor = t => t==='haussière'?'#22c55e':t==='baissière'?'#ef4444':'#f59e0b';
+  const verdictColor = v => v==='renforcer'?'#22c55e':v==='alléger'?'#ef4444':'#818cf8';
+  const urgColor = u => u==='haute'?'#ef4444':u==='modérée'?'#f59e0b':'#22c55e';
+  return `<div style="display:flex;flex-direction:column;gap:10px">
+    ${d.macro_context?`<div style="background:var(--surface2);border-radius:8px;padding:12px;font-size:0.83rem;line-height:1.5">${esc(d.macro_context)}</div>`:''}
+    ${d.timing_global?`<div style="text-align:center;font-size:0.78rem;font-weight:600;padding:6px 0;color:${d.timing_global==='bon'?'#22c55e':d.timing_global==='attendre'?'#ef4444':'#f59e0b'}">Timing global : ${esc(d.timing_global).toUpperCase()}</div>`:''}
+    ${d.secteurs_exposes?.length?`<div><div class="section-title" style="margin-bottom:8px">🗂 Secteurs exposés</div>${d.secteurs_exposes.map(s=>`<div style="background:var(--surface2);border-radius:10px;padding:12px 14px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px"><div style="flex:1"><div style="font-size:0.85rem;font-weight:700">${esc(s.secteur)}</div>${s.etfs?.length?`<div style="font-size:0.7rem;color:var(--muted);margin-top:2px">${s.etfs.map(e=>`<span style="background:var(--surface);border-radius:4px;padding:1px 6px;margin-right:4px">${esc(e)}</span>`).join('')}</div>`:''}</div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0"><span style="font-size:0.78rem;font-weight:700;color:${trendColor(s.tendance)}">${esc(s.tendance||'')}</span><span style="font-size:0.85rem;font-weight:700;color:${verdictColor(s.verdict)}">${esc(s.verdict||'')}</span></div></div>${s.exposition_pct!=null?`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><div style="flex:1;height:5px;background:var(--border);border-radius:3px;overflow:hidden"><div style="width:${Math.min(100,s.exposition_pct)}%;height:100%;background:var(--accent);border-radius:3px"></div></div><span style="font-size:0.72rem;color:var(--muted);min-width:35px;text-align:right">${s.exposition_pct}%</span></div>`:''}<div style="display:flex;gap:10px;font-size:0.75rem"><div style="flex:1"><div style="color:var(--muted);margin-bottom:2px">Drivers</div>${s.drivers?.map(dr=>`<div>→ ${esc(dr)}</div>`).join('')||'—'}</div><div style="flex:1"><div style="color:var(--muted);margin-bottom:2px">Risques</div>${s.risques?.map(r=>`<div>→ ${esc(r)}</div>`).join('')||'—'}</div></div>${s.commentaire?`<div style="margin-top:6px;font-size:0.77rem;color:var(--muted)">${esc(s.commentaire)}</div>`:''}</div>`).join('')}</div>`:''}
+    ${d.secteurs_manquants?.length?`<div><div class="section-title" style="margin-bottom:8px">🔍 Secteurs manquants</div>${d.secteurs_manquants.map(s=>`<div style="background:var(--surface2);border-radius:9px;padding:10px 13px;margin-bottom:6px;border-left:3px solid ${urgColor(s.urgence)}"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:3px"><span style="font-size:0.83rem;font-weight:700">${esc(s.secteur)}</span><span style="font-size:0.68rem;background:${urgColor(s.urgence)}22;color:${urgColor(s.urgence)};padding:2px 7px;border-radius:4px;font-weight:600">${esc(s.urgence||'')}</span></div>${s.raison?`<div style="font-size:0.77rem;color:var(--muted);margin-bottom:3px">${esc(s.raison)}</div>`:''} ${s.etf_suggere?`<div style="font-size:0.77rem">ETF suggéré : <span style="font-weight:600;color:var(--accent)">${esc(s.etf_suggere)}</span></div>`:''}</div>`).join('')}</div>`:''}
+    ${d.recommandation?`<div style="background:var(--accent)0d;border:1px solid var(--accent)44;border-radius:9px;padding:12px"><div style="font-size:0.68rem;color:var(--accent);text-transform:uppercase;font-weight:600;margin-bottom:5px">Recommandation</div><div style="font-size:0.85rem;line-height:1.5">${esc(d.recommandation)}</div></div>`:''}
+  </div>`;
+}
+
+function renderThesisCard(d) {
+  const recColor = r => ({acheter:'#22c55e',renforcer:'#22c55e',maintenir:'#818cf8',alléger:'#f59e0b',sortir:'#ef4444'})[r]||'#f59e0b';
+  const rc = recColor(d.recommandation);
+  return `<div style="display:flex;flex-direction:column;gap:10px">
+    <div style="background:var(--surface2);border-radius:10px;padding:14px;display:flex;gap:14px;align-items:center">
+      <div style="flex:1">
+        <div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Thèse d'investissement · ${esc(d.ticker||'')} · ${esc(d.nom||'')}</div>
+        ${d.resume_opportunite?`<div style="font-size:0.82rem;line-height:1.5">${esc(d.resume_opportunite)}</div>`:''}
+      </div>
+      ${d.recommandation?`<div style="flex-shrink:0;text-align:center"><div style="font-size:0.68rem;color:var(--muted);margin-bottom:3px">Décision</div><div style="font-size:1rem;font-weight:800;color:${rc};border:2px solid ${rc};border-radius:7px;padding:5px 12px;text-transform:uppercase">${esc(d.recommandation)}</div>${d.horizon?`<div style="font-size:0.7rem;color:var(--muted);margin-top:3px">${esc(d.horizon)}</div>`:''}</div>`:''}
+    </div>
+    <div style="display:flex;gap:8px">
+      ${d.these_bull?.length?`<div style="flex:1;background:#22c55e11;border:1px solid #22c55e33;border-radius:9px;padding:11px 13px"><div style="font-size:0.7rem;color:#22c55e;text-transform:uppercase;font-weight:700;margin-bottom:6px">🟢 Thèse Bull</div>${d.these_bull.map(t=>`<div style="font-size:0.78rem;margin-bottom:4px;line-height:1.4">→ ${esc(t)}</div>`).join('')}</div>`:''}
+      ${d.these_bear?.length?`<div style="flex:1;background:#ef444411;border:1px solid #ef444433;border-radius:9px;padding:11px 13px"><div style="font-size:0.7rem;color:#ef4444;text-transform:uppercase;font-weight:700;margin-bottom:6px">🔴 Thèse Bear</div>${d.these_bear.map(t=>`<div style="font-size:0.78rem;margin-bottom:4px;line-height:1.4">→ ${esc(t)}</div>`).join('')}</div>`:''}
+    </div>
+    ${d.analyse_marche?`<div style="background:var(--surface2);border-radius:8px;padding:12px"><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Analyse marché</div><div style="font-size:0.8rem;line-height:1.5">${esc(d.analyse_marche)}</div></div>`:''}
+    ${d.analyse_financiere?`<div style="background:var(--surface2);border-radius:8px;padding:12px"><div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Analyse financière</div><div style="font-size:0.8rem;line-height:1.5">${esc(d.analyse_financiere)}</div></div>`:''}
+    ${d.scenarios?.length?`<div><div class="section-title" style="margin-bottom:6px">📈 Scénarios 1 an</div><div style="overflow-x:auto"><table style="width:100%;font-size:0.78rem;border-collapse:collapse"><thead><tr style="color:var(--muted);border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px 8px">Scénario</th><th style="text-align:right;padding:4px 8px">Proba</th><th style="text-align:right;padding:4px 8px">Cible 1 an</th><th style="text-align:left;padding:4px 8px">Hypothèse</th></tr></thead><tbody>${d.scenarios.map(s=>{const sc=s.nom==='Optimiste'?'#22c55e':s.nom==='Pessimiste'?'#ef4444':'#818cf8';return`<tr style="border-bottom:1px solid rgba(255,255,255,0.04)"><td style="padding:6px 8px;font-weight:600;color:${sc}">${esc(s.nom)}</td><td style="padding:6px 8px;text-align:right;color:var(--muted)">${s.proba!=null?s.proba+'%':'—'}</td><td style="padding:6px 8px;text-align:right;font-weight:700;color:${sc}">${s.cible_1an_eur!=null?fc(s.cible_1an_eur):'—'}</td><td style="padding:6px 8px;font-size:0.72rem;color:var(--muted)">${esc(s.hypothese||'')}</td></tr>`;}).join('')}</tbody></table></div></div>`:''}
+    ${d.biais_identifies?.length?`<div><div class="section-title" style="margin-bottom:6px">🧠 Biais identifiés</div>${d.biais_identifies.map(b=>`<div style="background:var(--surface2);border-radius:6px;padding:6px 11px;font-size:0.8rem;margin-bottom:3px;border-left:3px solid #818cf8">⚠ ${esc(b)}</div>`).join('')}</div>`:''}
+    ${d.conditions?`<div style="background:#ef444411;border:1px solid #ef444433;border-radius:9px;padding:11px 13px"><div style="font-size:0.7rem;color:#ef4444;text-transform:uppercase;font-weight:700;margin-bottom:4px">🚨 Conditions d'invalidation</div><div style="font-size:0.8rem;line-height:1.5">${esc(d.conditions)}</div></div>`:''}
   </div>`;
 }
 
@@ -3895,7 +3981,7 @@ function renderValuationCard(d) {
 }
 
 async function aiRunStructured(fullPrompt, type, postProcess) {
-  const labels = { analyze:'📊 Analyse du portefeuille', monthly:'📅 Conseil achat mensuel', risk:'⚡ Analyse des risques', valuation:'💰 Valorisation IA', plan:'📋 Analyse du plan mensuel', compare:'🔄 Comparaison de plans' };
+  const labels = { analyze:'📊 Analyse du portefeuille', monthly:'📅 Conseil achat mensuel', risk:'⚡ Analyse des risques', valuation:'💰 Valorisation IA', plan:'📋 Analyse du plan mensuel', compare:'🔄 Comparaison de plans', quarterly:'📈 Rapport trimestriel', sectorial:'🏭 Analyse sectorielle', thesis:'📝 Thèse d\'investissement' };
   // Chaque nouvelle analyse remplace la précédente (évite l'accumulation / scroll excessif)
   S.ai = [];
   const now = new Date().toLocaleTimeString('fr-FR');
@@ -3911,7 +3997,7 @@ RÈGLES CRITIQUES INVIOLABLES :
 4. BOURSOMARKETS 0€ — uniquement les iShares .PA listés dans la KB. Les ETF .DE, .L et autres ont des frais standards. Ne jamais affirmer qu'un .DE est à 0€ chez Boursobank.
 5. SUBSTITUTION = MÊME CATÉGORIE — remplacer un ETF défense par un ETF EURO STOXX 50 n'est pas une substitution neutre, c'est un pivot stratégique. Toujours signaler explicitement si l'exposition change.`;
   try {
-    const tokenMap = { plan: 10000, analyze: 6000, risk: 5000, monthly: 3000, valuation: 3000, compare: 8000 };
+    const tokenMap = { plan: 10000, analyze: 6000, risk: 5000, monthly: 3000, valuation: 3000, compare: 8000, quarterly: 5000, sectorial: 4000, thesis: 4000 };
     const res = await callAI([{ role:'user', content:fullPrompt }], { system: jsonSystem, maxTokens: tokenMap[type] ?? 3000 });
     let data = null;
     try { data = parseAIJSON(res); } catch(e) { console.warn('parseAIJSON failed:', e.message, '| raw:', res.slice(0,200)); }
@@ -4039,6 +4125,89 @@ Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans 
 Schéma exact:
 {"score_diversification":<integer 0-10>,"correlations":"<1-2 phrases>","risques":[{"niveau":"élevé|modéré|faible","type":"","detail":"","impact_eur":"<ex: -6700€ sur krach -30%>","horizon":"Court|Moyen|Long terme"}],"stress":[{"scenario":"","perte_eur":<number négatif>,"perte_pct":<number négatif>,"detail":""}],"recommandations_etf":[""],"recommandations_titres":[""],"alertes":[{"ticker":"","declencheur":""}],"plan_suggere":{"name":"<nom>","items":[{"ticker":"","name":"","isEtf":true,"allocationPct":50}]}}
 RÈGLE plan_suggere : inclure si les risques justifient une révision du plan. Omettre sinon.`, 'risk');
+}
+
+async function aiQuarterlyReport() {
+  const now = new Date();
+  const month = now.getMonth(); // 0-based
+  const year  = now.getFullYear();
+  const q     = Math.floor(month / 3) + 1;
+  const qMonth0 = (q - 1) * 3; // 0-based start month of quarter
+  const qStartStr = `${year}-${String(qMonth0+1).padStart(2,'0')}-01`;
+
+  const snaps = (S.data.snapshots || []).slice().sort((a,b)=>a.date<b.date?-1:1);
+  const snapBefore = snaps.filter(s => s.date < qStartStr).pop();
+  const snapNow    = snaps[snaps.length - 1];
+  const valBefore  = snapBefore ? (snapBefore.portValue + (snapBefore.cash||0)) : null;
+  const valNow     = snapNow    ? (snapNow.portValue    + (snapNow.cash||0))    : null;
+  const perfEur    = (valNow != null && valBefore != null) ? valNow - valBefore : null;
+  const perfPct    = (perfEur != null && valBefore > 0)    ? perfEur / valBefore * 100 : null;
+
+  const txQ = (S.data.transactions||[]).filter(t => t.date >= qStartStr);
+  const txLines = txQ.map(t=>`• ${t.date} ${t.type?.toUpperCase()} ${t.ticker||''} qté=${t.qty||''} prix=${t.price||''} montant=${t.amount!=null?fc(t.amount):''}`).join('\n')||'Aucune';
+
+  const { positions } = computeSummary();
+  const alloc = positions.map(p=>`${p.ticker}: ${p.totalValue?.toFixed?p.totalValue.toFixed(0):p.totalValue}€`).join(', ');
+
+  const ctx = buildPortfolioContext('full');
+  const dataBlock = `
+=== DONNÉES TRIMESTRIELLES ===
+Période : Q${q} ${year} (depuis ${qStartStr})
+Valeur début de période : ${valBefore!=null?fc(valBefore):'N/A (premier trimestre)'}
+Valeur actuelle : ${valNow!=null?fc(valNow):'N/A'}
+Performance : ${perfPct!=null?perfPct.toFixed(2)+'%':'N/A'} (${perfEur!=null?fc(perfEur):'N/A'})
+Allocation actuelle : ${alloc}
+Transactions du trimestre (${txQ.length}) :
+${txLines}`;
+
+  await aiRunStructured(`${ctx}${dataBlock}
+
+MISSION — RAPPORT DE PERFORMANCE TRIMESTRIEL Q${q} ${year}.
+Tu es un gérant de portefeuille PEA. Analyse la performance du trimestre en cours et produis un rapport structuré, honnête et actionnable. Compare avec les indices de référence (MSCI World, CAC 40) selon tes connaissances actuelles. Identifie les positions qui ont contribué positivement ou négativement. Évalue l'allocation et propose les ajustements nécessaires pour le prochain trimestre.
+
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
+Schéma exact:
+{"periode":"Q${q} ${year}","perf_trimestre_pct":<number|null>,"perf_trimestre_eur":<number|null>,"vs_benchmark":"","resume_executif":"","faits_marquants":[""],"positions_perf":[{"ticker":"","contrib_pct":<number>,"verdict":"positif|neutre|négatif","commentaire":""}],"mouvements":[{"date":"","type":"achat|vente|dividende","ticker":"","montant":<number>,"commentaire":""}],"allocation_actuelle":[{"classe":"","pct_actuel":<number>,"pct_cible":<number>,"ecart":<number>}],"risques_identifies":[""],"perspectives":"","actions_planifiees":[""]}`, 'quarterly');
+}
+
+async function aiSectorialAnalysis() {
+  const ctx = buildPortfolioContext('full');
+  await aiRunStructured(`${ctx}
+
+MISSION — ANALYSE SECTORIELLE DU PORTEFEUILLE PEA.
+Tu es un stratégiste sectoriel. Analyse les secteurs d'exposition du portefeuille (déduis-les depuis les ETF et titres : WPEA=World, PANX=Tech US, PAEEM=Émergents, AI.PA=Industriels/Tech FR, GUARD.PA=Défense, etc.). Pour chaque secteur exposé : évalue la tendance macro à 3-5 ans, les drivers et risques, et donne un verdict clair (renforcer/maintenir/alléger). Identifie aussi les secteurs absents qui mériteraient une exposition via ETF éligible PEA. Donne le timing global du marché.
+
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
+Schéma exact:
+{"secteurs_exposes":[{"secteur":"","exposition_pct":<number>,"etfs":[""],"tendance":"haussière|neutre|baissière","horizon":"3-5 ans","drivers":[""],"risques":[""],"verdict":"renforcer|maintenir|alléger","commentaire":""}],"secteurs_manquants":[{"secteur":"","raison":"","etf_suggere":"","urgence":"haute|modérée|faible"}],"timing_global":"bon|neutre|attendre","macro_context":"","recommandation":""}`, 'sectorial');
+}
+
+function toggleThesisForm() { S._thesisOpen = !S._thesisOpen; S._valOpen = false; S._compareOpen = false; renderAI(); }
+
+async function aiThesis() {
+  const sel = document.getElementById('thesis-ticker-select');
+  if (!sel) return;
+  const val = sel.value;
+  if (!val) return;
+  const [ticker, name, pru, qty] = val.split('|');
+  const cache = S.data.priceCache[ticker];
+  const currentPrice = cache?.price ?? null;
+  const plEur = (currentPrice != null && pru && qty) ? (currentPrice - parseFloat(pru)) * parseFloat(qty) : null;
+  const plPct = (currentPrice != null && pru && parseFloat(pru) > 0) ? (currentPrice - parseFloat(pru)) / parseFloat(pru) * 100 : null;
+  const posDetail = `Ticker: ${ticker} | Nom: ${name} | PRU: ${pru ? fc(parseFloat(pru)) : 'N/A'} | Qty: ${qty||'N/A'} | Prix actuel: ${currentPrice!=null?fc(currentPrice):'N/A'} | P&L: ${plEur!=null?fc(plEur):'N/A'} (${plPct!=null?plPct.toFixed(1)+'%':'N/A'})`;
+
+  const ctx = buildPortfolioContext('analysis');
+  await aiRunStructured(`${ctx}
+
+=== POSITION ANALYSÉE ===
+${posDetail}
+
+MISSION — THÈSE D'INVESTISSEMENT POUR ${ticker} (${name}).
+Tu es un analyste buy-side. Construis une thèse d'investissement complète et objective pour cette position dans un PEA français. Présente les arguments bull et bear de façon équilibrée. Analyse le secteur, la concurrence, la valorisation actuelle vs les pairs. Propose 3 scénarios (pessimiste/base/optimiste) avec probabilités et cibles 1 an. Identifie les biais cognitifs potentiels de l'investisseur (notamment l'ancrage au PRU). Donne une recommandation claire.
+
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ou après, sans bloc markdown.
+Schéma exact:
+{"ticker":"${ticker}","nom":"${name}","resume_opportunite":"","these_bull":[""],"these_bear":[""],"analyse_marche":"","analyse_financiere":"","scenarios":[{"nom":"Pessimiste","proba":<number>,"cible_1an_eur":<number>,"hypothese":""},{"nom":"Base","proba":<number>,"cible_1an_eur":<number>,"hypothese":""},{"nom":"Optimiste","proba":<number>,"cible_1an_eur":<number>,"hypothese":""}],"biais_identifies":[""],"recommandation":"acheter|renforcer|maintenir|alléger|sortir","conditions":"","horizon":"12-24 mois"}`, 'thesis');
 }
 
 function toggleCompareForm() { S._compareOpen = !S._compareOpen; S._valOpen = false; renderAI(); }

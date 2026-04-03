@@ -2602,11 +2602,29 @@ function renderPlanning() {
   const stockItems = S.data.planItems.filter(p => p.active && p.isEtf === false).sort((a,b)=>(a.priority||99)-(b.priority||99));
 
   const totalEtfPct  = etfItems.reduce((s,p) => s + (p.allocationPct||0), 0);
-  // stockBudget = cash total (net + frais de courtage)
+
+  // Freed cash from AI.PA cap → redirect to WPEA.PA
+  const _aiItem   = stockItems.find(si => si.ticker === 'AI.PA');
+  const _wpeaItem = stockItems.find(si => si.ticker === 'WPEA.PA');
+  let aiFreedCash = 0;
+  let wpeaExtraShares = 0;
+  if (aiLimited && _aiItem) {
+    const _aiP   = S.data.priceCache['AI.PA']?.price ?? 0;
+    const _aiRaw = _aiItem.monthlyShares ?? 0;
+    aiFreedCash  = Math.max(0, (_aiRaw - Math.min(_aiRaw, 1)) * _aiP * (1 + (_aiItem.feePct ?? 0) / 100));
+  }
+  if (aiFreedCash > 0.01 && _wpeaItem) {
+    const _wpeaP = S.data.priceCache['WPEA.PA']?.price ?? 0;
+    wpeaExtraShares = _wpeaP > 0 ? Math.floor(aiFreedCash / (_wpeaP * (1 + (_wpeaItem.feePct ?? 0) / 100))) : 0;
+  }
+
+  // stockBudget = cash total (net + frais de courtage) — AI.PA cappé, WPEA renforcé
   const stockBudget  = stockItems.reduce((s,p) => {
     const price = S.data.priceCache[p.ticker]?.price ?? 0;
     const rawShares = p.monthlyShares ?? 0;
-    const shares = (aiLimited && p.ticker === 'AI.PA') ? Math.min(rawShares, 1) : rawShares;
+    const shares = (aiLimited && p.ticker === 'AI.PA') ? Math.min(rawShares, 1)
+                 : (p.ticker === 'WPEA.PA' && wpeaExtraShares > 0) ? rawShares + wpeaExtraShares
+                 : rawShares;
     const netAmt = shares > 0 ? shares * price : (p.monthlyAmount || 0);
     const feeMul = 1 + (p.feePct ?? 0) / 100;
     return s + netAmt * feeMul;
@@ -2777,7 +2795,10 @@ function renderPlanning() {
   const totalNetEtf   = etfResults.reduce((s,r) => s + r.netInvestment, 0);
   const totalNetStock = stockItems.reduce((s,si) => {
     const price = S.data.priceCache[si.ticker]?.price ?? 0;
-    const shares = si.monthlyShares ?? 0;
+    const rawSh = si.monthlyShares ?? 0;
+    const shares = (aiLimited && si.ticker === 'AI.PA') ? Math.min(rawSh, 1)
+                 : (si.ticker === 'WPEA.PA' && wpeaExtraShares > 0) ? rawSh + wpeaExtraShares
+                 : rawSh;
     return s + (shares > 0 ? shares * price : (si.monthlyAmount || 0));
   }, 0);
   const totalNetInvested = totalNetEtf + totalNetStock;
@@ -2790,7 +2811,9 @@ function renderPlanning() {
   stockItems.forEach(si => {
     const price  = S.data.priceCache[si.ticker]?.price ?? 0;
     const rawSh = si.monthlyShares ?? 0;
-    const shares = (aiLimited && si.ticker === 'AI.PA') ? Math.min(rawSh, 1) : rawSh;
+    const shares = (aiLimited && si.ticker === 'AI.PA') ? Math.min(rawSh, 1)
+                 : (si.ticker === 'WPEA.PA' && wpeaExtraShares > 0) ? rawSh + wpeaExtraShares
+                 : rawSh;
     const netAmt = shares > 0 ? shares * price : (si.monthlyAmount || 0);
     const feeMul = 1 + (si.feePct ?? 0) / 100;
     const cashAmt = netAmt * feeMul;
@@ -3075,21 +3098,25 @@ function renderPlanning() {
             <th>Ticker</th><th>Nom</th><th>Parts/mois</th><th>Cours actuel</th><th title="Cash total débité (net + frais)">Montant total</th><th title="Frais de courtage en % du montant brut">Frais %</th><th>Notes</th><th></th>
           </tr></thead>
           <tbody>${stockItems.map(item => {
-            const price    = S.data.priceCache[item.ticker]?.price ?? null;
+            const price     = S.data.priceCache[item.ticker]?.price ?? null;
             const rawShares = item.monthlyShares ?? 0;
-            const shares   = (aiLimited && item.ticker === 'AI.PA') ? Math.min(rawShares, 1) : rawShares;
-            const feePct   = item.feePct ?? 0;
-            const feeMul   = 1 + feePct / 100;
-            const netAmt   = price && shares > 0 ? shares * price : null;
-            const cashAmt  = netAmt !== null ? netAmt * feeMul : null;
-            const feeAmt   = cashAmt !== null ? cashAmt - netAmt : null;
+            const extraW    = (item.ticker === 'WPEA.PA' && wpeaExtraShares > 0) ? wpeaExtraShares : 0;
+            const shares    = (aiLimited && item.ticker === 'AI.PA') ? Math.min(rawShares, 1)
+                            : rawShares + extraW;
+            const feePct    = item.feePct ?? 0;
+            const feeMul    = 1 + feePct / 100;
+            const netAmt    = price && shares > 0 ? shares * price : null;
+            const cashAmt   = netAmt !== null ? netAmt * feeMul : null;
+            const feeAmt    = cashAmt !== null ? cashAmt - netAmt : null;
             return `<tr>
               <td><span class="chip">${esc(item.ticker)}</span></td>
               <td>${esc(item.name)}</td>
               <td>
                 <div style="display:flex;align-items:center;gap:4px">
-                  <input type="number" value="${shares}" min="0" step="1"
+                  <input type="number" value="${rawShares}" min="0" step="1"
                     style="width:70px;padding:3px 6px;font-size:0.78rem" onchange="updPlanShares('${item.id}',this.value)">
+                  ${extraW > 0 ? `<span style="font-size:0.7rem;background:rgba(245,158,11,0.15);color:var(--warning);border-radius:4px;padding:1px 6px">+${extraW} ↩AI</span>` : ''}
+                  ${aiLimited && item.ticker === 'AI.PA' && rawShares > 1 ? `<span style="font-size:0.7rem;background:rgba(239,68,68,0.15);color:var(--danger);border-radius:4px;padding:1px 6px">cappé</span>` : ''}
                   <span class="neutral">parts</span>
                 </div>
               </td>
@@ -3115,9 +3142,10 @@ function renderPlanning() {
 
         <!-- CARDS MOBILE — Titres directs -->
         <div class="plan-mobile">${stockItems.map(item => {
-          const price  = S.data.priceCache[item.ticker]?.price ?? null;
+          const price     = S.data.priceCache[item.ticker]?.price ?? null;
           const rawShares = item.monthlyShares ?? 0;
-          const shares = (aiLimited && item.ticker === 'AI.PA') ? Math.min(rawShares, 1) : rawShares;
+          const extraW    = (item.ticker === 'WPEA.PA' && wpeaExtraShares > 0) ? wpeaExtraShares : 0;
+          const shares    = (aiLimited && item.ticker === 'AI.PA') ? Math.min(rawShares, 1) : rawShares + extraW;
           const feePct = item.feePct ?? 0;
           const feeMul = 1 + feePct / 100;
           const netAmt = price && shares > 0 ? shares * price : null;
@@ -3135,9 +3163,11 @@ function renderPlanning() {
               <div style="background:var(--bg);border-radius:8px;padding:9px 10px">
                 <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;margin-bottom:4px">Parts / mois</div>
                 <div style="display:flex;align-items:center;gap:5px">
-                  <input type="number" value="${shares}" min="0" step="1"
+                  <input type="number" value="${rawShares}" min="0" step="1"
                     style="width:64px;padding:4px 6px;font-size:0.85rem;min-height:36px" onchange="updPlanShares('${item.id}',this.value)">
                   <span style="font-size:0.75rem;color:var(--muted)">parts</span>
+                  ${extraW > 0 ? `<span style="font-size:0.68rem;background:rgba(245,158,11,0.15);color:var(--warning);border-radius:4px;padding:1px 5px">+${extraW}↩</span>` : ''}
+                  ${aiLimited && item.ticker === 'AI.PA' && rawShares > 1 ? `<span style="font-size:0.68rem;background:rgba(239,68,68,0.15);color:var(--danger);border-radius:4px;padding:1px 5px">cap</span>` : ''}
                 </div>
                 ${price!==null?`<div style="font-size:0.68rem;color:var(--muted);margin-top:3px">Cours: ${fc(price)}</div>`:''}
               </div>

@@ -909,7 +909,7 @@ let S = {
 // ======================================================
 function defData() {
   return {
-    settings: { claudeApiKey:'', geminiApiKey:'', groqApiKey:'', grokXaiApiKey:'', aiProvider:'claude', monthlyBudget:500, brokerName:'Mon PEA' },
+    settings: { claudeApiKey:'', geminiApiKey:'', groqApiKey:'', grokXaiApiKey:'', aiProvider:'claude', monthlyBudget:500, brokerName:'Mon PEA', aiAlertPct:30, aiLimitPct:35 },
     transactions: [],
     deposits: [],
     planItems: [],
@@ -1341,6 +1341,14 @@ function updPlanMin(id, val) {
 function updPlanShares(id, val) {
   const item = S.data.planItems.find(p => p.id === id);
   if (item) { item.monthlyShares = parseFloat(val) || 0; saveData(); renderPlanning(); }
+}
+function updAiAlertPct(val) {
+  S.data.settings.aiAlertPct = parseInt(val);
+  saveData(); renderPlanning();
+}
+function updAiLimitPct(val) {
+  S.data.settings.aiLimitPct = parseInt(val);
+  saveData(); renderPlanning();
 }
 
 async function doRefreshTER() {
@@ -2582,11 +2590,13 @@ function renderPlanning() {
   const posMap = {};
   positions.forEach(p => posMap[p.ticker] = p);
 
-  // Concentration Air Liquide
+  // Concentration Air Liquide — seuils configurables
+  const aiAlertPct = S.data.settings.aiAlertPct ?? 30;
+  const aiLimitPct = S.data.settings.aiLimitPct ?? 35;
   const _totalPF = positions.reduce((s,p) => s + p.marketValue, 0);
   const aiPct = _totalPF > 0 ? ((posMap['AI.PA']?.marketValue ?? 0) / _totalPF * 100) : 0;
-  const aiLimited = aiPct >= 35;   // cap plan à 1 action max
-  const aiAlert30 = aiPct >= 30;   // alerte dès 30%
+  const aiLimited = aiPct >= aiLimitPct;
+  const aiAlert30 = aiPct >= aiAlertPct;
 
   const etfItems  = S.data.planItems.filter(p => p.active && p.isEtf !== false).sort((a,b)=>(a.priority||99)-(b.priority||99));
   const stockItems = S.data.planItems.filter(p => p.active && p.isEtf === false).sort((a,b)=>(a.priority||99)-(b.priority||99));
@@ -3038,8 +3048,26 @@ function renderPlanning() {
     <!-- TITRES DIRECTS SECTION -->
     <div class="card">
       <div class="section-title mb16">Titres directs — Nombre de parts mensuel</div>
-      ${aiLimited ? `<div class="info-box info-danger" style="margin-bottom:12px">🛑 <strong>Air Liquide représente ${aiPct.toFixed(1)}% du portefeuille (≥ 35%)</strong> — le plan d'achat est automatiquement limité à <strong>1 action maximum</strong> ce mois pour éviter une surconcentration.</div>` :
-        aiAlert30 ? `<div class="info-box info-warning" style="margin-bottom:12px">⚠️ <strong>Air Liquide représente ${aiPct.toFixed(1)}% du portefeuille (≥ 30%)</strong> — attention à la concentration. À partir de 35% le plan sera limité à 1 action/mois.</div>` : ''}
+      <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px;padding:12px;background:var(--surface2);border-radius:10px;align-items:center">
+        <div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;color:var(--muted);white-space:nowrap">🎚 Seuils AI.PA</div>
+        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:180px">
+          <span style="font-size:0.75rem;color:var(--muted);white-space:nowrap">⚠️ Alerte</span>
+          <input type="range" min="10" max="50" step="1" value="${aiAlertPct}"
+            style="flex:1;accent-color:var(--warning)"
+            oninput="this.nextElementSibling.textContent=this.value+'%'" onchange="updAiAlertPct(this.value)">
+          <span style="font-size:0.82rem;font-weight:700;color:var(--warning);min-width:34px">${aiAlertPct}%</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:180px">
+          <span style="font-size:0.75rem;color:var(--muted);white-space:nowrap">🛑 Limite</span>
+          <input type="range" min="10" max="50" step="1" value="${aiLimitPct}"
+            style="flex:1;accent-color:var(--danger)"
+            oninput="this.nextElementSibling.textContent=this.value+'%'" onchange="updAiLimitPct(this.value)">
+          <span style="font-size:0.82rem;font-weight:700;color:var(--danger);min-width:34px">${aiLimitPct}%</span>
+        </div>
+        <div style="font-size:0.75rem;color:var(--muted)">AI.PA actuel : <strong style="color:${aiLimited?'var(--danger)':aiAlert30?'var(--warning)':'var(--success)'}">${aiPct.toFixed(1)}%</strong></div>
+      </div>
+      ${aiLimited ? `<div class="info-box info-danger" style="margin-bottom:12px">🛑 <strong>Air Liquide représente ${aiPct.toFixed(1)}% du portefeuille (≥ ${aiLimitPct}%)</strong> — le plan d'achat est automatiquement limité à <strong>1 action maximum</strong> ce mois pour éviter une surconcentration.</div>` :
+        aiAlert30 ? `<div class="info-box info-warning" style="margin-bottom:12px">⚠️ <strong>Air Liquide représente ${aiPct.toFixed(1)}% du portefeuille (≥ ${aiAlertPct}%)</strong> — attention à la concentration. À partir de ${aiLimitPct}% le plan sera limité à 1 action/mois.</div>` : ''}
       ${stockItems.length ? `
         <!-- TABLE DESKTOP -->
         <div class="plan-desktop table-wrap"><table>

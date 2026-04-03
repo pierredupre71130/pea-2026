@@ -2582,6 +2582,12 @@ function renderPlanning() {
   const posMap = {};
   positions.forEach(p => posMap[p.ticker] = p);
 
+  // Concentration Air Liquide
+  const _totalPF = positions.reduce((s,p) => s + p.marketValue, 0);
+  const aiPct = _totalPF > 0 ? ((posMap['AI.PA']?.marketValue ?? 0) / _totalPF * 100) : 0;
+  const aiLimited = aiPct >= 35;   // cap plan à 1 action max
+  const aiAlert30 = aiPct >= 30;   // alerte dès 30%
+
   const etfItems  = S.data.planItems.filter(p => p.active && p.isEtf !== false).sort((a,b)=>(a.priority||99)-(b.priority||99));
   const stockItems = S.data.planItems.filter(p => p.active && p.isEtf === false).sort((a,b)=>(a.priority||99)-(b.priority||99));
 
@@ -2589,7 +2595,8 @@ function renderPlanning() {
   // stockBudget = cash total (net + frais de courtage)
   const stockBudget  = stockItems.reduce((s,p) => {
     const price = S.data.priceCache[p.ticker]?.price ?? 0;
-    const shares = p.monthlyShares ?? 0;
+    const rawShares = p.monthlyShares ?? 0;
+    const shares = (aiLimited && p.ticker === 'AI.PA') ? Math.min(rawShares, 1) : rawShares;
     const netAmt = shares > 0 ? shares * price : (p.monthlyAmount || 0);
     const feeMul = 1 + (p.feePct ?? 0) / 100;
     return s + netAmt * feeMul;
@@ -2772,7 +2779,8 @@ function renderPlanning() {
   const stockPurchases = {};
   stockItems.forEach(si => {
     const price  = S.data.priceCache[si.ticker]?.price ?? 0;
-    const shares = si.monthlyShares ?? 0;
+    const rawSh = si.monthlyShares ?? 0;
+    const shares = (aiLimited && si.ticker === 'AI.PA') ? Math.min(rawSh, 1) : rawSh;
     const netAmt = shares > 0 ? shares * price : (si.monthlyAmount || 0);
     const feeMul = 1 + (si.feePct ?? 0) / 100;
     const cashAmt = netAmt * feeMul;
@@ -3030,6 +3038,8 @@ function renderPlanning() {
     <!-- TITRES DIRECTS SECTION -->
     <div class="card">
       <div class="section-title mb16">Titres directs — Nombre de parts mensuel</div>
+      ${aiLimited ? `<div class="info-box info-danger" style="margin-bottom:12px">🛑 <strong>Air Liquide représente ${aiPct.toFixed(1)}% du portefeuille (≥ 35%)</strong> — le plan d'achat est automatiquement limité à <strong>1 action maximum</strong> ce mois pour éviter une surconcentration.</div>` :
+        aiAlert30 ? `<div class="info-box info-warning" style="margin-bottom:12px">⚠️ <strong>Air Liquide représente ${aiPct.toFixed(1)}% du portefeuille (≥ 30%)</strong> — attention à la concentration. À partir de 35% le plan sera limité à 1 action/mois.</div>` : ''}
       ${stockItems.length ? `
         <!-- TABLE DESKTOP -->
         <div class="plan-desktop table-wrap"><table>
@@ -3038,7 +3048,8 @@ function renderPlanning() {
           </tr></thead>
           <tbody>${stockItems.map(item => {
             const price    = S.data.priceCache[item.ticker]?.price ?? null;
-            const shares   = item.monthlyShares ?? 0;
+            const rawShares = item.monthlyShares ?? 0;
+            const shares   = (aiLimited && item.ticker === 'AI.PA') ? Math.min(rawShares, 1) : rawShares;
             const feePct   = item.feePct ?? 0;
             const feeMul   = 1 + feePct / 100;
             const netAmt   = price && shares > 0 ? shares * price : null;
@@ -3077,7 +3088,8 @@ function renderPlanning() {
         <!-- CARDS MOBILE — Titres directs -->
         <div class="plan-mobile">${stockItems.map(item => {
           const price  = S.data.priceCache[item.ticker]?.price ?? null;
-          const shares = item.monthlyShares ?? 0;
+          const rawShares = item.monthlyShares ?? 0;
+          const shares = (aiLimited && item.ticker === 'AI.PA') ? Math.min(rawShares, 1) : rawShares;
           const feePct = item.feePct ?? 0;
           const feeMul = 1 + feePct / 100;
           const netAmt = price && shares > 0 ? shares * price : null;

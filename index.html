@@ -3270,6 +3270,63 @@ function renderPlanning() {
         </div>`).join('')}
       </div>
     </div>` : ''}
+
+    <!-- RÉCAPITULATIF ORDRES -->
+    ${(() => {
+      const etfOrders = etfResults.filter(r => r.parts > 0 && r.amount > 0).map(r => ({
+        ticker: r.ticker, name: r.name, parts: r.parts,
+        price: r.price, net: r.netInvestment, cash: r.amount, fee: r.feeAmt ?? 0, isEtf: true
+      }));
+      const stockOrders = stockItems.flatMap(item => {
+        const price     = S.data.priceCache[item.ticker]?.price ?? null;
+        const rawShares = item.monthlyShares ?? 0;
+        const shares    = (aiLimited && item.ticker === 'AI.PA') ? Math.min(rawShares, 1)
+                        : (item.ticker === 'WPEA.PA' && wpeaExtraShares > 0) ? rawShares + wpeaExtraShares
+                        : rawShares;
+        if (!price || shares <= 0) return [];
+        const feeMul = 1 + (item.feePct ?? 0) / 100;
+        const net = shares * price;
+        const cash = net * feeMul;
+        return [{ ticker: item.ticker, name: item.name, parts: shares, price, net, cash, fee: cash - net, isEtf: false }];
+      });
+      const allOrders = [...stockOrders, ...etfOrders];
+      if (!allOrders.length) return '';
+      const totalCash = allOrders.reduce((s, o) => s + o.cash, 0);
+      const rows = allOrders.map(o => `
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:8px 10px"><span class="chip">${esc(o.ticker)}</span></td>
+          <td style="padding:8px 10px;font-size:0.8rem;color:var(--text)">${esc(o.name)}</td>
+          <td style="padding:8px 10px;font-weight:700;text-align:right">${o.parts} part${o.parts>1?'s':''}</td>
+          <td style="padding:8px 10px;text-align:right;color:var(--muted);font-size:0.82rem">${o.price ? fc(o.price) : '—'}</td>
+          <td style="padding:8px 10px;text-align:right;font-size:0.78rem;color:var(--muted)">${o.fee > 0.005 ? '+'+fc(o.fee) : '—'}</td>
+          <td style="padding:8px 10px;text-align:right;font-weight:700;color:var(--accent)">${fc(o.cash)}</td>
+        </tr>`).join('');
+      const copyText = allOrders.map(o => `${o.ticker} — ${o.name} : ${o.parts} part${o.parts>1?'s':''} × ${o.price?fc(o.price):'?'} = ${fc(o.cash)}`).join('\n') + `\n\nTOTAL : ${fc(totalCash)}`;
+      return `
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:10px">
+          <div class="section-title" style="margin:0">📋 Ordres à passer</div>
+          <button class="btn btn-sm btn-secondary" onclick="navigator.clipboard.writeText(${JSON.stringify(copyText)}).then(()=>toast('Copié ✓','success'))" style="font-size:0.78rem;padding:5px 10px">📋 Copier</button>
+        </div>
+        <div class="table-wrap">
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr style="border-bottom:2px solid var(--border)">
+              <th style="padding:6px 10px;text-align:left;font-size:0.72rem;color:var(--muted)">Ticker</th>
+              <th style="padding:6px 10px;text-align:left;font-size:0.72rem;color:var(--muted)">Nom</th>
+              <th style="padding:6px 10px;text-align:right;font-size:0.72rem;color:var(--muted)">Qté</th>
+              <th style="padding:6px 10px;text-align:right;font-size:0.72rem;color:var(--muted)">Cours</th>
+              <th style="padding:6px 10px;text-align:right;font-size:0.72rem;color:var(--muted)">Frais</th>
+              <th style="padding:6px 10px;text-align:right;font-size:0.72rem;color:var(--muted)">Total</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+            <tfoot><tr style="border-top:2px solid var(--border)">
+              <td colspan="5" style="padding:9px 10px;font-weight:700;font-size:0.85rem">TOTAL</td>
+              <td style="padding:9px 10px;text-align:right;font-weight:700;font-size:1rem;color:var(--accent)">${fc(totalCash)}</td>
+            </tr></tfoot>
+          </table>
+        </div>
+      </div>`;
+    })()}
   `;
   requestAnimationFrame(() => makePlanChart(etfItems));
 }

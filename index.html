@@ -532,8 +532,8 @@
         </div>
         <div class="form-row">
           <div class="form-group">
-            <label>Achat minimum (€) <span style="color:var(--warning)">200€ min Boursobank (depuis avril 2026)</span></label>
-            <input type="number" name="minAmount" min="200" step="10" value="200">
+            <label>Achat minimum (€) <span style="color:var(--muted)">200€ min Boursobank conseillé</span></label>
+            <input type="number" name="minAmount" min="0" step="10" value="200">
           </div>
           <div class="form-group">
             <label>Frais de courtage (%) <span style="color:var(--muted)" id="fee-hint">ex: 0.5</span></label>
@@ -2657,7 +2657,7 @@ function renderPlanning() {
     const feePct     = item.feePct ?? 0;
     const feeOnIdeal = etfFeeAmt(idealBuy, feePct, item.ticker);
     const idealBuyCash = idealBuy + feeOnIdeal;                  // cash total à débourser
-    const minAmt     = Math.max(item.minAmount ?? 200, 200);     // minimum en cash — Boursobank: 200€ min
+    const minAmt     = item.minAmount ?? 200;                     // minimum en cash configurable par titre
     const price      = S.data.priceCache[item.ticker]?.price ?? null;
     let status, amount;
     if (idealBuy <= 0.01)             { status = 'overweight'; amount = 0; }
@@ -2684,7 +2684,7 @@ function renderPlanning() {
       etfResults = etfResults.map(r => {
         if (r.status !== 'ok') return r;
         const sc = r.amount * scale;
-        const na = sc < Math.max(r.minAmount ?? 200, 200) ? 0 : sc;
+        const na = sc < (r.minAmount ?? 200) ? 0 : sc;
         return { ...r, amount: na, status: na > 0 ? 'ok' : 'below-min' };
       });
     } else {
@@ -2693,7 +2693,7 @@ function renderPlanning() {
       etfResults = etfResults.map(r => {
         if (r.amount === 0) return r;
         const sc = r.amount * scale;
-        const na = sc < Math.max(r.minAmount ?? 200, 200) ? 0 : sc;
+        const na = sc < (r.minAmount ?? 200) ? 0 : sc;
         return { ...r, amount: na, status: na > 0 ? r.status : 'below-min' };
       });
     }
@@ -2749,7 +2749,7 @@ function renderPlanning() {
       const newDfCash = newDfNet > 0 ? newDfNet + etfFeeAmt(newDfNet, dfCur.feePct, dfCur.ticker) : 0;
       // Si montant résiduel < minimum → annuler entièrement l'achat df
       let finalDfNet = newDfNet, finalDfCash = newDfCash, actualTakeNet = takeNet;
-      if (newDfCash > 0 && newDfCash < Math.max(dfCur.minAmount ?? 200, 200)) {
+      if (newDfCash > 0 && newDfCash < (dfCur.minAmount ?? 200)) {
         actualTakeNet = dfCur.netInvestment; finalDfNet = 0; finalDfCash = 0;
       }
       etfResults[dfIdx] = { ...dfCur, amount: finalDfCash, netInvestment: finalDfNet,
@@ -2773,7 +2773,7 @@ function renderPlanning() {
   // Si floor donne un montant cash < 200€ min, on incrémente les parts jusqu'à atteindre le min
   etfResults = etfResults.map(r => {
     if (!r.price || !r.parts) return r;
-    const minAmt = Math.max(r.minAmount ?? 200, 200);
+    const minAmt = r.minAmount ?? 200;
     const cashForParts = (n) => {
       const net = n * r.price;
       return net + etfFeeAmt(net, r.feePct, r.ticker);

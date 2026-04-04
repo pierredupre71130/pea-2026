@@ -539,6 +539,10 @@
             <label>Frais de courtage (%) <span style="color:var(--muted)" id="fee-hint">ex: 0.5</span></label>
             <input type="number" id="plan-fee-input" name="feePct" min="0" max="5" step="0.01" value="0.6" placeholder="0.6">
           </div>
+          <div class="form-group" id="plan-yield-group">
+            <label>Rendement dividende annuel (%) <span style="color:var(--muted)">ex: 2.8</span></label>
+            <input type="number" name="yieldPct" min="0" max="20" step="0.1" value="0" placeholder="0">
+          </div>
         </div>
         <div class="form-group">
           <label>Notes <span style="color:var(--muted)">(optionnel)</span></label>
@@ -1245,6 +1249,8 @@ function openPlanModal() {
     positions.map(p => `<option value="${esc(p.ticker)}|${esc(p.name)}">${p.ticker} — ${esc(p.name)}</option>`).join('');
   document.getElementById('plan-etf-fields').style.display = '';
   document.getElementById('plan-stock-fields').style.display = 'none';
+  const yieldGroup = document.getElementById('plan-yield-group');
+  if (yieldGroup) { yieldGroup.style.display = 'none'; f.querySelector('[name=yieldPct]').value = 0; }
   f.querySelector('[name=minAmount]').value = 200;
   openModal('modal-plan');
 }
@@ -1319,6 +1325,8 @@ function togglePlanType() {
   const isEtf = document.querySelector('#form-plan [name=isEtf]:checked')?.value !== 'false';
   document.getElementById('plan-etf-fields').style.display   = isEtf ? '' : 'none';
   document.getElementById('plan-stock-fields').style.display = isEtf ? 'none' : '';
+  const yieldGroup = document.getElementById('plan-yield-group');
+  if (yieldGroup) yieldGroup.style.display = isEtf ? 'none' : '';
   // Défauts frais : ETF 0.6% Boursobank (courtage), Actions 0.9% (courtage + TTF)
   const feeInp = document.getElementById('plan-fee-input');
   const hint   = document.getElementById('fee-hint');
@@ -5660,7 +5668,8 @@ function handlePlan(e) {
     feePct: parseFloat(fd.get('feePct')) || 0,
     priority: S.data.planItems.length + 1,
     active: true,
-    notes: fd.get('notes') || ''
+    notes: fd.get('notes') || '',
+    yieldPct: !isEtf ? (parseFloat(fd.get('yieldPct')) || 0) : 0
   };
   if (isEtf && item.allocationPct <= 0) { toast('Pourcentage cible invalide', 'error'); return; }
   if (!isEtf && item.monthlyShares <= 0) { toast('Nombre de parts invalide', 'error'); return; }
@@ -7255,7 +7264,14 @@ function runSimulation({ months, annualReturn, budget, startFromCurrent, aiLoyal
     // 1. Versement mensuel (limité au plafond PEA) — dividendes ne comptent pas dans le plafond
     const actualDeposit = Math.min(budget, Math.max(0, PEA_MAX - totalDeposited));
     totalDeposited += actualDeposit;
-    const availableCash = actualDeposit + bonusCash;
+    // Dividendes AI.PA lissés mensuellement (yieldPct configuré par l'utilisateur)
+    let aiDividendCash = 0;
+    const _aiSimPos = positions['AI.PA'];
+    const _aiSimItem = stockItems.find(si => si.ticker === 'AI.PA');
+    if (_aiSimPos && (_aiSimItem?.yieldPct ?? 0) > 0) {
+      aiDividendCash = _aiSimPos.quantity * _aiSimPos.price * (_aiSimItem.yieldPct / 100 / 12);
+    }
+    const availableCash = actualDeposit + bonusCash + aiDividendCash;
 
     // 2. Achats actions fixes — seulement si du cash est disponible
     let stockCost = 0;

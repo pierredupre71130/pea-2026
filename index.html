@@ -7208,6 +7208,7 @@ function runSimulation({ months, annualReturn, budget, startFromCurrent, aiLoyal
   const etfItems   = S.data.planItems.filter(p => p.active && p.isEtf !== false);
   const stockItems = S.data.planItems.filter(p => p.active && p.isEtf === false);
   const totalEtfPct = etfItems.reduce((s, p) => s + (p.allocationPct || 0), 0);
+  const aiSimLimitPct = S.data.settings.aiLimitPct ?? 35;
 
   const positions = {};  // ticker → { quantity, price, name, isEtf, feePct }
   let totalDeposited = 0;
@@ -7273,12 +7274,18 @@ function runSimulation({ months, annualReturn, budget, startFromCurrent, aiLoyal
     }
     const availableCash = actualDeposit + bonusCash + aiDividendCash;
 
-    // 2. Achats actions fixes — seulement si du cash est disponible
+    // 2. Achats actions fixes — cap AI.PA si ≥ aiSimLimitPct% du PF
     let stockCost = 0;
     if (availableCash > 0) {
+      const totalPFVal = getVal();  // valeur avant achats ce mois
       stockItems.forEach(item => {
         const p = positions[item.ticker];
         if (!p || !(item.monthlyShares > 0)) return;
+        // Cap AI.PA : skip si déjà ≥ aiSimLimitPct% du PF → cash libéré va aux ETFs
+        if (item.ticker === 'AI.PA' && totalPFVal > 0) {
+          const aiPct = (p.quantity * p.price) / totalPFVal * 100;
+          if (aiPct >= aiSimLimitPct) return;
+        }
         const feeMul = 1 + (p.feePct || 0) / 100;
         const cost = item.monthlyShares * p.price * feeMul;
         if (stockCost + cost <= availableCash) {

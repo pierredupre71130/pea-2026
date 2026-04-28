@@ -2294,6 +2294,62 @@ function renderPortfolio() {
   const total = positions.reduce((s,p)=>s+p.marketValue,0);
   const lastUpd = getLastUpdate(positions);
 
+  // Séparer ETFs et titres directs via planItems
+  const posWithType = positions.map(p => {
+    const plan = S.data.planItems.find(pl => pl.ticker === p.ticker);
+    return { ...p, isEtf: plan ? plan.isEtf !== false : true };
+  });
+  const etfPos   = posWithType.filter(p => p.isEtf);
+  const stockPos = posWithType.filter(p => !p.isEtf);
+  const totalEtf   = etfPos.reduce((s,p)=>s+p.marketValue,0);
+  const totalStock = stockPos.reduce((s,p)=>s+p.marketValue,0);
+
+  const renderRow = (p, bucketTotal) => {
+    const wPF  = total > 0 ? p.marketValue/total*100 : 0;
+    const wBkt = bucketTotal > 0 ? p.marketValue/bucketTotal*100 : 0;
+    return `<tr>
+      <td><span class="chip">${esc(p.ticker)}</span></td>
+      <td>${esc(p.name)}</td>
+      <td>${fn(p.quantity)}</td>
+      <td>
+        <span onclick="openPruModal('${esc(p.ticker)}',${p.computedAvgPrice},${p.avgPrice})" title="Cliquer pour ajuster le PRU" style="cursor:pointer;border-bottom:1px dashed var(--muted)">
+          ${fc(p.avgPrice)}${p.pruManual ? ' <span style="font-size:0.68rem;color:var(--accent);font-weight:700" title="PRU manuel actif">M</span>' : ''}
+        </span>
+      </td>
+      <td>
+        <span onclick="openPriceModal('${esc(p.ticker)}')" title="Cliquer pour saisir un cours manuel" style="cursor:pointer;border-bottom:1px dashed var(--muted)">
+          ${p.currentPrice!==null ? `<strong>${fc(p.currentPrice)}</strong>` : '<span class="neutral" style="font-size:0.75rem">Saisir</span>'}
+          ${S.data.priceCache[p.ticker]?.manual ? ' <span style="font-size:0.68rem;color:var(--warning);font-weight:700" title="Cours manuel actif">M</span>' : S.data.priceCache[p.ticker]?.source==='boursorama' ? ' <span style="font-size:0.65rem;color:var(--muted)" title="Source : Boursorama (fallback Yahoo Finance)">B</span>' : ''}
+        </span>
+      </td>
+      <td class="${p.changePercent!==null && !S.data.priceCache[p.ticker]?.manual ?sign(p.changePercent):'neutral'}">${p.changePercent!==null && !S.data.priceCache[p.ticker]?.manual ?fp(p.changePercent):'—'}</td>
+      <td><strong>${fc(p.marketValue)}</strong></td>
+      <td class="${p.pnl!==null?sign(p.pnl):'neutral'}">${p.pnl!==null?fc(p.pnl):'—'}</td>
+      <td class="${p.pnlPct!==null?sign(p.pnlPct):'neutral'}">${p.pnlPct!==null?fp(p.pnlPct):'—'}</td>
+      <td>
+        <div style="display:flex;flex-direction:column;gap:2px">
+          <div style="display:flex;align-items:center;gap:5px">
+            <span style="font-size:0.78rem;font-weight:600">${wPF.toFixed(1)}%</span>
+            <span style="font-size:0.65rem;color:var(--muted)">PF</span>
+            <div class="progress" style="width:36px"><div class="progress-fill" style="width:${wPF}%;background:var(--accent)"></div></div>
+          </div>
+          ${bucketTotal !== total ? `<div style="font-size:0.65rem;color:var(--muted)">${wBkt.toFixed(1)}% du bucket</div>` : ''}
+        </div>
+      </td>
+      <td style="white-space:nowrap">
+        <button class="btn-icon" id="refresh-${esc(p.ticker)}" onclick="doRefreshOne('${esc(p.ticker)}')" title="Actualiser le cours">⟳</button>
+        <button class="btn-icon" onclick="openAlertModal('${esc(p.ticker)}')" title="Configurer une alerte de cours" style="color:${(S.data.alerts||{})[p.ticker]?.high||(S.data.alerts||{})[p.ticker]?.low?'var(--warning)':'var(--muted)'}">🔔</button>
+        <button class="btn-icon" onclick="editPosition('${esc(p.ticker)}')" title="Voir/modifier les transactions">✏️</button>
+        <button class="btn-icon" onclick="delPosition('${esc(p.ticker)}')" title="Supprimer la position">🗑</button>
+      </td>
+    </tr>`;
+  };
+
+  const tableHead = `<thead><tr>
+    <th>Ticker</th><th>Nom</th><th>Quantité</th><th>Prix moy.</th>
+    <th>Cours actuel</th><th>Variation</th><th>Valeur</th><th>P&amp;L €</th><th>P&amp;L %</th><th>Poids</th><th style="width:72px"></th>
+  </tr></thead>`;
+
   document.getElementById('page-portfolio').innerHTML = `
     <div class="page-header">
       <div>
@@ -2306,50 +2362,39 @@ function renderPortfolio() {
       </div>
     </div>
     ${positions.length ? `
-      <div class="card">
-        <div class="table-wrap"><table>
-          <thead><tr>
-            <th>Ticker</th><th>Nom</th><th>Quantité</th><th>Prix moy.</th>
-            <th>Cours actuel</th><th>Variation</th><th>Valeur</th><th>P&amp;L €</th><th>P&amp;L %</th><th>Poids</th><th style="width:72px"></th>
-          </tr></thead>
-          <tbody>${positions.map(p => {
-            const w = total > 0 ? (p.marketValue/total*100) : 0;
-            return `<tr>
-              <td><span class="chip">${esc(p.ticker)}</span></td>
-              <td>${esc(p.name)}</td>
-              <td>${fn(p.quantity)}</td>
-              <td>
-                <span onclick="openPruModal('${esc(p.ticker)}',${p.computedAvgPrice},${p.avgPrice})" title="Cliquer pour ajuster le PRU" style="cursor:pointer;border-bottom:1px dashed var(--muted)">
-                  ${fc(p.avgPrice)}${p.pruManual ? ' <span style="font-size:0.68rem;color:var(--accent);font-weight:700" title="PRU manuel actif">M</span>' : ''}
-                </span>
-              </td>
-              <td>
-                <span onclick="openPriceModal('${esc(p.ticker)}')" title="Cliquer pour saisir un cours manuel" style="cursor:pointer;border-bottom:1px dashed var(--muted)">
-                  ${p.currentPrice!==null ? `<strong>${fc(p.currentPrice)}</strong>` : '<span class="neutral" style="font-size:0.75rem">Saisir</span>'}
-                  ${S.data.priceCache[p.ticker]?.manual ? ' <span style="font-size:0.68rem;color:var(--warning);font-weight:700" title="Cours manuel actif">M</span>' : S.data.priceCache[p.ticker]?.source==='boursorama' ? ' <span style="font-size:0.65rem;color:var(--muted)" title="Source : Boursorama (fallback Yahoo Finance)">B</span>' : ''}
-                </span>
-              </td>
-              <td class="${p.changePercent!==null && !S.data.priceCache[p.ticker]?.manual ?sign(p.changePercent):'neutral'}">${p.changePercent!==null && !S.data.priceCache[p.ticker]?.manual ?fp(p.changePercent):'—'}</td>
-              <td><strong>${fc(p.marketValue)}</strong></td>
-              <td class="${p.pnl!==null?sign(p.pnl):'neutral'}">${p.pnl!==null?fc(p.pnl):'—'}</td>
-              <td class="${p.pnlPct!==null?sign(p.pnlPct):'neutral'}">${p.pnlPct!==null?fp(p.pnlPct):'—'}</td>
-              <td>
-                <div style="display:flex;align-items:center;gap:6px">
-                  <span>${w.toFixed(1)}%</span>
-                  <div class="progress" style="width:44px"><div class="progress-fill" style="width:${w}%;background:var(--accent)"></div></div>
-                </div>
-              </td>
-              <td style="white-space:nowrap">
-                <button class="btn-icon" id="refresh-${esc(p.ticker)}" onclick="doRefreshOne('${esc(p.ticker)}')" title="Actualiser le cours">⟳</button>
-                <button class="btn-icon" onclick="openAlertModal('${esc(p.ticker)}')" title="Configurer une alerte de cours" style="color:${(S.data.alerts||{})[p.ticker]?.high||(S.data.alerts||{})[p.ticker]?.low?'var(--warning)':'var(--muted)'}">🔔</button>
-                <button class="btn-icon" onclick="editPosition('${esc(p.ticker)}')" title="Voir/modifier les transactions">✏️</button>
-                <button class="btn-icon" onclick="delPosition('${esc(p.ticker)}')" title="Supprimer la position">🗑</button>
-              </td>
-            </tr>`;
-          }).join('')}</tbody>
+      <!-- Répartition ETF / Titres directs -->
+      ${(totalEtf > 0 || totalStock > 0) ? `
+      <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+        ${totalEtf > 0 ? `<div style="flex:1;min-width:140px;background:var(--surface2);border-radius:8px;padding:10px 14px;border-left:3px solid var(--accent)">
+          <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;margin-bottom:3px">ETFs</div>
+          <div style="font-size:1rem;font-weight:700">${fc(totalEtf)}</div>
+          <div style="font-size:0.72rem;color:var(--muted)">${total>0?(totalEtf/total*100).toFixed(1):0}% du portefeuille · ${etfPos.length} ligne${etfPos.length!==1?'s':''}</div>
+        </div>` : ''}
+        ${totalStock > 0 ? `<div style="flex:1;min-width:140px;background:var(--surface2);border-radius:8px;padding:10px 14px;border-left:3px solid var(--warning)">
+          <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;margin-bottom:3px">Titres directs</div>
+          <div style="font-size:1rem;font-weight:700">${fc(totalStock)}</div>
+          <div style="font-size:0.72rem;color:var(--muted)">${total>0?(totalStock/total*100).toFixed(1):0}% du portefeuille · ${stockPos.length} ligne${stockPos.length!==1?'s':''}</div>
+        </div>` : ''}
+      </div>` : ''}
+
+      <!-- TABLE ETFs -->
+      ${etfPos.length ? `<div class="card" style="margin-bottom:12px">
+        <div style="font-size:0.72rem;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px">ETFs — ${fc(totalEtf)} (${total>0?(totalEtf/total*100).toFixed(1):0}% du PF)</div>
+        <div class="table-wrap"><table>${tableHead}
+          <tbody>${etfPos.map(p => renderRow(p, totalEtf)).join('')}</tbody>
         </table></div>
-        <div style="margin-top:10px;font-size:0.72rem;color:var(--muted)">⏱ Cache des cours valide 15 min. Cliquez sur "Actualiser les cours" pour forcer la mise à jour.</div>
-      </div>
+      </div>` : ''}
+
+      <!-- TABLE Titres directs -->
+      ${stockPos.length ? `<div class="card" style="margin-bottom:12px">
+        <div style="font-size:0.72rem;font-weight:700;color:var(--warning);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px">Titres directs — ${fc(totalStock)} (${total>0?(totalStock/total*100).toFixed(1):0}% du PF)</div>
+        <div class="table-wrap"><table>${tableHead}
+          <tbody>${stockPos.map(p => renderRow(p, totalStock)).join('')}</tbody>
+        </table></div>
+        <div style="margin-top:8px;font-size:0.72rem;color:var(--muted)">% bucket = part dans les titres directs uniquement</div>
+      </div>` : ''}
+
+      <div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px">⏱ Cache des cours valide 15 min. Cliquez sur "Actualiser les cours" pour forcer la mise à jour.</div>
     ` : `
       <div class="card"><div class="empty">
         <div class="ico">💼</div>

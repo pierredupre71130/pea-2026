@@ -4203,17 +4203,30 @@ function buildPortfolioContext(mode = 'full') {
     : [];
   const today = new Date().toLocaleDateString('fr-FR');
 
+  const etfPlan = plan.filter(p => p.isEtf !== false);
+  const stockPlan = plan.filter(p => p.isEtf === false);
+  const totalEtfPct = etfPlan.reduce((s, p) => s + (p.allocationPct || 0), 0);
+
+  // Classifier les positions pour les % bucket corrects
+  const etfTickers   = new Set(etfPlan.map(p => p.ticker));
+  const stockTickers = new Set(stockPlan.map(p => p.ticker));
+  const totalEtfVal   = positions.filter(p => etfTickers.has(p.ticker) || (!stockTickers.has(p.ticker) && !stockPlan.find(sp=>sp.ticker===p.ticker))).reduce((s,p)=>s+p.marketValue,0);
+  const totalStockVal = positions.filter(p => stockTickers.has(p.ticker)).reduce((s,p)=>s+p.marketValue,0);
+  // Recalcul propre : ETF = tout ce qui n'est pas dans stockPlan
+  const etfPosVal   = positions.filter(p => !stockTickers.has(p.ticker)).reduce((s,p)=>s+p.marketValue,0);
+  const stockPosVal = positions.filter(p =>  stockTickers.has(p.ticker)).reduce((s,p)=>s+p.marketValue,0);
+
   const posLines = positions.map(p => {
     const cache = S.data.priceCache[p.ticker];
     const prix = cache?.price ? fc(cache.price) : 'N/A';
     const var1j = cache?.changePercent != null ? fp(cache.changePercent) : 'N/A';
-    const poids = portValue > 0 ? (p.marketValue / portValue * 100).toFixed(1) : '0';
-    return `• ${p.ticker} (${p.name})\n  Parts: ${fn(p.quantity,4)} | PRU: ${fc(p.avgPrice)} | Cours actuel: ${prix} (${var1j} aujourd'hui) | Valeur: ${fc(p.marketValue)} (${poids}% du PF) | P&L: ${p.pnl!==null?fc(p.pnl):'N/A'} (${p.pnlPct!==null?fp(p.pnlPct):'N/A'})`;
+    const isStock = stockTickers.has(p.ticker);
+    const poidsPF = portValue > 0 ? (p.marketValue / portValue * 100).toFixed(1) : '0';
+    const bktVal  = isStock ? stockPosVal : etfPosVal;
+    const poidsBkt = bktVal > 0 ? (p.marketValue / bktVal * 100).toFixed(1) : '0';
+    const bktLabel = isStock ? '% bucket titres directs' : '% bucket ETF';
+    return `• ${p.ticker} (${p.name}) [${isStock ? 'TITRE DIRECT' : 'ETF'}]\n  Parts: ${fn(p.quantity,4)} | PRU: ${fc(p.avgPrice)} | Cours actuel: ${prix} (${var1j} aujourd'hui) | Valeur: ${fc(p.marketValue)} | % PF total: ${poidsPF}% | ${bktLabel}: ${poidsBkt}% | P&L: ${p.pnl!==null?fc(p.pnl):'N/A'} (${p.pnlPct!==null?fp(p.pnlPct):'N/A'})`;
   }).join('\n') || '• Aucune position';
-
-  const etfPlan = plan.filter(p => p.isEtf !== false);
-  const stockPlan = plan.filter(p => p.isEtf === false);
-  const totalEtfPct = etfPlan.reduce((s, p) => s + (p.allocationPct || 0), 0);
 
   const etfPlanLines = etfPlan.map(p => {
     const cache = S.data.priceCache[p.ticker];
@@ -4239,12 +4252,17 @@ RÉSUMÉ FINANCIER:
 • Plafond PEA utilisé: ${fc(deposited)} / 150 000 € (${(deposited/PEA_MAX*100).toFixed(1)}%)
 • Budget mensuel d'investissement: ${fc(S.data.settings.monthlyBudget)}
 
+RÉPARTITION DU PORTEFEUILLE (IMPORTANT POUR LES CALCULS DE %):
+• Bucket ETF : ${fc(etfPosVal)} = ${portValue>0?(etfPosVal/portValue*100).toFixed(1):0}% du PF total
+• Bucket Titres directs : ${fc(stockPosVal)} = ${portValue>0?(stockPosVal/portValue*100).toFixed(1):0}% du PF total
+⚠️ RÈGLE CRITIQUE: Les cibles d'allocation des ETFs (ex: "55% cible") s'expriment en % du BUCKET ETF uniquement (${fc(etfPosVal)}), PAS en % du portefeuille total. Pour comparer la pondération actuelle d'un ETF à sa cible, utiliser "% bucket ETF" fourni dans chaque position, pas "% PF total".
+
 POSITIONS EN PORTEFEUILLE (${positions.length}):
 ${posLines}
 
 STRATÉGIE D'INVESTISSEMENT MENSUEL:
 
-[ETFs — allocation pilotée par % cible du bucket ETF]
+[ETFs — allocation pilotée par % cible du bucket ETF (= ${fc(etfPosVal)}, ${portValue>0?(etfPosVal/portValue*100).toFixed(1):0}% du PF)]
 ${etfPlanLines}
 
 [Titres directs — achats en nombre de parts fixe, SANS cible de pourcentage]

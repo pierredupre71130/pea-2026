@@ -8882,6 +8882,9 @@ function getCaps() {
 
 function renderCapitaux() {
   const caps = getCaps();
+  // La valeur PEA est toujours synchronisée depuis le portefeuille calculé
+  const peaCap = caps.find(c => c.key === 'pea');
+  if (peaCap) peaCap.amount = computeSummary().portValue || 0;
   const total = caps.reduce((s, c) => s + (c.amount || 0), 0);
 
   const barHtml = total > 0
@@ -8929,6 +8932,10 @@ function renderCapitaux() {
       ? `<button class="btn btn-sm ${c.paused ? 'btn-secondary' : 'btn-primary'}" onclick="togglePerPause('${c.key}')" title="${c.paused ? 'Reprendre' : 'Mettre en pause'}">${c.paused ? '▶' : '⏸'}</button>`
       : '';
 
+    const actionBtn = c.key === 'pea'
+      ? `<span style="font-size:0.72rem;color:var(--muted);padding:3px 8px;border:1px solid var(--border);border-radius:6px">🔄 Auto</span>`
+      : `<button class="btn btn-sm btn-secondary" onclick="openCapitalEdit('${c.key}')">✏️ Modifier</button>`;
+
     return `
       <div class="card" style="border-top:3px solid ${c.color}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
@@ -8938,7 +8945,7 @@ function renderCapitaux() {
           </div>
           <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
             ${pauseBtn}
-            <button class="btn btn-sm btn-secondary" onclick="openCapitalEdit('${c.key}')">✏️ Modifier</button>
+            ${actionBtn}
           </div>
         </div>
         <div class="stat-val" style="margin:10px 0 4px">${fc(c.amount || 0)}</div>

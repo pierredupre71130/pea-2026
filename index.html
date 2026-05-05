@@ -8147,8 +8147,8 @@ function saveBudgetCard(e) {
 // ======================================================
 // ROUTER
 // ======================================================
-const PAGE_TITLES = { dashboard:'Dashboard', portfolio:'Portefeuille', transactions:'Transactions', treasury:'Trésorerie', budget:'Budget', planning:'Planning', simulation:'Simulation', performance:'Performance', technical:'Technique', news:'Actualités', ai:'IA Claude', settings:'Paramètres' };
-const MORE_PAGES = new Set(['transactions','treasury','budget','simulation','performance','technical','news','settings']);
+const PAGE_TITLES = { dashboard:'Dashboard', portfolio:'Portefeuille', transactions:'Transactions', treasury:'Trésorerie', budget:'Budget', planning:'Planning', simulation:'Simulation', performance:'Performance', technical:'Technique', news:'Actualités', ai:'IA Claude', settings:'Paramètres', capitaux:'Capitaux' };
+const MORE_PAGES = new Set(['transactions','treasury','budget','capitaux','simulation','performance','technical','news','settings']);
 
 function navigate(page) {
   S.page = page;
@@ -8882,9 +8882,10 @@ function getCaps() {
 
 function renderCapitaux() {
   const caps = getCaps();
-  // La valeur PEA est toujours synchronisée depuis le portefeuille calculé
+  // Si des positions sont suivies dans l'app, on prend la valeur calculée du portefeuille
+  const { portValue, positions } = computeSummary();
   const peaCap = caps.find(c => c.key === 'pea');
-  if (peaCap) peaCap.amount = computeSummary().portValue || 0;
+  if (peaCap && positions.length > 0) peaCap.amount = portValue;
   const total = caps.reduce((s, c) => s + (c.amount || 0), 0);
 
   const barHtml = total > 0
@@ -8932,8 +8933,9 @@ function renderCapitaux() {
       ? `<button class="btn btn-sm ${c.paused ? 'btn-secondary' : 'btn-primary'}" onclick="togglePerPause('${c.key}')" title="${c.paused ? 'Reprendre' : 'Mettre en pause'}">${c.paused ? '▶' : '⏸'}</button>`
       : '';
 
-    const actionBtn = c.key === 'pea'
-      ? `<span style="font-size:0.72rem;color:var(--muted);padding:3px 8px;border:1px solid var(--border);border-radius:6px">🔄 Auto</span>`
+    const peaIsAuto = c.key === 'pea' && computeSummary().positions.length > 0;
+    const actionBtn = peaIsAuto
+      ? `<span style="font-size:0.72rem;color:var(--muted);padding:3px 8px;border:1px solid var(--border);border-radius:6px" title="Calculé depuis le portefeuille">🔄 Auto</span>`
       : `<button class="btn btn-sm btn-secondary" onclick="openCapitalEdit('${c.key}')">✏️ Modifier</button>`;
 
     return `

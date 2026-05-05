@@ -9048,58 +9048,84 @@ function renderCapitaux() {
       </div>`;
   }).join('');
 
-  // Bloc simulation rente — 3 scénarios
+  // Bloc simulation rente — 3 scénarios avec/sans revalorisation
   const perCaps = caps.filter(c => c.isPER);
   const hasAnyRente = perCaps.some(c => (c.rentePointValue || 0) > 0 && (c.rentePoints || 0) > 0);
+  const revalRate = (S.data.capitals?.renteRevalRate ?? 1.5);
 
   const SCENARIOS = [
-    { year: 2044, age: '59 ans',       label: 'Départ anticipé',     sub: 'Catégorie active (sans décote si trimestres suffisants)', highlight: false },
-    { year: 2049, age: '64 ans 4 mois', label: 'Taux plein',          sub: '1er mai 2049 · trimestres requis atteints',              highlight: true  },
-    { year: 2052, age: '67 ans',        label: 'Taux plein automatique', sub: '1er janvier 2052 · sans condition de trimestres',     highlight: false },
+    { year: 2044, age: '59 ans',        label: 'Départ anticipé',        sub: 'Catégorie active · si trimestres suffisants', highlight: false },
+    { year: 2049, age: '64 ans 4 mois', label: 'Taux plein',             sub: '1er mai 2049 · trimestres requis atteints',  highlight: true  },
+    { year: 2052, age: '67 ans',         label: 'Taux plein automatique', sub: '1er janvier 2052 · sans condition',          highlight: false },
   ];
 
-  const currentRente = perCaps.reduce((s, c) => s + (computeRente(c).currentRente), 0);
+  const currentRente = perCaps.reduce((s, c) => s + computeRente(c).currentRente, 0);
 
   const scenarioRows = SCENARIOS.map(sc => {
-    const total = perCaps.reduce((s, c) => s + computeRente(c, sc.year).annualRente, 0);
-    const detail = perCaps.map(c => {
-      const r = computeRente(c, sc.year);
-      return `<div style="font-size:0.72rem;color:var(--muted)">${c.label.replace(/^[^\s]+\s/,'')} : ${fc(r.annualRente/12,0)}/mois (${Math.round(r.totalPoints)} pts)</div>`;
-    }).join('');
     const yearsLeft = Math.max(0, sc.year - new Date().getFullYear());
+    const totalBase  = perCaps.reduce((s, c) => s + computeRente(c, sc.year, 0).annualRente, 0);
+    const totalReval = perCaps.reduce((s, c) => s + computeRente(c, sc.year, revalRate).annualRenteRevalo, 0);
+    const showReval  = revalRate > 0;
+    const detail = perCaps.map(c => {
+      const rBase  = computeRente(c, sc.year, 0);
+      const rReval = computeRente(c, sc.year, revalRate);
+      const name   = c.label.replace(/^[^\s]+\s/, '');
+      return `<div style="font-size:0.72rem;color:var(--muted);display:flex;justify-content:space-between;gap:8px">
+        <span>${name} (${Math.round(rBase.totalPoints)} pts)</span>
+        <span>
+          <span style="color:var(--fg)">${fc(rBase.annualRente/12,0)}/mois</span>
+          ${showReval ? `<span style="color:#a855f7"> → ${fc(rReval.annualRenteRevalo/12,0)}/mois</span>` : ''}
+        </span>
+      </div>`;
+    }).join('');
     return `
       <div style="padding:12px;border-radius:10px;background:${sc.highlight ? 'rgba(168,85,247,0.08)' : 'rgba(255,255,255,0.03)'};border:1px solid ${sc.highlight ? 'rgba(168,85,247,0.25)' : 'var(--border)'}">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px">
           <div>
-            <div style="font-size:0.82rem;font-weight:600;color:${sc.highlight ? '#a855f7' : 'var(--fg)'}">${sc.label} <span style="font-size:0.75rem;font-weight:400;color:var(--muted)">${sc.age}</span></div>
-            <div style="font-size:0.71rem;color:var(--muted);margin-top:1px">${sc.sub}</div>
+            <div style="font-size:0.84rem;font-weight:600;color:${sc.highlight ? '#a855f7' : 'var(--fg)'}">${sc.label} <span style="font-size:0.75rem;font-weight:400;color:var(--muted)">${sc.age}</span></div>
+            <div style="font-size:0.71rem;color:var(--muted);margin-top:1px">${sc.sub} · dans ${yearsLeft} ans</div>
           </div>
           <div style="text-align:right;flex-shrink:0">
-            <div style="font-size:1.1rem;font-weight:700;color:${sc.highlight ? '#a855f7' : 'var(--fg)'}">${fc(total/12,0)}<span style="font-size:0.72rem;font-weight:400;color:var(--muted)">/mois</span></div>
-            <div style="font-size:0.72rem;color:var(--muted)">${fc(total,0)}/an · dans ${yearsLeft} ans</div>
+            <div style="font-size:0.72rem;color:var(--muted)">Sans revalo</div>
+            <div style="font-size:1.05rem;font-weight:700;color:var(--fg)">${fc(totalBase/12,0)}<span style="font-size:0.7rem;font-weight:400;color:var(--muted)">/mois</span></div>
+            ${showReval ? `
+            <div style="font-size:0.72rem;color:var(--muted);margin-top:4px">Avec +${revalRate}%/an</div>
+            <div style="font-size:1.05rem;font-weight:700;color:#a855f7">${fc(totalReval/12,0)}<span style="font-size:0.7rem;font-weight:400;color:var(--muted)">/mois</span></div>` : ''}
           </div>
         </div>
-        <div style="padding-top:6px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:2px">${detail}</div>
+        <div style="padding-top:6px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:3px">${detail}</div>
       </div>`;
   }).join('');
 
   const renteSimHtml = hasAnyRente ? `
     <div class="card mb16" style="border-left:3px solid #a855f7">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
         <div>
           <div class="section-title" style="margin-bottom:2px">📊 Simulation des rentes PER</div>
           <div style="font-size:0.78rem;color:var(--muted)">Né le 01/01/1985 · Infirmier hospitalier public · Catégorie active</div>
         </div>
         <div style="text-align:right">
-          <div style="font-size:0.72rem;color:var(--muted)">Rente actuelle</div>
+          <div style="font-size:0.72rem;color:var(--muted)">Rente actuelle cumulée</div>
           <div style="font-size:1.1rem;font-weight:700;color:var(--fg)">${fc(currentRente/12,0)}<span style="font-size:0.72rem;color:var(--muted)">/mois</span></div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:rgba(168,85,247,0.06);border-radius:8px;border:1px solid rgba(168,85,247,0.15);margin-bottom:12px;flex-wrap:wrap">
+        <div style="flex:1;min-width:180px">
+          <div style="font-size:0.78rem;font-weight:600;color:var(--fg)">Revalorisation annuelle estimée du point</div>
+          <div style="font-size:0.71rem;color:var(--muted)">Historique CGOS / Préfon : ~1 à 2 %/an. Hypothèse conservative recommandée : 1,5 %.</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+          <input type="range" min="0" max="4" step="0.5" value="${revalRate}"
+            oninput="this.nextElementSibling.textContent=this.value+'%';setRenteRevalRate(this.value)"
+            style="width:110px;accent-color:#a855f7">
+          <span style="font-size:0.9rem;font-weight:700;color:#a855f7;min-width:38px">${revalRate}%</span>
         </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
         ${scenarioRows}
       </div>
       <div style="font-size:0.71rem;color:var(--muted);font-style:italic;opacity:0.8">
-        Estimation brute · valeur du point non revalorisée · sans fonds de solidarité · hors prélèvements sociaux et fiscaux.
+        Sans fonds de solidarité · hors prélèvements sociaux et fiscaux · revalorisation hypothétique non garantie.
       </div>
     </div>` : '';
 
@@ -9166,7 +9192,7 @@ function saveCapitalEdit(e) {
   toast('Capital mis à jour ✓');
 }
 
-function computeRente(cap, overrideYear = null) {
+function computeRente(cap, overrideYear = null, revalRate = 0) {
   const points      = cap.rentePoints || 0;
   const pointValue  = cap.rentePointValue || 0;
   const contribs    = cap.renteTotalContribs || 0;
@@ -9175,18 +9201,26 @@ function computeRente(cap, overrideYear = null) {
   const currentYear = new Date().getFullYear();
   const yearsLeft   = Math.max(0, retireYear - currentYear);
 
-  // Taux d'acquisition : points par euro cotisé (calculé sur l'historique)
-  const ptsPerEuro = contribs > 0 ? points / contribs : 0;
-
-  // Points projetés futurs (cotisations mensuelles × taux × 12 × années restantes)
+  const ptsPerEuro   = contribs > 0 ? points / contribs : 0;
   const futurePoints = ptsPerEuro > 0 ? monthly * ptsPerEuro * 12 * yearsLeft : 0;
   const totalPoints  = points + futurePoints;
 
-  // Rente annuelle estimée à la retraite (valeur du point actuelle, non projetée)
-  const annualRente  = totalPoints * pointValue;
-  const currentRente = points * pointValue; // rente si conversion aujourd'hui
+  // Valeur du point sans et avec revalorisation
+  const revFactor          = Math.pow(1 + revalRate / 100, yearsLeft);
+  const projectedPointValue = pointValue * revFactor;
 
-  return { points, futurePoints, totalPoints, ptsPerEuro, annualRente, currentRente, yearsLeft, retireYear };
+  const annualRente         = totalPoints * pointValue;          // sans revalo
+  const annualRenteRevalo   = totalPoints * projectedPointValue; // avec revalo
+  const currentRente        = points * pointValue;
+
+  return { points, futurePoints, totalPoints, ptsPerEuro, annualRente, annualRenteRevalo, currentRente, yearsLeft, retireYear, projectedPointValue };
+}
+
+function setRenteRevalRate(val) {
+  if (!S.data.capitals) S.data.capitals = {};
+  S.data.capitals.renteRevalRate = parseFloat(val) || 0;
+  saveData();
+  renderCapitaux();
 }
 
 function togglePerPause(key) {

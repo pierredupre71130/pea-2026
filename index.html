@@ -856,6 +856,30 @@
             <input type="checkbox" id="capital-edit-paused" style="width:16px;height:16px;cursor:pointer;flex-shrink:0">
             <label for="capital-edit-paused" style="margin:0;cursor:pointer;font-size:0.9rem;font-weight:normal">Mettre en pause les versements mensuels</label>
           </div>
+          <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+            <div style="font-size:0.78rem;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Simulation de rente</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Points acquis actuellement</label>
+                <input type="number" id="capital-edit-rente-points" step="1" min="0" placeholder="Ex: 698">
+              </div>
+              <div class="form-group">
+                <label>Valeur du point (€/an)</label>
+                <input type="number" id="capital-edit-rente-pv" step="0.0001" min="0" placeholder="Ex: 0.6227">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Total cotisations versées (€)</label>
+                <input type="number" id="capital-edit-rente-contribs" step="0.01" min="0" placeholder="Ex: 10863.06">
+                <div style="font-size:0.73rem;color:var(--muted);margin-top:3px">Hors plus-values — pour calculer le taux pts/€</div>
+              </div>
+              <div class="form-group">
+                <label>Année visée de départ</label>
+                <input type="number" id="capital-edit-rente-year" min="2025" max="2060" placeholder="Ex: 2044">
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="modal-footer">
@@ -966,8 +990,10 @@ function defData() {
     budgetSettings: { monthlyIncome: 0, paydayStart: 1, cardName: '', cardDebitDay: null, cardEncours: 0 },
     capitals: {
       pea:       { amount: 0, lastUpdated: null },
-      perCGOS:   { amount: 0, monthlyAdd: 0, paused: false, lastMonthlyAdd: null },
-      perPrefon: { amount: 0, monthlyAdd: 0, paused: false, lastMonthlyAdd: null },
+      perCGOS:   { amount: 0, monthlyAdd: 0, paused: false, lastMonthlyAdd: null,
+                   rentePoints: 0, rentePointValue: 0, renteTotalContribs: 0, retirementYear: 2044 },
+      perPrefon: { amount: 0, monthlyAdd: 0, paused: false, lastMonthlyAdd: null,
+                   rentePoints: 0, rentePointValue: 0, renteTotalContribs: 0, retirementYear: 2044 },
       livretA:   { amount: 0, lastUpdated: null },
       ldd:       { amount: 0, lastUpdated: null }
     }
@@ -8912,7 +8938,34 @@ function renderCapitaux() {
     const pct = total > 0 ? ((c.amount || 0) / total * 100).toFixed(1) : '0.0';
     const monthlyAdd = c.monthlyAdd || 0;
 
-    const perExtra = c.isPER ? `
+    const rente = c.isPER ? computeRente(c) : null;
+    const perExtra = c.isPER ? (() => {
+      const hasRente = c.rentePointValue > 0 && c.rentePoints > 0;
+      const renteBlock = hasRente ? `
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+          <div style="font-size:0.73rem;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Simulation rente</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+            <div style="background:rgba(255,255,255,0.04);border-radius:8px;padding:8px;text-align:center">
+              <div style="font-size:0.7rem;color:var(--muted);margin-bottom:2px">Rente actuelle</div>
+              <div style="font-weight:700;font-size:1rem;color:var(--fg)">${fc(rente.currentRente / 12, 0)}<span style="font-size:0.7rem;color:var(--muted)">/mois</span></div>
+              <div style="font-size:0.7rem;color:var(--muted)">${fc(rente.currentRente, 0)}/an</div>
+            </div>
+            <div style="background:rgba(59,130,246,0.08);border-radius:8px;padding:8px;text-align:center;border:1px solid rgba(59,130,246,0.15)">
+              <div style="font-size:0.7rem;color:var(--muted);margin-bottom:2px">En ${rente.retireYear} (${rente.yearsLeft} ans)</div>
+              <div style="font-weight:700;font-size:1rem;color:var(--accent)">${fc(rente.annualRente / 12, 0)}<span style="font-size:0.7rem;color:var(--muted)">/mois</span></div>
+              <div style="font-size:0.7rem;color:var(--muted)">${fc(rente.annualRente, 0)}/an</div>
+            </div>
+          </div>
+          <div style="font-size:0.7rem;color:var(--muted);display:flex;flex-direction:column;gap:3px">
+            <div>Points actuels : <strong style="color:var(--fg)">${Math.round(rente.points)}</strong> → projetés : <strong style="color:var(--accent)">${Math.round(rente.totalPoints)}</strong></div>
+            ${rente.ptsPerEuro > 0 ? `<div>Taux d'acquisition : ${rente.ptsPerEuro.toFixed(4)} pts/€ · valeur point : ${fc(c.rentePointValue, 4)}</div>` : ''}
+            <div style="margin-top:2px;opacity:0.7;font-style:italic">Estimation sans fiscalité, sans revalorisation du point ni cotisations au fonds de solidarité.</div>
+          </div>
+        </div>` : `
+        <div style="margin-top:8px;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:6px;border:1px dashed var(--border);font-size:0.77rem;color:var(--muted);text-align:center">
+          ✏️ Renseignez vos points et la valeur du point pour estimer votre rente
+        </div>`;
+      return `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:7px">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span style="font-size:0.8rem;color:var(--muted)">Versement mensuel</span>
@@ -8927,7 +8980,9 @@ function renderCapitaux() {
           </span>
         </div>
         ${c.lastMonthlyAdd ? `<div style="font-size:0.73rem;color:var(--muted)">Dernier versement : ${c.lastMonthlyAdd.replace('-', '/')}</div>` : ''}
-      </div>` : '';
+        ${renteBlock}
+      </div>`;
+    })() : '';
 
     const pauseBtn = c.isPER && monthlyAdd > 0
       ? `<button class="btn btn-sm ${c.paused ? 'btn-secondary' : 'btn-primary'}" onclick="togglePerPause('${c.key}')" title="${c.paused ? 'Reprendre' : 'Mettre en pause'}">${c.paused ? '▶' : '⏸'}</button>`
@@ -8986,6 +9041,10 @@ function openCapitalEdit(key) {
   if (cfg?.isPER) {
     document.getElementById('capital-edit-monthly').value = cap.monthlyAdd || 0;
     document.getElementById('capital-edit-paused').checked = !!cap.paused;
+    document.getElementById('capital-edit-rente-points').value = cap.rentePoints || 0;
+    document.getElementById('capital-edit-rente-pv').value = cap.rentePointValue || 0;
+    document.getElementById('capital-edit-rente-contribs').value = cap.renteTotalContribs || 0;
+    document.getElementById('capital-edit-rente-year').value = cap.retirementYear || 2044;
   }
   openModal('modal-capital');
 }
@@ -9000,13 +9059,40 @@ function saveCapitalEdit(e) {
   S.data.capitals[key].lastUpdated = today();
   const cfg = CAPS_CFG.find(c => c.key === key);
   if (cfg?.isPER) {
-    S.data.capitals[key].monthlyAdd = parseFloat(document.getElementById('capital-edit-monthly').value) || 0;
-    S.data.capitals[key].paused = document.getElementById('capital-edit-paused').checked;
+    S.data.capitals[key].monthlyAdd      = parseFloat(document.getElementById('capital-edit-monthly').value) || 0;
+    S.data.capitals[key].paused          = document.getElementById('capital-edit-paused').checked;
+    S.data.capitals[key].rentePoints     = parseFloat(document.getElementById('capital-edit-rente-points').value) || 0;
+    S.data.capitals[key].rentePointValue = parseFloat(document.getElementById('capital-edit-rente-pv').value) || 0;
+    S.data.capitals[key].renteTotalContribs = parseFloat(document.getElementById('capital-edit-rente-contribs').value) || 0;
+    S.data.capitals[key].retirementYear  = parseInt(document.getElementById('capital-edit-rente-year').value) || 2044;
   }
   saveData();
   closeModal('modal-capital');
   renderCapitaux();
   toast('Capital mis à jour ✓');
+}
+
+function computeRente(cap) {
+  const points      = cap.rentePoints || 0;
+  const pointValue  = cap.rentePointValue || 0;
+  const contribs    = cap.renteTotalContribs || 0;
+  const monthly     = cap.monthlyAdd || 0;
+  const retireYear  = cap.retirementYear || 2044;
+  const currentYear = new Date().getFullYear();
+  const yearsLeft   = Math.max(0, retireYear - currentYear);
+
+  // Taux d'acquisition : points par euro cotisé (calculé sur l'historique)
+  const ptsPerEuro = contribs > 0 ? points / contribs : 0;
+
+  // Points projetés futurs (cotisations mensuelles × taux × 12 × années restantes)
+  const futurePoints = ptsPerEuro > 0 ? monthly * ptsPerEuro * 12 * yearsLeft : 0;
+  const totalPoints  = points + futurePoints;
+
+  // Rente annuelle estimée à la retraite (valeur du point actuelle, non projetée)
+  const annualRente  = totalPoints * pointValue;
+  const currentRente = points * pointValue; // rente si conversion aujourd'hui
+
+  return { points, futurePoints, totalPoints, ptsPerEuro, annualRente, currentRente, yearsLeft, retireYear };
 }
 
 function togglePerPause(key) {

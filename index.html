@@ -303,6 +303,7 @@
     <div class="sheet-item" data-page="transactions" onclick="sheetNav('transactions')"><span class="sico">🔄</span><span>Transactions</span></div>
     <div class="sheet-item" data-page="treasury" onclick="sheetNav('treasury')"><span class="sico">💰</span><span>Trésorerie</span></div>
     <div class="sheet-item" data-page="budget" onclick="sheetNav('budget')"><span class="sico">🏠</span><span>Budget</span></div>
+    <div class="sheet-item" data-page="capitaux" onclick="sheetNav('capitaux')"><span class="sico">🏦</span><span>Capitaux</span></div>
     <div class="sheet-item" data-page="simulation" onclick="sheetNav('simulation')"><span class="sico">🔮</span><span>Simulation</span></div>
     <div class="sheet-item" data-page="performance" onclick="sheetNav('performance')"><span class="sico">📈</span><span>Performance</span></div>
     <div class="sheet-item" data-page="technical" onclick="sheetNav('technical')"><span class="sico">📉</span><span>Technique</span></div>
@@ -323,6 +324,7 @@
   <div class="nav-item" data-page="transactions"><span class="icon">🔄</span>Transactions</div>
   <div class="nav-item" data-page="treasury"><span class="icon">💰</span>Trésorerie</div>
   <div class="nav-item" data-page="budget"><span class="icon">🏠</span>Budget Perso</div>
+  <div class="nav-item" data-page="capitaux"><span class="icon">🏦</span>Capitaux</div>
   <div class="nav-section">Outils</div>
   <div class="nav-item" data-page="planning"><span class="icon">📅</span>Planning Mensuel</div>
   <div class="nav-item" data-page="simulation"><span class="icon">🔮</span>Simulation</div>
@@ -356,6 +358,7 @@
   <div id="page-technical" class="page"></div>
   <div id="page-settings" class="page"></div>
   <div id="page-budget" class="page"></div>
+  <div id="page-capitaux" class="page"></div>
 </main>
 
 <!-- ===== MODAL: TRANSACTION ===== -->
@@ -829,6 +832,40 @@
   </div>
 </div>
 
+<!-- ===== MODAL: CAPITAL EDIT ===== -->
+<div id="modal-capital" class="modal-overlay">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-capital-title">Modifier le capital</span>
+      <button class="modal-close" onclick="closeModal('modal-capital')">×</button>
+    </div>
+    <form onsubmit="saveCapitalEdit(event)">
+      <div class="modal-body">
+        <input type="hidden" id="capital-edit-key">
+        <div class="form-group">
+          <label>Montant actuel (€)</label>
+          <input type="number" id="capital-edit-amount" step="0.01" min="0" placeholder="0.00" required>
+        </div>
+        <div id="capital-edit-per" style="display:none">
+          <div class="form-group">
+            <label>Versement mensuel automatique (€)</label>
+            <input type="number" id="capital-edit-monthly" step="0.01" min="0" placeholder="0.00">
+            <div style="font-size:0.78rem;color:var(--muted);margin-top:4px">La somme sera ajoutée automatiquement chaque mois à l'ouverture de l'application.</div>
+          </div>
+          <div class="form-group" style="display:flex;align-items:center;gap:10px;flex-direction:row">
+            <input type="checkbox" id="capital-edit-paused" style="width:16px;height:16px;cursor:pointer;flex-shrink:0">
+            <label for="capital-edit-paused" style="margin:0;cursor:pointer;font-size:0.9rem;font-weight:normal">Mettre en pause les versements mensuels</label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-capital')">Annuler</button>
+        <button type="submit" class="btn btn-primary">Enregistrer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- ===== TOASTS ===== -->
 <div id="toasts"></div>
 
@@ -926,8 +963,21 @@ function defData() {
     userDecisions: [],
     terCache: {},
     budgetExpenses: [],
-    budgetSettings: { monthlyIncome: 0, paydayStart: 1, cardName: '', cardDebitDay: null, cardEncours: 0 }
+    budgetSettings: { monthlyIncome: 0, paydayStart: 1, cardName: '', cardDebitDay: null, cardEncours: 0 },
+    capitals: {
+      pea:       { amount: 0, lastUpdated: null },
+      perCGOS:   { amount: 0, monthlyAdd: 0, paused: false, lastMonthlyAdd: null },
+      perPrefon: { amount: 0, monthlyAdd: 0, paused: false, lastMonthlyAdd: null },
+      livretA:   { amount: 0, lastUpdated: null },
+      ldd:       { amount: 0, lastUpdated: null }
+    }
   };
+}
+
+function mergeCapitals(def, saved) {
+  const result = {};
+  for (const k of Object.keys(def)) result[k] = { ...def[k], ...(saved?.[k] || {}) };
+  return result;
 }
 
 // ======================================================
@@ -959,7 +1009,7 @@ function loadData() {
     const r = localStorage.getItem(STORAGE_KEY);
     if (r) {
       const p = JSON.parse(r);
-      const d = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings }, snapshots: p.snapshots || [], savedPlans: p.savedPlans || [], priceCache: p.priceCache || {}, pruOverrides: p.pruOverrides || {}, terCache: p.terCache || {}, budgetExpenses: p.budgetExpenses || [], budgetSettings: { ...defData().budgetSettings, ...(p.budgetSettings||{}) } };
+      const d = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings }, snapshots: p.snapshots || [], savedPlans: p.savedPlans || [], priceCache: p.priceCache || {}, pruOverrides: p.pruOverrides || {}, terCache: p.terCache || {}, budgetExpenses: p.budgetExpenses || [], budgetSettings: { ...defData().budgetSettings, ...(p.budgetSettings||{}) }, capitals: mergeCapitals(defData().capitals, p.capitals || {}) };
       migrateFees(d);
       return d;
     }
@@ -1041,7 +1091,7 @@ async function pullGist() {
     const p = JSON.parse(raw);
     // Préserver les clés API locales — elles ne sont jamais dans le Gist
     const localKeys = { claudeApiKey: S.data.settings.claudeApiKey, geminiApiKey: S.data.settings.geminiApiKey, groqApiKey: S.data.settings.groqApiKey, grokXaiApiKey: S.data.settings.grokXaiApiKey };
-    S.data = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings, ...localKeys }, snapshots: p.snapshots||[], savedPlans: p.savedPlans||[], priceCache: p.priceCache||{}, pruOverrides: p.pruOverrides||{}, terCache: p.terCache||{}, budgetExpenses: p.budgetExpenses||[], budgetSettings: { ...defData().budgetSettings, ...(p.budgetSettings||{}) } };
+    S.data = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings, ...localKeys }, snapshots: p.snapshots||[], savedPlans: p.savedPlans||[], priceCache: p.priceCache||{}, pruOverrides: p.pruOverrides||{}, terCache: p.terCache||{}, budgetExpenses: p.budgetExpenses||[], budgetSettings: { ...defData().budgetSettings, ...(p.budgetSettings||{}) }, capitals: mergeCapitals(defData().capitals, p.capitals || {}) };
     migrateFees(S.data);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(S.data));
     setSyncStatus('ok');
@@ -8813,10 +8863,174 @@ function updateFiscalCalc(amountStr) {
   `;
 }
 
+// ======================================================
+// CAPITAUX
+// ======================================================
+const CAPS_CFG = [
+  { key: 'pea',       label: '💼 Portefeuille PEA', isPER: false, color: 'var(--accent)' },
+  { key: 'perCGOS',   label: '🏛️ PER CGOS',         isPER: true,  color: '#a855f7' },
+  { key: 'perPrefon', label: '🏛️ PER Préfon',        isPER: true,  color: '#ec4899' },
+  { key: 'livretA',   label: '📘 Livret A',           isPER: false, color: 'var(--success)' },
+  { key: 'ldd',       label: '📗 LDD',                isPER: false, color: '#06b6d4' },
+];
+
+function getCaps() {
+  const def = defData().capitals;
+  const saved = S.data.capitals || {};
+  return CAPS_CFG.map(cfg => ({ ...cfg, ...def[cfg.key], ...(saved[cfg.key] || {}) }));
+}
+
+function renderCapitaux() {
+  const caps = getCaps();
+  const total = caps.reduce((s, c) => s + (c.amount || 0), 0);
+
+  const barHtml = total > 0
+    ? caps.map(c => {
+        const pct = ((c.amount || 0) / total * 100);
+        return pct > 0
+          ? `<div style="flex:${pct};min-width:3px;background:${c.color};border-radius:4px" title="${c.label} : ${fc(c.amount)}"></div>`
+          : '';
+      }).join('')
+    : `<div style="flex:1;background:var(--border);border-radius:4px"></div>`;
+
+  const legendHtml = caps.map(c => {
+    const pct = total > 0 ? ((c.amount || 0) / total * 100).toFixed(1) : '0.0';
+    return `
+      <div style="display:flex;align-items:center;gap:8px;font-size:0.8rem">
+        <div style="width:10px;height:10px;border-radius:50%;background:${c.color};flex-shrink:0"></div>
+        <span style="color:var(--muted);flex:1">${c.label}</span>
+        <span style="font-weight:600">${fc(c.amount || 0)}</span>
+        <span style="color:var(--muted);min-width:38px;text-align:right">${pct}%</span>
+      </div>`;
+  }).join('');
+
+  const cardsHtml = caps.map(c => {
+    const pct = total > 0 ? ((c.amount || 0) / total * 100).toFixed(1) : '0.0';
+    const monthlyAdd = c.monthlyAdd || 0;
+
+    const perExtra = c.isPER ? `
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:7px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:0.8rem;color:var(--muted)">Versement mensuel</span>
+          <span style="font-size:0.86rem;font-weight:600;color:${monthlyAdd > 0 ? 'var(--accent)' : 'var(--muted)'}">
+            ${monthlyAdd > 0 ? fc(monthlyAdd) + ' / mois' : 'Non configuré'}
+          </span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:0.8rem;color:var(--muted)">Statut</span>
+          <span style="font-size:0.76rem;padding:2px 9px;border-radius:10px;background:${c.paused ? 'rgba(245,158,11,0.15)' : monthlyAdd > 0 ? 'rgba(22,201,93,0.12)' : 'rgba(255,255,255,0.06)'};color:${c.paused ? 'var(--warning)' : monthlyAdd > 0 ? 'var(--success)' : 'var(--muted)'}">
+            ${c.paused ? '⏸ En pause' : monthlyAdd > 0 ? '▶ Actif' : '— Non activé'}
+          </span>
+        </div>
+        ${c.lastMonthlyAdd ? `<div style="font-size:0.73rem;color:var(--muted)">Dernier versement : ${c.lastMonthlyAdd.replace('-', '/')}</div>` : ''}
+      </div>` : '';
+
+    const pauseBtn = c.isPER && monthlyAdd > 0
+      ? `<button class="btn btn-sm ${c.paused ? 'btn-secondary' : 'btn-primary'}" onclick="togglePerPause('${c.key}')" title="${c.paused ? 'Reprendre' : 'Mettre en pause'}">${c.paused ? '▶' : '⏸'}</button>`
+      : '';
+
+    return `
+      <div class="card" style="border-top:3px solid ${c.color}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+          <div>
+            <div class="section-title" style="margin-bottom:2px">${c.label}</div>
+            <div style="font-size:0.74rem;color:var(--muted)">${pct}% du total</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+            ${pauseBtn}
+            <button class="btn btn-sm btn-secondary" onclick="openCapitalEdit('${c.key}')">✏️ Modifier</button>
+          </div>
+        </div>
+        <div class="stat-val" style="margin:10px 0 4px">${fc(c.amount || 0)}</div>
+        ${perExtra}
+      </div>`;
+  }).join('');
+
+  document.getElementById('page-capitaux').innerHTML = `
+    <div class="page-header">
+      <div><h2>🏦 Capitaux</h2><div class="page-sub">Vue consolidée de votre patrimoine</div></div>
+    </div>
+    <div class="card mb16" style="border-left:3px solid var(--accent)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div>
+          <div class="section-title" style="margin-bottom:4px">Total patrimoine</div>
+          <div style="font-size:1.9rem;font-weight:700;color:var(--fg)">${fc(total)}</div>
+        </div>
+        <div style="font-size:2.6rem">🏦</div>
+      </div>
+      <div style="height:10px;border-radius:5px;overflow:hidden;display:flex;gap:3px;margin-bottom:16px">${barHtml}</div>
+      <div style="display:flex;flex-direction:column;gap:8px">${legendHtml}</div>
+    </div>
+    <div class="grid-2">${cardsHtml}</div>
+  `;
+}
+
+function openCapitalEdit(key) {
+  const cfg = CAPS_CFG.find(c => c.key === key);
+  const def = defData().capitals[key];
+  const cap = { ...def, ...(S.data.capitals?.[key] || {}) };
+  document.getElementById('modal-capital-title').textContent = 'Modifier · ' + (cfg?.label || key);
+  document.getElementById('capital-edit-key').value = key;
+  document.getElementById('capital-edit-amount').value = cap.amount || 0;
+  const perFields = document.getElementById('capital-edit-per');
+  perFields.style.display = cfg?.isPER ? '' : 'none';
+  if (cfg?.isPER) {
+    document.getElementById('capital-edit-monthly').value = cap.monthlyAdd || 0;
+    document.getElementById('capital-edit-paused').checked = !!cap.paused;
+  }
+  openModal('modal-capital');
+}
+
+function saveCapitalEdit(e) {
+  e.preventDefault();
+  const key = document.getElementById('capital-edit-key').value;
+  const amount = parseFloat(document.getElementById('capital-edit-amount').value) || 0;
+  if (!S.data.capitals) S.data.capitals = {};
+  if (!S.data.capitals[key]) S.data.capitals[key] = { ...defData().capitals[key] };
+  S.data.capitals[key].amount = amount;
+  S.data.capitals[key].lastUpdated = today();
+  const cfg = CAPS_CFG.find(c => c.key === key);
+  if (cfg?.isPER) {
+    S.data.capitals[key].monthlyAdd = parseFloat(document.getElementById('capital-edit-monthly').value) || 0;
+    S.data.capitals[key].paused = document.getElementById('capital-edit-paused').checked;
+  }
+  saveData();
+  closeModal('modal-capital');
+  renderCapitaux();
+  toast('Capital mis à jour ✓');
+}
+
+function togglePerPause(key) {
+  if (!S.data.capitals) S.data.capitals = {};
+  if (!S.data.capitals[key]) S.data.capitals[key] = { ...defData().capitals[key] };
+  S.data.capitals[key].paused = !S.data.capitals[key].paused;
+  saveData();
+  renderCapitaux();
+  toast(S.data.capitals[key].paused ? '⏸ Versements mis en pause' : '▶ Versements repris');
+}
+
+function applyMonthlyPER() {
+  const now = new Date();
+  const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  if (!S.data.capitals) return;
+  let changed = false;
+  for (const key of ['perCGOS', 'perPrefon']) {
+    const cap = S.data.capitals[key];
+    if (!cap) continue;
+    if (!cap.paused && (cap.monthlyAdd || 0) > 0 && cap.lastMonthlyAdd !== ym) {
+      cap.amount = (cap.amount || 0) + cap.monthlyAdd;
+      cap.lastMonthlyAdd = ym;
+      changed = true;
+    }
+  }
+  if (changed) { saveData(); toast('Versements mensuels PER appliqués ✓'); }
+}
+
 function renderPage(page) {
   ({ dashboard:renderDashboard, portfolio:renderPortfolio, transactions:renderTransactions,
      treasury:renderTreasury, budget:renderBudget, planning:renderPlanning, simulation:renderSimulation,
-     performance:renderPerformance, technical:renderTechnical, news:renderNews, ai:renderAI, settings:renderSettings })[page]?.();
+     performance:renderPerformance, technical:renderTechnical, news:renderNews, ai:renderAI,
+     settings:renderSettings, capitaux:renderCapitaux })[page]?.();
 }
 
 // ======================================================
@@ -8842,6 +9056,7 @@ async function init() {
     saveData();
   }
 
+  applyMonthlyPER();
   takeSnapshot();
   navigate('dashboard');
 
@@ -8849,6 +9064,7 @@ async function init() {
   if (getGistToken()) {
     const pulled = await pullGist();
     if (pulled) {
+      applyMonthlyPER();
       document.getElementById('sidebar-broker').textContent = S.data.settings.brokerName || 'Mon PEA';
       navigate(S.page || 'dashboard');
     }

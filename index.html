@@ -1030,6 +1030,29 @@ function migrateFees(d) {
   d._feesMigrated = true;
 }
 
+function migratePerRente(d) {
+  if (d._perRente1) return;
+  if (!d.capitals) d.capitals = {};
+  const def = defData().capitals;
+
+  const cgos = d.capitals.perCGOS = d.capitals.perCGOS || { ...def.perCGOS };
+  if (!cgos.amount)             cgos.amount             = 11523.38;
+  if (!cgos.rentePoints)        cgos.rentePoints        = 698;
+  if (!cgos.rentePointValue)    cgos.rentePointValue    = 0.6227;
+  if (!cgos.renteTotalContribs) cgos.renteTotalContribs = 10863.06;
+  if (!cgos.retirementYear)     cgos.retirementYear     = 2044;
+
+  const pfn = d.capitals.perPrefon = d.capitals.perPrefon || { ...def.perPrefon };
+  if (!pfn.amount)             pfn.amount             = 6893.99;
+  if (!pfn.rentePoints)        pfn.rentePoints        = 2600;
+  if (!pfn.rentePointValue)    pfn.rentePointValue    = 0.1145;
+  if (!pfn.renteTotalContribs) pfn.renteTotalContribs = 6704;
+  if (!pfn.retirementYear)     pfn.retirementYear     = 2044;
+  if (!pfn.monthlyAdd)         pfn.monthlyAdd         = 172;
+
+  d._perRente1 = true;
+}
+
 function loadData() {
   try {
     const r = localStorage.getItem(STORAGE_KEY);
@@ -1037,10 +1060,13 @@ function loadData() {
       const p = JSON.parse(r);
       const d = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings }, snapshots: p.snapshots || [], savedPlans: p.savedPlans || [], priceCache: p.priceCache || {}, pruOverrides: p.pruOverrides || {}, terCache: p.terCache || {}, budgetExpenses: p.budgetExpenses || [], budgetSettings: { ...defData().budgetSettings, ...(p.budgetSettings||{}) }, capitals: mergeCapitals(defData().capitals, p.capitals || {}) };
       migrateFees(d);
+      migratePerRente(d);
       return d;
     }
   } catch(e) {}
-  return defData();
+  const d = defData();
+  migratePerRente(d);
+  return d;
 }
 // ======================================================
 // GIST SYNC
@@ -1119,6 +1145,7 @@ async function pullGist() {
     const localKeys = { claudeApiKey: S.data.settings.claudeApiKey, geminiApiKey: S.data.settings.geminiApiKey, groqApiKey: S.data.settings.groqApiKey, grokXaiApiKey: S.data.settings.grokXaiApiKey };
     S.data = { ...defData(), ...p, settings: { ...defData().settings, ...p.settings, ...localKeys }, snapshots: p.snapshots||[], savedPlans: p.savedPlans||[], priceCache: p.priceCache||{}, pruOverrides: p.pruOverrides||{}, terCache: p.terCache||{}, budgetExpenses: p.budgetExpenses||[], budgetSettings: { ...defData().budgetSettings, ...(p.budgetSettings||{}) }, capitals: mergeCapitals(defData().capitals, p.capitals || {}) };
     migrateFees(S.data);
+    migratePerRente(S.data);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(S.data));
     setSyncStatus('ok');
     return true;
@@ -9010,6 +9037,52 @@ function renderCapitaux() {
       </div>`;
   }).join('');
 
+  // Bloc simulation rente global
+  const perCaps = caps.filter(c => c.isPER);
+  const rentes = perCaps.map(c => ({ ...computeRente(c), label: c.label, color: c.color, key: c.key }));
+  const totalCurrentRente  = rentes.reduce((s, r) => s + r.currentRente, 0);
+  const totalProjectedRente = rentes.reduce((s, r) => s + r.annualRente, 0);
+  const hasAnyRente = rentes.some(r => r.currentRente > 0);
+  const retireYear = rentes[0]?.retireYear || 2044;
+  const yearsLeft  = rentes[0]?.yearsLeft  || 0;
+
+  const renteSimHtml = hasAnyRente ? `
+    <div class="card mb16" style="border-left:3px solid #a855f7">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div>
+          <div class="section-title" style="margin-bottom:2px">🏦 Simulation des rentes PER</div>
+          <div style="font-size:0.78rem;color:var(--muted)">Catégorie active · départ visé en ${retireYear} (dans ${yearsLeft} ans)</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+        <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:12px;text-align:center">
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em">Rente actuelle cumulée</div>
+          <div style="font-size:1.6rem;font-weight:700;color:var(--fg)">${fc(totalCurrentRente / 12, 0)} <span style="font-size:0.8rem;color:var(--muted);font-weight:400">/mois</span></div>
+          <div style="font-size:0.8rem;color:var(--muted);margin-top:2px">${fc(totalCurrentRente, 0)} / an</div>
+        </div>
+        <div style="background:rgba(168,85,247,0.08);border-radius:10px;padding:12px;text-align:center;border:1px solid rgba(168,85,247,0.2)">
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em">Rente projetée en ${retireYear}</div>
+          <div style="font-size:1.6rem;font-weight:700;color:#a855f7">${fc(totalProjectedRente / 12, 0)} <span style="font-size:0.8rem;color:var(--muted);font-weight:400">/mois</span></div>
+          <div style="font-size:0.8rem;color:var(--muted);margin-top:2px">${fc(totalProjectedRente, 0)} / an</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px">
+        ${rentes.map(r => r.currentRente > 0 ? `
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:8px">
+            <div style="width:10px;height:10px;border-radius:50%;background:${r.color};flex-shrink:0"></div>
+            <div style="flex:1;font-size:0.82rem">${r.label.replace(/^[^\s]+\s/,'')}</div>
+            <div style="text-align:right">
+              <div style="font-size:0.82rem;color:var(--muted)">Actuel : <strong style="color:var(--fg)">${fc(r.currentRente / 12, 0)}/mois</strong></div>
+              <div style="font-size:0.82rem;color:${r.color}">En ${r.retireYear} : <strong>${fc(r.annualRente / 12, 0)}/mois</strong></div>
+              <div style="font-size:0.7rem;color:var(--muted)">${Math.round(r.points)} pts → ${Math.round(r.totalPoints)} pts</div>
+            </div>
+          </div>` : '').join('')}
+      </div>
+      <div style="font-size:0.72rem;color:var(--muted);font-style:italic;opacity:0.8">
+        Estimation brute · sans revalorisation du point, sans fonds de solidarité, hors prélèvements sociaux et fiscaux.
+      </div>
+    </div>` : '';
+
   document.getElementById('page-capitaux').innerHTML = `
     <div class="page-header">
       <div><h2>🏦 Capitaux</h2><div class="page-sub">Vue consolidée de votre patrimoine</div></div>
@@ -9026,6 +9099,7 @@ function renderCapitaux() {
       <div style="display:flex;flex-direction:column;gap:8px">${legendHtml}</div>
     </div>
     <div class="grid-2">${cardsHtml}</div>
+    ${renteSimHtml}
   `;
 }
 

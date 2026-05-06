@@ -1612,6 +1612,63 @@ function makeAllocationChart(positions) {
     }
   });
 }
+
+function makeEtfPieChart(positions) {
+  destroyChart('etf-pie');
+  const ctx = document.getElementById('chart-etf-pie');
+  if (!ctx) return;
+  // Identifier les ETFs via planItems (même logique que renderPortfolio)
+  const posWithType = positions.map(p => {
+    const plan = S.data.planItems.find(pl => pl.ticker === p.ticker);
+    return { ...p, isEtf: plan ? plan.isEtf !== false : true };
+  });
+  const etfPos = posWithType.filter(p => p.isEtf && p.marketValue > 0);
+  if (!etfPos.length) return;
+  const etfTotal = etfPos.reduce((s, p) => s + p.marketValue, 0);
+
+  const pieLabelsPlugin = {
+    id: 'pieLabels',
+    afterDraw(chart) {
+      const { ctx: c, data } = chart;
+      const ds = data.datasets[0];
+      const total = ds.data.reduce((a, b) => a + b, 0);
+      chart.getDatasetMeta(0).data.forEach((arc, i) => {
+        const pct = ds.data[i] / total * 100;
+        if (pct < 4) return;
+        const { x, y } = arc.tooltipPosition();
+        const name = data.labels[i];
+        const pctStr = pct.toFixed(1) + '%';
+        c.save();
+        c.shadowColor = 'rgba(0,0,0,0.5)';
+        c.shadowBlur = 3;
+        c.fillStyle = '#fff';
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+        c.font = `bold ${pct > 8 ? 11 : 10}px Inter,sans-serif`;
+        c.fillText(name, x, y - 7);
+        c.font = `${pct > 8 ? 10 : 9}px Inter,sans-serif`;
+        c.fillText(pctStr, x, y + 7);
+        c.restore();
+      });
+    }
+  };
+
+  S.charts['etf-pie'] = new Chart(ctx, {
+    type: 'pie',
+    data: {
+      labels: etfPos.map(p => p.ticker),
+      datasets: [{ data: etfPos.map(p => p.marketValue), backgroundColor: COLORS.slice(0, etfPos.length), borderColor: 'rgba(15,23,42,0.6)', borderWidth: 2, hoverOffset: 8 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => ` ${c.label}: ${fc(c.raw)} (${(c.raw/etfTotal*100).toFixed(1)}%)` } }
+      }
+    },
+    plugins: [pieLabelsPlugin]
+  });
+}
 function _sum(positions) { return positions.reduce((s,p)=>s+p.marketValue,0); }
 
 function makeEvolutionChart(filter) {
@@ -2344,6 +2401,25 @@ function renderDashboard() {
       </div>
     </div>
     ${(() => {
+      const posWithType = positions.map(p => {
+        const plan = S.data.planItems.find(pl => pl.ticker === p.ticker);
+        return { ...p, isEtf: plan ? plan.isEtf !== false : true };
+      });
+      const etfPos = posWithType.filter(p => p.isEtf && p.marketValue > 0);
+      const etfTotal = etfPos.reduce((s, p) => s + p.marketValue, 0);
+      if (!etfPos.length) return '';
+      return `
+      <div class="card mb16">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+          <div>
+            <div class="section-title" style="margin:0">Répartition ETF</div>
+            <div style="font-size:0.75rem;color:var(--muted);margin-top:2px">${etfPos.length} ETF · ${fc(etfTotal)}</div>
+          </div>
+        </div>
+        <div style="height:280px;position:relative"><canvas id="chart-etf-pie"></canvas></div>
+      </div>`;
+    })()}
+    ${(() => {
       const txs = (S.data.transactions||[]).filter(t=>t.type==='buy'||t.type==='sell');
       const firstTx = txs.length ? txs.map(t=>t.date).sort()[0] : null;
       const firstSnap = (S.data.snapshots||[]).length ? (S.data.snapshots||[]).map(s=>s.date).sort()[0] : null;
@@ -2396,7 +2472,7 @@ function renderDashboard() {
       ` : `<div class="empty"><div class="ico">🔄</div><p>Aucune transaction</p><button class="btn btn-primary" onclick="openTxModal()">+ Ajouter</button></div>`}
     </div>
   `;
-  requestAnimationFrame(() => { makeAllocationChart(positions); makePnlChart(positions); makeEvolutionChart(S.evolFilter); });
+  requestAnimationFrame(() => { makeAllocationChart(positions); makePnlChart(positions); makeEvolutionChart(S.evolFilter); makeEtfPieChart(positions); });
   updateSbCeiling(deposited);
 }
 

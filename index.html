@@ -7566,8 +7566,10 @@ function runSimulation({ months, annualReturn, budget, startFromCurrent, aiLoyal
         aiEvents.push({ type:'dividend', year:simYear, qty:alPos.quantity, perShare:AL_NOM.dividendPerShare||3.70, bonus:qualified, amount:total });
       }
       if (simMonth === 6 && simYear % 2 === 0) {  // Juin années paires : actions gratuites
-        const added = qualified ? Math.floor(alPos.quantity / 10) : 0;
-        aiEvents.push({ type:'freeShares', year:simYear, before:alPos.quantity, eligible:qualified, added, price: alPos.price });
+        const baseShares  = Math.floor(alPos.quantity / 10);
+        const bonusShares = qualified ? Math.floor(baseShares * 0.1) : 0;
+        const added       = baseShares + bonusShares;
+        aiEvents.push({ type:'freeShares', year:simYear, before:alPos.quantity, eligible:qualified, added, baseShares, bonusShares, price: alPos.price });
         alPos.quantity += added;
       }
     }
@@ -7862,12 +7864,23 @@ function renderAiLoyaltyEvents(snapshots) {
             </tr>`;
           } else {
             const val = e.added * (e.price || 0);
+            const baseShares  = e.baseShares  ?? e.added;
+            const bonusShares = e.bonusShares ?? 0;
+            const baseVal  = baseShares  * (e.price || 0);
+            const bonusVal = bonusShares * (e.price || 0);
+            const detailStr = `${Math.round(e.before)} → ${Math.round(e.before + e.added)} actions` +
+              (e.price ? ` · cours ${fc(e.price)}` : '');
+            const qtyStr = `<span style="color:#a855f7;font-weight:600">+${e.added} action${e.added > 1 ? 's' : ''}</span>` +
+              (val > 0 ? `<br><span style="font-size:0.72rem;color:var(--muted)">≈ ${fc(val)}</span>` : '');
+            const bonusCell = bonusShares > 0
+              ? `<span style="color:#22c55e">+10% ✓ (+${bonusShares} action${bonusShares > 1 ? 's' : ''} · ≈ ${fc(bonusVal)})<br><span style="font-size:0.7rem">base: ${baseShares} · bonus: +${bonusShares}</span></span>`
+              : `<span style="color:var(--muted)">— (base: ${baseShares} action${baseShares > 1 ? 's' : ''})</span>`;
             return `<tr>
               <td>Juin ${e.year}</td>
               <td>🎁 Actions gratuites</td>
-              <td>${e.eligible ? `${Math.round(e.before)} → ${Math.round(e.before + e.added)} actions (+${e.added})${e.price ? ` · cours ${fc(e.price)}` : ''}` : 'Pas encore éligible'}</td>
-              <td>${e.added > 0 ? `<span style="color:#a855f7;font-weight:600">+${e.added} action${e.added > 1 ? 's' : ''}</span>${val > 0 ? `<br><span style="font-size:0.72rem;color:var(--muted)">≈ ${fc(val)}</span>` : ''}` : '—'}</td>
-              <td>${e.eligible ? '<span style="color:#22c55e">✓ inclus dans la valeur PF</span>' : '<span style="color:#f59e0b">⏳ 2 ans civils requis</span>'}</td>
+              <td>${detailStr}</td>
+              <td>${e.added > 0 ? qtyStr : '—'}</td>
+              <td>${bonusCell}</td>
             </tr>`;
           }
         }).join('')}</tbody>

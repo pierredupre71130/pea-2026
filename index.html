@@ -7427,7 +7427,7 @@ function runSimulation({ months, annualReturn, budget, startFromCurrent, aiLoyal
       }
       if (simMonth === 6 && simYear % 2 === 0) {  // Juin années paires : actions gratuites
         const added = qualified ? Math.floor(alPos.quantity / 10) : 0;
-        aiEvents.push({ type:'freeShares', year:simYear, before:alPos.quantity, eligible:qualified, added });
+        aiEvents.push({ type:'freeShares', year:simYear, before:alPos.quantity, eligible:qualified, added, price: alPos.price });
         alPos.quantity += added;
       }
     }
@@ -7673,30 +7673,35 @@ function renderAiLoyaltyEvents(snapshots) {
 
   const dividends  = allEvents.filter(e => e.type === 'dividend');
   const freeShares = allEvents.filter(e => e.type === 'freeShares');
-  const totalDividend   = dividends.reduce((s, e) => s + e.amount, 0);
-  const totalBonusAmt   = dividends.filter(e => e.bonus).reduce((s, e) => s + (e.amount - e.qty * e.perShare), 0);
-  const totalFreeShares = freeShares.reduce((s, e) => s + e.added, 0);
+  const totalDividend    = dividends.reduce((s, e) => s + e.amount, 0);
+  const totalBonusAmt    = dividends.filter(e => e.bonus).reduce((s, e) => s + (e.amount - e.qty * e.perShare), 0);
+  const totalFreeShares  = freeShares.reduce((s, e) => s + e.added, 0);
+  const totalFreeValue   = freeShares.reduce((s, e) => s + (e.added * (e.price || 0)), 0);
+  const totalFidelite    = totalDividend + totalFreeValue;
 
   const MONTHS_FR = ['jan.','fév.','mars','avr.','mai','juin','juil.','août','sep.','oct.','nov.','déc.'];
   el.innerHTML = `
     <div class="card" style="margin-top:16px">
       <div class="section-title mb12">🏭 Bénéfices Air Liquide reçus — simulation</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">
         <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;text-align:center">
           <div style="font-size:0.72rem;color:var(--muted);margin-bottom:3px">Dividendes totaux</div>
           <div style="font-size:1.1rem;font-weight:700;color:var(--accent)">${fc(totalDividend)}</div>
+          ${totalBonusAmt > 0 ? `<div style="font-size:0.7rem;color:#22c55e;margin-top:2px">dont +10% nominatif : ${fc(totalBonusAmt)}</div>` : ''}
         </div>
         <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;text-align:center">
-          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:3px">Bonus nominatif (+10%)</div>
-          <div style="font-size:1.1rem;font-weight:700;color:#22c55e">${totalBonusAmt > 0 ? fc(totalBonusAmt) : '—'}</div>
-        </div>
-        <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;text-align:center">
-          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:3px">Actions gratuites reçues</div>
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:3px">Actions gratuites</div>
           <div style="font-size:1.1rem;font-weight:700;color:#a855f7">${totalFreeShares > 0 ? '+' + totalFreeShares + ' action' + (totalFreeShares > 1 ? 's' : '') : '0'}</div>
+          ${totalFreeValue > 0 ? `<div style="font-size:0.7rem;color:#a855f7;margin-top:2px">≈ ${fc(totalFreeValue)} à l'attribution</div>` : ''}
+        </div>
+        <div style="background:rgba(34,197,94,0.08);border-radius:8px;padding:10px 12px;text-align:center;border:1px solid rgba(34,197,94,0.2)">
+          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:3px">Total avantages fidélité</div>
+          <div style="font-size:1.15rem;font-weight:700;color:#22c55e">${fc(totalFidelite)}</div>
+          <div style="font-size:0.7rem;color:var(--muted);margin-top:2px">dividendes + actions gratuites</div>
         </div>
         <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;text-align:center">
           <div style="font-size:0.72rem;color:var(--muted);margin-bottom:3px">Attributions gratuites</div>
-          <div style="font-size:1.1rem;font-weight:700">${freeShares.filter(e => e.eligible).length} / ${freeShares.length}</div>
+          <div style="font-size:1.1rem;font-weight:700">${freeShares.filter(e => e.eligible).length} / ${freeShares.length} années paires</div>
         </div>
       </div>
       <div class="table-wrap"><table>
@@ -7716,12 +7721,13 @@ function renderAiLoyaltyEvents(snapshots) {
                 : '<span style="color:var(--muted)">— (pas encore éligible)</span>'}</td>
             </tr>`;
           } else {
+            const val = e.added * (e.price || 0);
             return `<tr>
               <td>Juin ${e.year}</td>
               <td>🎁 Actions gratuites</td>
-              <td>${e.eligible ? `${Math.round(e.before)} → ${Math.round(e.before + e.added)} actions (+${e.added})` : 'Pas encore éligible'}</td>
-              <td>${e.added > 0 ? `<span style="color:#a855f7;font-weight:600">+${e.added} action${e.added > 1 ? 's' : ''}</span>` : '—'}</td>
-              <td>${e.eligible ? '<span style="color:#22c55e">✓</span>' : '<span style="color:#f59e0b">⏳ 2 ans civils requis</span>'}</td>
+              <td>${e.eligible ? `${Math.round(e.before)} → ${Math.round(e.before + e.added)} actions (+${e.added})${e.price ? ` · cours ${fc(e.price)}` : ''}` : 'Pas encore éligible'}</td>
+              <td>${e.added > 0 ? `<span style="color:#a855f7;font-weight:600">+${e.added} action${e.added > 1 ? 's' : ''}</span>${val > 0 ? `<br><span style="font-size:0.72rem;color:var(--muted)">≈ ${fc(val)}</span>` : ''}` : '—'}</td>
+              <td>${e.eligible ? '<span style="color:#22c55e">✓ inclus dans la valeur PF</span>' : '<span style="color:#f59e0b">⏳ 2 ans civils requis</span>'}</td>
             </tr>`;
           }
         }).join('')}</tbody>

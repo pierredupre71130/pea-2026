@@ -1790,18 +1790,17 @@ function makePlanChart(etfItems) {
 
 // Boursorama fallback : convertit un ticker Yahoo Finance en code Boursorama
 // Stocks : 1rP{BASE}   ETFs/trackers : 1rT{BASE}
-// Liste ordonnée de proxies CORS à essayer successivement
+// Proxies CORS — lancés en parallèle, le premier qui répond valablement gagne
 const CORS_PROXIES = [
-  async (url) => { const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(12000)}); if (!r.ok) throw new Error('allorigins'); return (await r.json()).contents || ''; },
-  async (url) => { const r = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(12000)}); if (!r.ok) throw new Error('corsproxy'); return await r.text(); },
-  async (url) => { const r = await fetch(`https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(12000)}); if (!r.ok) throw new Error('codetabs'); return await r.text(); },
+  async (url) => { const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(10000)}); if (!r.ok) throw new Error('allorigins'); const b = (await r.json()).contents || ''; if (!b || b.length < 100) throw new Error('empty'); return b; },
+  async (url) => { const r = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(10000)}); if (!r.ok) throw new Error('corsproxy'); const b = await r.text(); if (!b || b.length < 100) throw new Error('empty'); return b; },
+  async (url) => { const r = await fetch(`https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(10000)}); if (!r.ok) throw new Error('codetabs'); const b = await r.text(); if (!b || b.length < 100) throw new Error('empty'); return b; },
 ];
 
 async function proxyFetch(url) {
-  for (const proxy of CORS_PROXIES) {
-    try { const body = await proxy(url); if (body && body.length > 100) return body; } catch(e) {}
-  }
-  return null;
+  try {
+    return await Promise.any(CORS_PROXIES.map(fn => fn(url)));
+  } catch(e) { return null; }
 }
 
 async function fetchPriceGoogle(ticker) {
@@ -1940,8 +1939,10 @@ async function fetchPrice(ticker) {
   if (cache && (Date.now() - (cache.timestamp||0) < PRICE_TTL)) return cache;
 
   const sources = [
-    { name:'Boursorama Search',     fn: () => fetchPriceBoursoSearch(ticker) },
-    { name:'Boursorama Page',       fn: () => fetchPriceBoursorama(ticker) },
+    { name:'Boursorama Search', fn: () => fetchPriceBoursoSearch(ticker) },
+    { name:'Yahoo Finance',     fn: () => fetchPriceYahoo(ticker) },
+    { name:'Google Finance',    fn: () => fetchPriceGoogle(ticker) },
+    { name:'Boursorama Page',   fn: () => fetchPriceBoursorama(ticker) },
   ];
   for (const src of sources) {
     try {
@@ -1971,15 +1972,13 @@ async function fetchPrice(ticker) {
 async function refreshPrices(tickers) {
   const autoTickers = tickers.filter(t => !S.data.priceCache[t]?.manual);
   autoTickers.forEach(t => { if (S.data.priceCache[t]) S.data.priceCache[t].timestamp = 0; });
-  let ok = 0, fail = 0;
   const manual = tickers.length - autoTickers.length;
-  if (!autoTickers.length) return { ok, fail, manual };
+  if (!autoTickers.length) return { ok: 0, fail: 0, manual };
 
-  // Sources réelles : Google Finance → Boursorama Search → Yahoo Finance
-  for (const t of autoTickers) {
-    const r = await fetchPrice(t);
-    r ? ok++ : fail++;
-  }
+  // Tous les tickers en parallèle
+  const results = await Promise.allSettled(autoTickers.map(t => fetchPrice(t)));
+  const ok   = results.filter(r => r.status === 'fulfilled' && r.value).length;
+  const fail = results.length - ok;
   saveData();
   return { ok, fail, manual };
 }

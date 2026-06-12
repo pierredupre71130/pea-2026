@@ -1741,17 +1741,23 @@ function makeGainChart() {
     const gain = (s.portValue||0) + (s.cash||0) - lastDeposited;
     return { x: s.date, y: parseFloat(gain.toFixed(2)) };
   });
-  const colors = points.map(p => p.y >= 0 ? 'rgba(34,197,94,0.85)' : 'rgba(239,68,68,0.85)');
   S.charts['gain'] = new Chart(ctx, {
-    type: 'bar',
+    type: 'line',
     data: {
       labels: points.map(p => p.x),
       datasets: [{
         label: 'Gain / Perte',
         data: points.map(p => p.y),
-        backgroundColor: colors,
-        borderRadius: 2,
-        borderSkipped: false,
+        borderColor: '#22c55e',
+        backgroundColor: 'rgba(34,197,94,0.08)',
+        borderWidth: 2,
+        pointRadius: points.length > 60 ? 0 : 3,
+        tension: 0.3,
+        fill: true,
+        segment: {
+          borderColor: ctx2 => ctx2.p1.parsed.y < 0 ? '#ef4444' : '#22c55e',
+          backgroundColor: ctx2 => ctx2.p1.parsed.y < 0 ? 'rgba(239,68,68,0.08)' : 'rgba(34,197,94,0.08)',
+        }
       }]
     },
     options: {

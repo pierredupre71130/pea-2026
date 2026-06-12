@@ -4093,7 +4093,8 @@ function parseAIJSON(text) {
   // Prend tout depuis le premier { (pas besoin du dernier } — on répare si tronqué)
   let j = s.slice(start);
   // Nettoyage commun
-  j = j.replace(/,\s*([}\]])/g, '$1')
+  j = j.replace(/:\s*\+([0-9])/g, ': $1')   // +2.5 → 2.5 (invalide JSON)
+        .replace(/,\s*([}\]])/g, '$1')
         .replace(/\bNone\b/g, 'null')
         .replace(/\bTrue\b/g, 'true')
         .replace(/\bFalse\b/g, 'false');

@@ -387,6 +387,12 @@
     <div class="scan-sep" id="scan-sep">ou remplissez manuellement</div>
 
     <form id="form-tx">
+      <div class="form-group" id="tx-existing-group">
+        <label>Position existante <span style="color:var(--muted)">(optionnel)</span></label>
+        <select id="tx-existing-sel" onchange="prefillTxFromExisting(this.value)" style="width:100%">
+          <option value="">— Nouveau titre —</option>
+        </select>
+      </div>
       <div class="form-group">
         <label>Type</label>
         <select name="type" id="tx-type" onchange="updateTxForm()">
@@ -1315,6 +1321,19 @@ function openTxModal(prefill={}) {
   window._editTxId = null;
   document.getElementById('modal-tx-title').textContent = 'Ajouter une transaction';
 
+  // Peupler le select des positions existantes
+  const sel = document.getElementById('tx-existing-sel');
+  if (sel) {
+    const positions = computePositions();
+    sel.innerHTML = '<option value="">— Nouveau titre —</option>' +
+      positions.map(p => {
+        const cache = (S.data.priceCache || {})[p.ticker];
+        return `<option value="${esc(p.ticker)}">${p.ticker} — ${esc(p.name)}${cache?.price ? ` (${fc(cache.price)})` : ''}</option>`;
+      }).join('');
+    sel.value = '';
+    document.getElementById('tx-existing-group').style.display = positions.length ? '' : 'none';
+  }
+
   const f = document.getElementById('form-tx');
   f.reset();
   f.querySelector('[name=date]').value = prefill.date || today();
@@ -1328,15 +1347,28 @@ function openTxModal(prefill={}) {
   openModal('modal-tx');
 }
 
+function prefillTxFromExisting(ticker) {
+  if (!ticker) return;
+  const positions = computePositions();
+  const pos = positions.find(p => p.ticker === ticker);
+  if (!pos) return;
+  const f = document.getElementById('form-tx');
+  f.querySelector('[name=ticker]').value = pos.ticker;
+  f.querySelector('[name=name]').value   = pos.name;
+  const cache = (S.data.priceCache || {})[ticker];
+  if (cache?.price) f.querySelector('[name=price]').value = cache.price.toFixed(4);
+}
+
 function editTx(id) {
   const tx = S.data.transactions.find(t => t.id === id);
   if (!tx) return;
   openTxModal();
   window._editTxId = id;
   document.getElementById('modal-tx-title').textContent = 'Modifier la transaction';
-  // Masquer la zone scan en mode édition
-  document.getElementById('scan-zone').style.display = 'none';
-  document.getElementById('scan-sep').style.display  = 'none';
+  // Masquer la zone scan et le sélecteur en mode édition
+  document.getElementById('scan-zone').style.display         = 'none';
+  document.getElementById('scan-sep').style.display          = 'none';
+  document.getElementById('tx-existing-group').style.display = 'none';
   const f = document.getElementById('form-tx');
   f.querySelector('[name=type]').value     = tx.type;
   f.querySelector('[name=date]').value     = tx.date;

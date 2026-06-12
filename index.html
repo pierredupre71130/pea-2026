@@ -1859,18 +1859,33 @@ async function fetchPriceBoursoSearch(ticker) {
 }
 
 async function fetchPriceYahoo(ticker) {
-  // Yahoo Finance v8 chart — ticker .PA direct, SANS remapping (bug PROXY_MAP corrigé)
-  try {
-    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d`;
-    const body = await proxyFetch(url);
-    if (!body) return null;
-    const j = JSON.parse(body);
-    const m = j?.chart?.result?.[0]?.meta;
-    if (!m) return null;
-    const price = m.regularMarketPrice ?? m.previousClose;
-    if (!price || price <= 0) return null;
-    return { price, changePercent: Math.round((m.regularMarketChangePercent ?? 0) * 100) / 100, name: m.longName || m.shortName || ticker, currency: m.currency || 'EUR', timestamp: Date.now(), source: 'yahoo' };
-  } catch(e) { return null; }
+  const parseYahoo = (body) => {
+    try {
+      const j = JSON.parse(body);
+      const m = j?.chart?.result?.[0]?.meta;
+      if (!m) return null;
+      const price = m.regularMarketPrice ?? m.previousClose;
+      if (!price || price <= 0) return null;
+      return { price, changePercent: Math.round((m.regularMarketChangePercent ?? 0) * 100) / 100, name: m.longName || m.shortName || ticker, currency: m.currency || 'EUR', timestamp: Date.now(), source: 'yahoo' };
+    } catch(e) { return null; }
+  };
+  const urls = [
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d`,
+  ];
+  for (const url of urls) {
+    // Essai direct (Yahoo supporte CORS)
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (r.ok) { const res = parseYahoo(await r.text()); if (res) return res; }
+    } catch(e) {}
+    // Fallback via proxy
+    try {
+      const body = await proxyFetch(url);
+      if (body) { const res = parseYahoo(body); if (res) return res; }
+    } catch(e) {}
+  }
+  return null;
 }
 
 async function fetchPriceBoursorama(ticker) {
@@ -1939,8 +1954,8 @@ async function fetchPrice(ticker) {
   if (cache && (Date.now() - (cache.timestamp||0) < PRICE_TTL)) return cache;
 
   const sources = [
-    { name:'Boursorama Search', fn: () => fetchPriceBoursoSearch(ticker) },
     { name:'Yahoo Finance',     fn: () => fetchPriceYahoo(ticker) },
+    { name:'Boursorama Search', fn: () => fetchPriceBoursoSearch(ticker) },
     { name:'Google Finance',    fn: () => fetchPriceGoogle(ticker) },
     { name:'Boursorama Page',   fn: () => fetchPriceBoursorama(ticker) },
   ];

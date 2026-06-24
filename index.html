@@ -1492,6 +1492,13 @@ function updPlanMin(id, val) {
   if (item) { item.minAmount = parseFloat(val) || 0; saveData(); renderPlanning(); }
 }
 
+function togglePlanExclude(id) {
+  if (!S._planExcluded) S._planExcluded = new Set();
+  if (S._planExcluded.has(id)) S._planExcluded.delete(id);
+  else S._planExcluded.add(id);
+  renderPlanning();
+}
+
 function updPlanShares(id, val) {
   const item = S.data.planItems.find(p => p.id === id);
   if (item) { item.monthlyShares = parseFloat(val) || 0; saveData(); renderPlanning(); }
@@ -2946,7 +2953,12 @@ function renderPlanning() {
   const etfItems  = S.data.planItems.filter(p => p.active && p.isEtf !== false).sort((a,b)=>(a.priority||99)-(b.priority||99));
   const stockItems = S.data.planItems.filter(p => p.active && p.isEtf === false).sort((a,b)=>(a.priority||99)-(b.priority||99));
 
-  const totalEtfPct  = etfItems.reduce((s,p) => s + (p.allocationPct||0), 0);
+  if (!S._planExcluded) S._planExcluded = new Set();
+  const activeEtfItems  = etfItems.filter(item => !S._planExcluded.has(item.id));
+  const excludedEtfList = etfItems.filter(item =>  S._planExcluded.has(item.id));
+
+  const totalEtfPct    = etfItems.reduce((s,p) => s + (p.allocationPct||0), 0);
+  const totalActivePct = activeEtfItems.reduce((s,p) => s + (p.allocationPct||0), 0);
 
   // Freed cash from AI.PA cap → redirect to WPEA.PA
   const _aiItem   = stockItems.find(si => si.ticker === 'AI.PA');
@@ -2981,11 +2993,12 @@ function renderPlanning() {
   let currentEtfTotal = 0;
   etfItems.forEach(item => { currentEtfTotal += posMap[item.ticker]?.marketValue ?? 0; });
   const projectedEtfTotal = currentEtfTotal + etfBudget;
-  const normFactor = totalEtfPct > 0 ? 100 / totalEtfPct : 1;
+  const normFactor    = totalActivePct > 0 ? 100 / totalActivePct : 1;
+  const allNormFactor = totalEtfPct   > 0 ? 100 / totalEtfPct    : 1;
 
   // Phase 1 : calcul des achats idéaux
   // amount = cash total (net + frais) ; netInvestment = ce qui va vraiment dans l'actif
-  let etfResults = etfItems.map(item => {
+  let etfResults = activeEtfItems.map(item => {
     const currentVal = posMap[item.ticker]?.marketValue ?? 0;
     const currentPct = currentEtfTotal > 0 ? (currentVal / currentEtfTotal * 100) : 0;
     const targetPct  = (item.allocationPct||0) * normFactor;
@@ -3130,7 +3143,21 @@ function renderPlanning() {
   etfResults = recomputeProj(etfResults);
   totalEtfUsed = etfResults.reduce((s,r) => s + r.amount, 0);
 
-  const outOf3 = etfResults.filter(r => Math.abs(r.devAfter) > REBAL_TOL);
+  // Merge excluded items for display
+  const projBktFinal = currentEtfTotal + etfResults.reduce((s,r) => s + r.netInvestment, 0);
+  const excludedResults = excludedEtfList.map(item => {
+    const currentVal = posMap[item.ticker]?.marketValue ?? 0;
+    const currentPct = currentEtfTotal > 0 ? currentVal / currentEtfTotal * 100 : 0;
+    const targetPct  = (item.allocationPct||0) * allNormFactor;
+    const projPct    = projBktFinal > 0 ? currentVal / projBktFinal * 100 : 0;
+    const devAfter   = projPct - targetPct;
+    return { ...item, currentVal, currentPct, targetPct, projPct, devAfter,
+             amount: 0, netInvestment: 0, feeAmt: 0, parts: 0, status: 'excluded',
+             price: S.data.priceCache[item.ticker]?.price ?? null };
+  });
+  const allEtfResults = [...etfResults, ...excludedResults];
+
+  const outOf3 = allEtfResults.filter(r => Math.abs(r.devAfter) > REBAL_TOL);
 
   const lastUpd = getLastUpdate(positions);
 
@@ -3256,6 +3283,7 @@ function renderPlanning() {
         <!-- TABLE DESKTOP -->
         <div class="plan-desktop table-wrap"><table>
           <thead><tr>
+            <th style="width:36px"></th>
             <th>Ticker</th><th>Nom</th>
             <th title="% souhaité dans le bucket ETF uniquement (hors titres directs)">% cible</th>
             <th title="% actuel et % projeté après achat dans le bucket ETF">% ETF actuel → projeté</th>
@@ -3268,7 +3296,7 @@ function renderPlanning() {
             <th>Statut</th>
             <th></th>
           </tr></thead>
-          <tbody>${etfResults.map(r => {
+          <tbody>${allEtfResults.map(r => {
             const gap = r.targetPct - r.currentPct;
             const gapColor = Math.abs(gap) < 2 ? 'neutral' : gap > 0 ? 'positive' : 'negative';
             const devColor = Math.abs(r.devAfter) <= REBAL_TOL ? 'positive' : Math.abs(r.devAfter) <= 6 ? 'warning' : 'negative';
@@ -3288,8 +3316,16 @@ function renderPlanning() {
               ? `<span class="warning" style="font-size:0.74rem" title="Achat réduit — budget redirigé vers un ETF sous-pondéré">↓ Réduit</span>`
               : r.status==='boosted'
               ? `<span class="positive" style="font-size:0.74rem;font-weight:600" title="Achat augmenté pour respecter la règle ±${REBAL_TOL}%">↑ Renforcé</span>`
+              : r.status==='excluded'
+              ? `<span style="color:var(--muted);font-size:0.74rem">⏸ Exclu ce mois</span>`
               : `<span class="negative" style="font-size:0.74rem">< min. (${fc(r.idealBuy)})</span>`;
-            return `<tr>
+            return `<tr${r.status==='excluded'?' style="opacity:0.55"':''}>
+              <td style="text-align:center">
+                <input type="checkbox" ${!S._planExcluded.has(r.id)?'checked':''}
+                  onchange="togglePlanExclude('${r.id}')"
+                  style="width:16px;height:16px;cursor:pointer"
+                  title="${S._planExcluded.has(r.id)?'Inclure cet ETF ce mois':'Exclure cet ETF ce mois (budget redistribué)'}">
+              </td>
               <td><span class="chip">${esc(r.ticker)}</span></td>
               <td>${esc(r.name)}</td>
               <td>
@@ -3337,14 +3373,14 @@ function renderPlanning() {
         </table></div>
 
         <!-- CARDS MOBILE -->
-        <div class="plan-mobile">${etfResults.map(r => {
+        <div class="plan-mobile">${allEtfResults.map(r => {
           const devColor = Math.abs(r.devAfter) <= REBAL_TOL ? '#22c55e' : Math.abs(r.devAfter) <= 6 ? '#f59e0b' : '#ef4444';
           const terVal = r.ter ?? S.data.terCache?.[r.ticker]?.ter ?? null;
-          const amtColor = r.status==='ok'||r.status==='boosted' ? '#22c55e' : r.status==='overweight'||r.status==='deferred' ? 'var(--muted)' : '#f59e0b';
-          const statusLabel = r.status==='ok'?'✓ OK':r.status==='overweight'?'≈ Équilibré':r.status==='min-forced'?'⚡ Min. forcé':r.status==='deferred'?'⏭ Différé':r.status==='reduced'?'↓ Réduit':r.status==='boosted'?'↑ Renforcé':'< Min.';
-          const statusColor = r.status==='ok'||r.status==='boosted'?'#22c55e':r.status==='overweight'||r.status==='deferred'?'var(--muted)':'#f59e0b';
+          const amtColor = r.status==='ok'||r.status==='boosted' ? '#22c55e' : r.status==='overweight'||r.status==='deferred'||r.status==='excluded' ? 'var(--muted)' : '#f59e0b';
+          const statusLabel = r.status==='ok'?'✓ OK':r.status==='overweight'?'≈ Équilibré':r.status==='min-forced'?'⚡ Min. forcé':r.status==='deferred'?'⏭ Différé':r.status==='reduced'?'↓ Réduit':r.status==='boosted'?'↑ Renforcé':r.status==='excluded'?'⏸ Exclu':'< Min.';
+          const statusColor = r.status==='ok'||r.status==='boosted'?'#22c55e':r.status==='overweight'||r.status==='deferred'||r.status==='excluded'?'var(--muted)':'#f59e0b';
           const allocMois = totalEtfPct>0?Math.round(r.allocationPct/totalEtfPct*etfBudget):0;
-          return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:8px">
+          return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:8px${r.status==='excluded'?';opacity:0.55':''}">
             <!-- Ligne 1 : ticker + nom + statut + suppr -->
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:8px">
               <div style="display:flex;align-items:center;gap:7px;min-width:0;flex:1">
@@ -3353,6 +3389,7 @@ function renderPlanning() {
               </div>
               <div style="display:flex;align-items:center;gap:5px;flex-shrink:0">
                 <span style="font-size:0.72rem;font-weight:700;color:${statusColor};white-space:nowrap">${statusLabel}</span>
+                <input type="checkbox" ${!S._planExcluded.has(r.id)?'checked':''} onchange="togglePlanExclude('${r.id}')" style="width:18px;height:18px;cursor:pointer" title="Décocher pour exclure ce mois">
                 <button class="btn-icon" onclick="delPlan('${r.id}')" title="Supprimer">🗑</button>
               </div>
             </div>

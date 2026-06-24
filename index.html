@@ -2993,8 +2993,8 @@ function renderPlanning() {
   let currentEtfTotal = 0;
   etfItems.forEach(item => { currentEtfTotal += posMap[item.ticker]?.marketValue ?? 0; });
   const projectedEtfTotal = currentEtfTotal + etfBudget;
-  const normFactor    = totalActivePct > 0 ? 100 / totalActivePct : 1;
-  const allNormFactor = totalEtfPct   > 0 ? 100 / totalEtfPct    : 1;
+  const normFactor    = totalEtfPct > 0 ? 100 / totalEtfPct : 1;  // cibles inchangées
+  const allNormFactor = normFactor;  // même référence pour les exclus
 
   // Phase 1 : calcul des achats idéaux
   // amount = cash total (net + frais) ; netInvestment = ce qui va vraiment dans l'actif
@@ -3019,6 +3019,31 @@ function renderPlanning() {
     return { ...item, currentVal, currentPct, targetPct, idealBuy, idealBuyCash,
              amount, netInvestment, feeAmt, feePct, status, price };
   });
+
+  // Budget libéré par les ETFs exclus → ajouté aux achats idéaux des ETFs actifs les plus sous-pondérés
+  if (excludedEtfList.length > 0) {
+    const activeTotal = etfResults.reduce((s,r) => s + r.amount, 0);
+    let freed = Math.max(0, etfBudget - activeTotal);
+    if (freed > 0.01) {
+      // Distribuer aux ETFs actifs par ordre de sous-pondération (devAfter le plus bas en premier)
+      const bkt0 = currentEtfTotal + etfResults.reduce((s,r) => s + r.netInvestment, 0);
+      const withDev = etfResults.map(r => {
+        const pp = bkt0 > 0 ? (r.currentVal + r.netInvestment) / bkt0 * 100 : 0;
+        return { ...r, _dev: pp - r.targetPct };
+      }).sort((a, b) => a._dev - b._dev);
+      for (const ref of withDev) {
+        if (freed < 0.01) break;
+        const idx = etfResults.findIndex(r => r.id === ref.id);
+        const cur = etfResults[idx];
+        const addNet = etfNetFromCash(freed, cur.feePct, cur.ticker);
+        const newNet = cur.netInvestment + addNet;
+        const newCash = newNet + etfFeeAmt(newNet, cur.feePct, cur.ticker);
+        etfResults[idx] = { ...cur, amount: newCash, netInvestment: newNet,
+          feeAmt: newCash - newNet, status: cur.status === 'overweight' ? 'ok' : cur.status };
+        freed = 0;
+      }
+    }
+  }
 
   // Phase 2 : ajustement si le total dépasse le budget ETF
   let totalEtfUsed = etfResults.reduce((s,r) => s + r.amount, 0);

@@ -2957,8 +2957,7 @@ function renderPlanning() {
   const activeEtfItems  = etfItems.filter(item => !S._planExcluded.has(item.id));
   const excludedEtfList = etfItems.filter(item =>  S._planExcluded.has(item.id));
 
-  const totalEtfPct    = etfItems.reduce((s,p) => s + (p.allocationPct||0), 0);
-  const totalActivePct = activeEtfItems.reduce((s,p) => s + (p.allocationPct||0), 0);
+  const totalEtfPct = etfItems.reduce((s,p) => s + (p.allocationPct||0), 0);
 
   // Freed cash from AI.PA cap → redirect to WPEA.PA
   const _aiItem   = stockItems.find(si => si.ticker === 'AI.PA');
@@ -2993,15 +2992,14 @@ function renderPlanning() {
   let currentEtfTotal = 0;
   etfItems.forEach(item => { currentEtfTotal += posMap[item.ticker]?.marketValue ?? 0; });
   const projectedEtfTotal = currentEtfTotal + etfBudget;
-  const normFactor    = totalEtfPct > 0 ? 100 / totalEtfPct : 1;  // cibles inchangées
-  const allNormFactor = normFactor;  // même référence pour les exclus
 
   // Phase 1 : calcul des achats idéaux
+  // targetPct = allocationPct brut (ce que l'utilisateur a saisi) — jamais normalisé
   // amount = cash total (net + frais) ; netInvestment = ce qui va vraiment dans l'actif
   let etfResults = activeEtfItems.map(item => {
     const currentVal = posMap[item.ticker]?.marketValue ?? 0;
     const currentPct = currentEtfTotal > 0 ? (currentVal / currentEtfTotal * 100) : 0;
-    const targetPct  = (item.allocationPct||0) * normFactor;
+    const targetPct  = item.allocationPct || 0;
     const targetVal  = projectedEtfTotal * (targetPct / 100);
     const idealBuy   = Math.max(0, targetVal - currentVal);      // investissement net idéal
     const feePct     = item.feePct ?? 0;
@@ -3173,7 +3171,7 @@ function renderPlanning() {
   const excludedResults = excludedEtfList.map(item => {
     const currentVal = posMap[item.ticker]?.marketValue ?? 0;
     const currentPct = currentEtfTotal > 0 ? currentVal / currentEtfTotal * 100 : 0;
-    const targetPct  = (item.allocationPct||0) * allNormFactor;
+    const targetPct  = item.allocationPct || 0;
     const projPct    = projBktFinal > 0 ? currentVal / projBktFinal * 100 : 0;
     const devAfter   = projPct - targetPct;
     return { ...item, currentVal, currentPct, targetPct, projPct, devAfter,

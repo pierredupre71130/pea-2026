@@ -994,6 +994,7 @@ function defData() {
     terCache: {},
     budgetExpenses: [],
     budgetSettings: { monthlyIncome: 0, paydayStart: 1, cardName: '', cardDebitDay: null, cardEncours: 0 },
+    priceHistoryCache: {},
     capitals: {
       pea:       { amount: 0, lastUpdated: null },
       perCGOS:   { amount: 0, monthlyAdd: 0, paused: false, lastMonthlyAdd: null,
@@ -1837,11 +1838,22 @@ async function loadEtfGainCurves() {
   const toDate = new Date().toISOString().slice(0, 10);
 
   const COLORS = ['#3b82f6','#22c55e','#f59e0b','#a855f7','#ef4444','#06b6d4','#f97316','#ec4899'];
+  if (!S.data.priceHistoryCache) S.data.priceHistoryCache = {};
+  const TTL = 24 * 3600 * 1000;
   const priceHistories = {};
-  await Promise.allSettled(positions.map(async (pos, i) => {
+  await Promise.allSettled(positions.map(async (pos) => {
+    const cached = S.data.priceHistoryCache[pos.ticker];
+    if (cached && cached.timestamp && (Date.now() - cached.timestamp) < TTL) {
+      priceHistories[pos.ticker] = cached.data;
+      return;
+    }
     const hist = await fetchHistoricalPrices(pos.ticker, firstDate, toDate);
-    if (hist && Object.keys(hist).length > 0) priceHistories[pos.ticker] = hist;
+    if (hist && Object.keys(hist).length > 0) {
+      priceHistories[pos.ticker] = hist;
+      S.data.priceHistoryCache[pos.ticker] = { data: hist, timestamp: Date.now() };
+    }
   }));
+  saveData();
 
   const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))].sort();
   if (!allDates.length) {
@@ -1901,6 +1913,51 @@ function makeEtfGainChart() {
       }
     }
   });
+}
+
+function restoreEtfGainData() {
+  if (window._etfGainData) return; // already loaded this session
+  if (!S.data.priceHistoryCache) return;
+  const TTL = 24 * 3600 * 1000;
+  const positions = computePositions().filter(p => {
+    const plan = S.data.planItems.find(pl => pl.ticker === p.ticker);
+    return plan ? plan.isEtf !== false : true;
+  });
+  if (!positions.length) return;
+  const txs = (S.data.transactions || []).filter(t => t.type === 'buy' || t.type === 'sell');
+  const firstDate = txs.length ? txs.map(t => t.date).sort()[0] : null;
+  if (!firstDate) return;
+  const COLORS = ['#3b82f6','#22c55e','#f59e0b','#a855f7','#ef4444','#06b6d4','#f97316','#ec4899'];
+  const priceHistories = {};
+  for (const pos of positions) {
+    const cached = S.data.priceHistoryCache[pos.ticker];
+    if (cached && cached.timestamp && (Date.now() - cached.timestamp) < TTL) {
+      priceHistories[pos.ticker] = cached.data;
+    }
+  }
+  const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))].sort();
+  if (!allDates.length) return;
+  const datasets = positions.map((pos, i) => {
+    const hist = priceHistories[pos.ticker];
+    if (!hist) return null;
+    const posTxs = txs.filter(t => t.ticker === pos.ticker);
+    const color = COLORS[i % COLORS.length];
+    const data = allDates.map(date => {
+      const price = hist[date];
+      if (price == null) return null;
+      const buys  = posTxs.filter(t => t.date <= date && t.type === 'buy');
+      const sells = posTxs.filter(t => t.date <= date && t.type === 'sell');
+      const qty   = buys.reduce((s,t) => s + t.quantity, 0) - sells.reduce((s,t) => s + t.quantity, 0);
+      if (qty <= 0) return null;
+      const cost  = buys.reduce((s,t)  => s + t.quantity * t.price + (t.fees||0), 0)
+                  - sells.reduce((s,t) => s + t.quantity * t.price - (t.fees||0), 0);
+      return parseFloat((qty * price - cost).toFixed(2));
+    });
+    if (data.every(v => v === null)) return null;
+    return { label: pos.ticker, data, borderColor: color, backgroundColor: 'transparent',
+             borderWidth: 2, pointRadius: 0, tension: 0.3, spanGaps: true };
+  }).filter(Boolean);
+  if (datasets.length) window._etfGainData = { labels: allDates, datasets };
 }
 
 function setEvolFilter(f) {
@@ -2544,6 +2601,7 @@ One object per ticker. Omit any ticker you cannot find a price for.`;
 // PAGE — DASHBOARD
 // ======================================================
 function renderDashboard() {
+  restoreEtfGainData();
   const { positions, cash, deposited, portValue, totalCost, pnl, pnlP } = computeSummary();
   const recent = [...S.data.transactions].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);
   const total = portValue + Math.max(0, cash);
@@ -2678,7 +2736,7 @@ function renderDashboard() {
       ` : `<div class="empty"><div class="ico">🔄</div><p>Aucune transaction</p><button class="btn btn-primary" onclick="openTxModal()">+ Ajouter</button></div>`}
     </div>
   `;
-  requestAnimationFrame(() => { makeAllocationChart(positions); makePnlChart(positions); makeEvolutionChart(S.evolFilter); makeEtfPieChart(positions); makeGainChart(); makeEtfGainChart(); });
+  requestAnimationFrame(() => { makeAllocationChart(positions); makePnlChart(positions); makeEvolutionChart(S.evolFilter); makeEtfPieChart(positions); makeGainChart(); restoreEtfGainData(); makeEtfGainChart(); });
   updateSbCeiling(deposited);
 }
 
@@ -6609,7 +6667,7 @@ function importJSON(inp) {
     try {
       const d = JSON.parse(e.target.result);
       if (!confirm('Importer ces données ? Les données actuelles seront remplacées.')) return;
-      S.data = { ...defData(), ...d, settings:{ ...defData().settings, ...d.settings }, priceCache: d.priceCache||{} };
+      S.data = { ...defData(), ...d, settings:{ ...defData().settings, ...d.settings }, priceCache: d.priceCache||{}, priceHistoryCache: d.priceHistoryCache||{} };
       saveData(); toast('Import réussi ✓'); navigate('dashboard');
     } catch(err) { toast('Fichier JSON invalide', 'error'); }
   };

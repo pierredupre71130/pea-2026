@@ -1818,6 +1818,91 @@ function makeGainChart() {
   });
 }
 
+
+window._etfGainData = window._etfGainData || null;
+
+async function loadEtfGainCurves() {
+  const btn = document.getElementById('btn-load-etf-gains');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Chargement…'; }
+
+  const positions = computePositions().filter(p => {
+    const plan = S.data.planItems.find(pl => pl.ticker === p.ticker);
+    return plan ? plan.isEtf !== false : true;
+  });
+  if (!positions.length) { if (btn) { btn.disabled = false; btn.textContent = '📡 Charger'; } return; }
+
+  const txs = (S.data.transactions || []).filter(t => t.type === 'buy' || t.type === 'sell');
+  const firstDate = txs.length ? txs.map(t => t.date).sort()[0] : null;
+  if (!firstDate) { if (btn) { btn.disabled = false; btn.textContent = '📡 Charger'; } return; }
+  const toDate = new Date().toISOString().slice(0, 10);
+
+  const COLORS = ['#3b82f6','#22c55e','#f59e0b','#a855f7','#ef4444','#06b6d4','#f97316','#ec4899'];
+  const priceHistories = {};
+  await Promise.allSettled(positions.map(async (pos, i) => {
+    const hist = await fetchHistoricalPrices(pos.ticker, firstDate, toDate);
+    if (hist && Object.keys(hist).length > 0) priceHistories[pos.ticker] = hist;
+  }));
+
+  const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))].sort();
+  if (!allDates.length) {
+    toast('Impossible de récupérer les cours historiques', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '📡 Charger'; } return;
+  }
+
+  const datasets = positions.map((pos, i) => {
+    const hist = priceHistories[pos.ticker];
+    if (!hist) return null;
+    const posTxs = txs.filter(t => t.ticker === pos.ticker);
+    const color = COLORS[i % COLORS.length];
+    const data = allDates.map(date => {
+      const price = hist[date];
+      if (price == null) return null;
+      const buys  = posTxs.filter(t => t.date <= date && t.type === 'buy');
+      const sells = posTxs.filter(t => t.date <= date && t.type === 'sell');
+      const qty   = buys.reduce((s,t) => s + t.quantity, 0) - sells.reduce((s,t) => s + t.quantity, 0);
+      if (qty <= 0) return null;
+      const cost  = buys.reduce((s,t)  => s + t.quantity * t.price + (t.fees||0), 0)
+                  - sells.reduce((s,t) => s + t.quantity * t.price - (t.fees||0), 0);
+      return parseFloat((qty * price - cost).toFixed(2));
+    });
+    if (data.every(v => v === null)) return null;
+    return { label: pos.ticker, data, borderColor: color, backgroundColor: 'transparent',
+             borderWidth: 2, pointRadius: 0, tension: 0.3, spanGaps: true };
+  }).filter(Boolean);
+
+  window._etfGainData = { labels: allDates, datasets };
+  if (btn) { btn.disabled = false; btn.innerHTML = '🔄 Rafraîchir'; }
+  makeEtfGainChart();
+}
+
+function makeEtfGainChart() {
+  destroyChart('etf-gains');
+  const ctx = document.getElementById('chart-etf-gains');
+  if (!ctx || !window._etfGainData) return;
+  const { labels, datasets } = window._etfGainData;
+  S.charts['etf-gains'] = new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color:'#94a3b8', font:{ size:11 }, boxWidth:12, padding:10 } },
+        tooltip: { callbacks: {
+          title: t => new Date(t[0].label).toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}),
+          label: c => c.raw != null ? ` ${c.dataset.label}: ${c.raw >= 0 ? '+' : ''}${fc(c.raw)}` : null
+        }}
+      },
+      scales: {
+        x: { ticks:{ color:'#94a3b8', maxTicksLimit:8, maxRotation:0,
+              callback:(_,i)=>{ const d=new Date(labels[i]); return d.toLocaleDateString('fr-FR',{day:'2-digit',month:'short'}); }},
+             grid:{ color:'#1e293b' }},
+        y: { ticks:{ color:'#94a3b8', callback: v => fc(v,0) }, grid:{ color:'#334155' } }
+      }
+    }
+  });
+}
+
 function setEvolFilter(f) {
   S.evolFilter = f;
   makeEvolutionChart(f);
@@ -2558,6 +2643,18 @@ function renderDashboard() {
       <div style="height:200px;position:relative"><canvas id="chart-gain"></canvas></div>
     </div>` : ''}
 
+    <div class="card mb16">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:${window._etfGainData?'14':'6'}px">
+        <div class="section-title" style="margin:0">Gains / Pertes par ETF</div>
+        <button class="btn btn-secondary btn-sm" id="btn-load-etf-gains" onclick="loadEtfGainCurves()">
+          ${window._etfGainData ? '🔄 Rafraîchir' : '📡 Charger les courbes'}
+        </button>
+      </div>
+      ${window._etfGainData
+        ? `<div style="height:240px;position:relative"><canvas id="chart-etf-gains"></canvas></div>`
+        : `<div style="padding:12px 0;font-size:0.8rem;color:var(--muted);text-align:center">Récupère l'historique des prix via Yahoo Finance pour afficher la progression de chaque ETF.</div>`}
+    </div>
+
     <div class="card">
       <div class="flex justify-between items-center mb16">
         <div class="section-title" style="margin:0">Transactions récentes</div>
@@ -2581,7 +2678,7 @@ function renderDashboard() {
       ` : `<div class="empty"><div class="ico">🔄</div><p>Aucune transaction</p><button class="btn btn-primary" onclick="openTxModal()">+ Ajouter</button></div>`}
     </div>
   `;
-  requestAnimationFrame(() => { makeAllocationChart(positions); makePnlChart(positions); makeEvolutionChart(S.evolFilter); makeEtfPieChart(positions); makeGainChart(); });
+  requestAnimationFrame(() => { makeAllocationChart(positions); makePnlChart(positions); makeEvolutionChart(S.evolFilter); makeEtfPieChart(positions); makeGainChart(); makeEtfGainChart(); });
   updateSbCeiling(deposited);
 }
 

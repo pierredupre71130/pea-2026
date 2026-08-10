@@ -1826,10 +1826,7 @@ async function loadEtfGainCurves() {
   const btn = document.getElementById('btn-load-etf-gains');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Chargement…'; }
 
-  const positions = computePositions().filter(p => {
-    const plan = S.data.planItems.find(pl => pl.ticker === p.ticker);
-    return plan ? plan.isEtf !== false : true;
-  });
+  const positions = computePositions();
   if (!positions.length) { if (btn) { btn.disabled = false; btn.textContent = '📡 Charger'; } return; }
 
   const txs = (S.data.transactions || []).filter(t => t.type === 'buy' || t.type === 'sell');
@@ -1919,10 +1916,7 @@ function restoreEtfGainData() {
   if (window._etfGainData) return; // already loaded this session
   if (!S.data.priceHistoryCache) return;
   const TTL = 24 * 3600 * 1000;
-  const positions = computePositions().filter(p => {
-    const plan = S.data.planItems.find(pl => pl.ticker === p.ticker);
-    return plan ? plan.isEtf !== false : true;
-  });
+  const positions = computePositions();
   if (!positions.length) return;
   const txs = (S.data.transactions || []).filter(t => t.type === 'buy' || t.type === 'sell');
   const firstDate = txs.length ? txs.map(t => t.date).sort()[0] : null;
@@ -2703,7 +2697,7 @@ function renderDashboard() {
 
     <div class="card mb16">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:${window._etfGainData?'14':'6'}px">
-        <div class="section-title" style="margin:0">Gains / Pertes par ETF</div>
+        <div class="section-title" style="margin:0">Gains / Pertes par position</div>
         <button class="btn btn-secondary btn-sm" id="btn-load-etf-gains" onclick="loadEtfGainCurves()">
           ${window._etfGainData ? '🔄 Rafraîchir' : '📡 Charger les courbes'}
         </button>

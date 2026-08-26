@@ -2136,6 +2136,38 @@ async function fetchPriceYahoo(ticker) {
   return null;
 }
 
+async function fetchPriceBoursoVercel(ticker) {
+  const VERCEL = 'https://pea-etf-proxy.vercel.app';
+  const base = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
+  const isKnownETF = Array.isArray(PEA_KB?.etfs) && PEA_KB.etfs.some(e => e.ticker === ticker);
+  const paths = isKnownETF
+    ? [`/bourse/trackers/cours/1rT${base}/`, `/cours/1rP${base}/`]
+    : [`/cours/1rP${base}/`, `/bourse/trackers/cours/1rT${base}/`];
+  const decode = s => s.replace(/&quot;/g,'"').replace(/&amp;/g,'&').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>');
+  for (const path of paths) {
+    try {
+      const r = await fetch(`${VERCEL}${path}`, { signal: AbortSignal.timeout(10000) });
+      if (!r.ok) continue;
+      const html = await r.text();
+      if (!html || html.length < 500) continue;
+      if (/just a moment|cf-browser-verification|cloudflare ray/i.test(html)) continue;
+      const re = /data-ist-init="([^"]+)"/g;
+      let m;
+      while ((m = re.exec(html))) {
+        try {
+          const parsed = JSON.parse(decode(m[1]));
+          const price = parseFloat(parsed.last ?? parsed.price ?? 0);
+          if (!isFinite(price) || price <= 0) continue;
+          const changePercent = parseFloat(parsed.variationPercent ?? parsed.variation ?? 0);
+          const name = parsed.name || ticker;
+          return { price, changePercent, name, currency:'EUR', timestamp:Date.now(), source:'bourso-vercel' };
+        } catch(e) { continue; }
+      }
+    } catch(e) {}
+  }
+  return null;
+}
+
 async function fetchPriceBoursorama(ticker) {
   const base = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
   // ETF connu dans PEA_KB → URL tracker (1rT) en premier
@@ -2202,10 +2234,11 @@ async function fetchPrice(ticker) {
   if (cache && (Date.now() - (cache.timestamp||0) < PRICE_TTL)) return cache;
 
   const sources = [
-    { name:'Yahoo Finance',     fn: () => fetchPriceYahoo(ticker) },
-    { name:'Boursorama Search', fn: () => fetchPriceBoursoSearch(ticker) },
-    { name:'Google Finance',    fn: () => fetchPriceGoogle(ticker) },
-    { name:'Boursorama Page',   fn: () => fetchPriceBoursorama(ticker) },
+    { name:'Boursorama (Vercel)', fn: () => fetchPriceBoursoVercel(ticker) },
+    { name:'Yahoo Finance',       fn: () => fetchPriceYahoo(ticker) },
+    { name:'Boursorama Search',   fn: () => fetchPriceBoursoSearch(ticker) },
+    { name:'Google Finance',      fn: () => fetchPriceGoogle(ticker) },
+    { name:'Boursorama Page',     fn: () => fetchPriceBoursorama(ticker) },
   ];
   for (const src of sources) {
     try {

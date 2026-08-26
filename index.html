@@ -2866,6 +2866,7 @@ function renderPortfolio() {
       </div>
       <div class="page-actions">
         <button class="btn btn-secondary" onclick="doRefreshAll()" id="btn-refresh">⟳ Actualiser les cours</button>
+        <button class="btn btn-secondary btn-sm" onclick="diagPrix()" title="Diagnostic sources de prix" style="padding:6px 10px">🔧</button>
         <button class="btn btn-primary" onclick="openTxModal()">+ Transaction</button>
       </div>
     </div>
@@ -2941,6 +2942,38 @@ async function doRefreshAll() {
   cleanCorruptedSnapshots();
   takeSnapshot();
   renderPage(S.page);
+}
+
+async function diagPrix() {
+  const positions = computePositions();
+  const ticker = positions.length ? positions[0].ticker : 'WPEA.PA';
+  const lines = [`<b>Diagnostic cours — ${ticker}</b><br><br>`];
+  const tests = [
+    { name: 'Boursorama Vercel', fn: () => fetchPriceBoursoVercel(ticker) },
+    { name: 'Yahoo Finance',     fn: () => fetchPriceYahoo(ticker) },
+    { name: 'Boursorama Search', fn: () => fetchPriceBoursoSearch(ticker) },
+    { name: 'Google Finance',    fn: () => fetchPriceGoogle(ticker) },
+    { name: 'Boursorama Page',   fn: () => fetchPriceBoursorama(ticker) },
+  ];
+  lines.push('<div style="font-family:monospace;font-size:0.8rem">');
+  for (const t of tests) {
+    try {
+      const r = await t.fn();
+      if (r) lines.push(`<span style="color:#22c55e">✓ ${t.name}: ${r.price}€ (${r.source})</span><br>`);
+      else    lines.push(`<span style="color:#ef4444">✗ ${t.name}: null</span><br>`);
+    } catch(e) {
+      lines.push(`<span style="color:#ef4444">✗ ${t.name}: erreur (${e.message})</span><br>`);
+    }
+  }
+  lines.push('</div>');
+  // Affiche dans une alerte modale simple
+  const div = document.createElement('div');
+  div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  div.innerHTML = `<div style="background:var(--card);border-radius:12px;padding:20px;max-width:480px;width:100%;max-height:80vh;overflow-y:auto">
+    ${lines.join('')}
+    <button class="btn btn-primary" style="margin-top:16px;width:100%" onclick="this.closest('div[style]').remove()">Fermer</button>
+  </div>`;
+  document.body.appendChild(div);
 }
 
 function openPruModal(ticker, computedPru, currentPru) {

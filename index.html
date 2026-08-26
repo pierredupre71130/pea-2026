@@ -2017,9 +2017,10 @@ function makePlanChart(etfItems) {
 // Stocks : 1rP{BASE}   ETFs/trackers : 1rT{BASE}
 // Proxies CORS — lancés en parallèle, le premier qui répond valablement gagne
 const CORS_PROXIES = [
-  async (url) => { const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(10000)}); if (!r.ok) throw new Error('allorigins'); const b = (await r.json()).contents || ''; if (!b || b.length < 100) throw new Error('empty'); return b; },
-  async (url) => { const r = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(10000)}); if (!r.ok) throw new Error('corsproxy'); const b = await r.text(); if (!b || b.length < 100) throw new Error('empty'); return b; },
-  async (url) => { const r = await fetch(`https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(10000)}); if (!r.ok) throw new Error('codetabs'); const b = await r.text(); if (!b || b.length < 100) throw new Error('empty'); return b; },
+  async (url) => { const r = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(12000)}); if (!r.ok) throw new Error('corsproxy'); const b = await r.text(); if (!b || b.length < 50) throw new Error('empty'); return b; },
+  async (url) => { const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(12000)}); if (!r.ok) throw new Error('allorigins'); const b = (await r.json()).contents || ''; if (!b || b.length < 50) throw new Error('empty'); return b; },
+  async (url) => { const r = await fetch(`https://thingproxy.freeboard.io/fetch/${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(12000)}); if (!r.ok) throw new Error('thingproxy'); const b = await r.text(); if (!b || b.length < 50) throw new Error('empty'); return b; },
+  async (url) => { const r = await fetch(`https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`, {signal:AbortSignal.timeout(12000)}); if (!r.ok) throw new Error('codetabs'); const b = await r.text(); if (!b || b.length < 50) throw new Error('empty'); return b; },
 ];
 
 async function proxyFetch(url) {
@@ -2084,9 +2085,10 @@ async function fetchPriceBoursoSearch(ticker) {
 }
 
 async function fetchPriceYahoo(ticker) {
-  const parseYahoo = (body) => {
+  const parseChart = (body) => {
     try {
       const j = JSON.parse(body);
+      if (j?.chart?.error) return null; // ex: {"chart":{"error":{"code":"Unauthorized",...}}}
       const m = j?.chart?.result?.[0]?.meta;
       if (!m) return null;
       const price = m.regularMarketPrice ?? m.previousClose;
@@ -2094,20 +2096,41 @@ async function fetchPriceYahoo(ticker) {
       return { price, changePercent: Math.round((m.regularMarketChangePercent ?? 0) * 100) / 100, name: m.longName || m.shortName || ticker, currency: m.currency || 'EUR', timestamp: Date.now(), source: 'yahoo' };
     } catch(e) { return null; }
   };
-  const urls = [
+  const parseSearch = (body) => {
+    try {
+      const j = JSON.parse(body);
+      const q = j?.finance?.result?.[0]?.documents?.[0] || j?.quotes?.[0];
+      if (!q) return null;
+      const price = q.regularMarketPrice;
+      if (!price || price <= 0) return null;
+      return { price, changePercent: Math.round((q.regularMarketChangePercent ?? 0) * 100) / 100, name: q.longname || q.shortname || q.symbol || ticker, currency: q.currency || 'EUR', timestamp: Date.now(), source: 'yahoo-search' };
+    } catch(e) { return null; }
+  };
+
+  // 1. Yahoo Finance Search API — pas de crumb requis, retourne le prix courant
+  const searchUrl = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&quotesCount=1&newsCount=0&enableFuzzyQuery=false&quotesQueryId=tss_match_phrase_query`;
+  try {
+    const r = await fetch(searchUrl, { signal: AbortSignal.timeout(8000), headers: { Accept: 'application/json' } });
+    if (r.ok) { const res = parseSearch(await r.text()); if (res) return res; }
+  } catch(e) {}
+  try {
+    const body = await proxyFetch(searchUrl);
+    if (body) { const res = parseSearch(body); if (res) return res; }
+  } catch(e) {}
+
+  // 2. Yahoo Finance chart API v8 (peut nécessiter crumb selon région)
+  const chartUrls = [
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d`,
     `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d`,
   ];
-  for (const url of urls) {
-    // Essai direct (Yahoo supporte CORS)
+  for (const url of chartUrls) {
     try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      if (r.ok) { const res = parseYahoo(await r.text()); if (res) return res; }
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { Accept: 'application/json' } });
+      if (r.ok) { const res = parseChart(await r.text()); if (res) return res; }
     } catch(e) {}
-    // Fallback via proxy
     try {
       const body = await proxyFetch(url);
-      if (body) { const res = parseYahoo(body); if (res) return res; }
+      if (body) { const res = parseChart(body); if (res) return res; }
     } catch(e) {}
   }
   return null;
@@ -2219,8 +2242,9 @@ async function refreshPrices(tickers) {
   const results = await Promise.allSettled(autoTickers.map(t => fetchPrice(t)));
   const ok   = results.filter(r => r.status === 'fulfilled' && r.value).length;
   const fail = results.length - ok;
+  const failed = autoTickers.filter((_, i) => !(results[i].status === 'fulfilled' && results[i].value));
   saveData();
-  return { ok, fail, manual };
+  return { ok, fail, manual, failed };
 }
 
 // ======================================================
@@ -2866,10 +2890,18 @@ async function doRefreshAll() {
   if (!positions.length) { toast('Aucune position à actualiser', 'error'); return; }
   const btn = document.getElementById('btn-refresh');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Actualisation...'; }
-  toast('Actualisation des cours en cours…', 'success', 8000);
-  const { ok, fail, manual } = await refreshPrices(positions.map(p=>p.ticker));
+  const n = positions.length;
+  toast(`Actualisation de ${n} cours en cours…`, 'success', 15000);
+  const { ok, fail, manual, failed } = await refreshPrices(positions.map(p=>p.ticker));
   if (btn) { btn.disabled = false; btn.innerHTML = '⟳ Actualiser les cours'; }
-  toast(`${ok} cours mis à jour${fail?`, ${fail} échec(s)`:''}${manual?`, ${manual} manuel(s) ignoré(s)`:''}`, fail ? 'error' : 'success');
+  if (fail === 0) {
+    toast(`${ok} cours mis à jour ✓${manual?` · ${manual} manuel(s) ignoré(s)`:''}`, 'success');
+  } else if (ok === 0) {
+    const failList = (failed||[]).slice(0,4).join(', ');
+    toast(`Impossible de récupérer les cours${failList ? ` (${failList})` : ''} — vérifiez la connexion`, 'error', 8000);
+  } else {
+    toast(`${ok} cours mis à jour · ${fail} échec(s)${manual?` · ${manual} manuel(s)`:''}`, 'error');
+  }
   cleanCorruptedSnapshots();
   takeSnapshot();
   renderPage(S.page);

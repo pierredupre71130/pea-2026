@@ -2948,7 +2948,17 @@ async function doRefreshAll() {
 async function diagPrix() {
   const positions = computePositions();
   const ticker = positions.length ? positions[0].ticker : 'WPEA.PA';
-  const lines = [`<b>Diagnostic cours — ${ticker}</b><br><br>`];
+  // Afficher la modale immédiatement
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--card);border-radius:12px;padding:20px;max-width:480px;width:100%;max-height:80vh;overflow-y:auto';
+  box.innerHTML = `<b>Diagnostic cours — ${ticker}</b><br><br><div id="diag-log" style="font-family:monospace;font-size:0.82rem"></div><button class="btn btn-primary" style="margin-top:16px;width:100%" onclick="this.closest('[style]').remove()">Fermer</button>`;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  const log = box.querySelector('#diag-log');
+  const addLine = (html) => { log.innerHTML += html + '<br>'; };
+  addLine('⏳ Test en cours…');
   const tests = [
     { name: 'Boursorama Vercel', fn: () => fetchPriceBoursoVercel(ticker) },
     { name: 'Yahoo Finance',     fn: () => fetchPriceYahoo(ticker) },
@@ -2956,25 +2966,19 @@ async function diagPrix() {
     { name: 'Google Finance',    fn: () => fetchPriceGoogle(ticker) },
     { name: 'Boursorama Page',   fn: () => fetchPriceBoursorama(ticker) },
   ];
-  lines.push('<div style="font-family:monospace;font-size:0.8rem">');
-  for (const t of tests) {
+  // Lancer tous les tests en parallèle et afficher au fur et à mesure
+  await Promise.allSettled(tests.map(async t => {
     try {
       const r = await t.fn();
-      if (r) lines.push(`<span style="color:#22c55e">✓ ${t.name}: ${r.price}€ (${r.source})</span><br>`);
-      else    lines.push(`<span style="color:#ef4444">✗ ${t.name}: null</span><br>`);
+      if (r) addLine(`<span style="color:#22c55e">✓ ${t.name}: <b>${r.price}€</b></span>`);
+      else    addLine(`<span style="color:#f59e0b">✗ ${t.name}: aucune donnée</span>`);
     } catch(e) {
-      lines.push(`<span style="color:#ef4444">✗ ${t.name}: erreur (${e.message})</span><br>`);
+      addLine(`<span style="color:#ef4444">✗ ${t.name}: ${e.message||'erreur'}</span>`);
     }
-  }
-  lines.push('</div>');
-  // Affiche dans une alerte modale simple
-  const div = document.createElement('div');
-  div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
-  div.innerHTML = `<div style="background:var(--card);border-radius:12px;padding:20px;max-width:480px;width:100%;max-height:80vh;overflow-y:auto">
-    ${lines.join('')}
-    <button class="btn btn-primary" style="margin-top:16px;width:100%" onclick="this.closest('div[style]').remove()">Fermer</button>
-  </div>`;
-  document.body.appendChild(div);
+  }));
+  // Retirer la ligne "test en cours"
+  log.innerHTML = log.innerHTML.replace('⏳ Test en cours…<br>', '');
+  addLine('<br>✅ Terminé');
 }
 
 function openPruModal(ticker, computedPru, currentPru) {

@@ -2143,14 +2143,15 @@ async function fetchPriceBoursoVercel(ticker) {
   const paths = isKnownETF
     ? [`/bourse/trackers/cours/1rT${base}/`, `/cours/1rP${base}/`]
     : [`/cours/1rP${base}/`, `/bourse/trackers/cours/1rT${base}/`];
-  const decode = s => s.replace(/&quot;/g,'"').replace(/&amp;/g,'&').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>');
+  // Décodage HTML entities identique à l'autre app (textarea trick)
+  const decode = s => { try { const ta = document.createElement('textarea'); ta.innerHTML = s; return ta.value; } catch(e) { return s; } };
   for (const path of paths) {
     try {
       const r = await fetch(`${VERCEL}${path}`, { signal: AbortSignal.timeout(10000) });
-      if (!r.ok) continue;
+      if (!r.ok) { console.warn(`BoursoVercel ${ticker}: HTTP ${r.status} sur ${path}`); continue; }
       const html = await r.text();
-      if (!html || html.length < 500) continue;
-      if (/just a moment|cf-browser-verification|cloudflare ray/i.test(html)) continue;
+      if (!html || html.length < 500) { console.warn(`BoursoVercel ${ticker}: réponse vide`); continue; }
+      if (/just a moment|cf-browser-verification|cloudflare ray/i.test(html)) { console.warn(`BoursoVercel ${ticker}: Cloudflare challenge`); continue; }
       const re = /data-ist-init="([^"]+)"/g;
       let m;
       while ((m = re.exec(html))) {
@@ -2160,10 +2161,12 @@ async function fetchPriceBoursoVercel(ticker) {
           if (!isFinite(price) || price <= 0) continue;
           const changePercent = parseFloat(parsed.variationPercent ?? parsed.variation ?? 0);
           const name = parsed.name || ticker;
+          console.log(`BoursoVercel ${ticker} OK: ${price}€`);
           return { price, changePercent, name, currency:'EUR', timestamp:Date.now(), source:'bourso-vercel' };
         } catch(e) { continue; }
       }
-    } catch(e) {}
+      console.warn(`BoursoVercel ${ticker}: data-ist-init introuvable dans ${path}`);
+    } catch(e) { console.warn(`BoursoVercel ${ticker}: erreur`, e.message); }
   }
   return null;
 }

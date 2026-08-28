@@ -2140,32 +2140,36 @@ async function fetchPriceBoursoVercel(ticker) {
   const VERCEL = 'https://pea-etf-proxy.vercel.app';
   const base = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
   const isKnownETF = Array.isArray(PEA_KB?.etfs) && PEA_KB.etfs.some(e => e.ticker === ticker);
-  const paths = isKnownETF
-    ? [`/bourse/trackers/cours/1rT${base}/`, `/cours/1rP${base}/`]
-    : [`/cours/1rP${base}/`, `/bourse/trackers/cours/1rT${base}/`];
-  // Décodage HTML entities identique à l'autre app (textarea trick)
+  // Symboles Boursorama attendus dans parsed.symbol
+  const candidates = isKnownETF
+    ? [{ path: `/bourse/trackers/cours/1rT${base}/`, sym: `1rT${base}` },
+       { path: `/cours/1rP${base}/`,                 sym: `1rP${base}` }]
+    : [{ path: `/cours/1rP${base}/`,                 sym: `1rP${base}` },
+       { path: `/bourse/trackers/cours/1rT${base}/`, sym: `1rT${base}` }];
   const decode = s => { try { const ta = document.createElement('textarea'); ta.innerHTML = s; return ta.value; } catch(e) { return s; } };
-  for (const path of paths) {
+  for (const { path, sym } of candidates) {
     try {
       const r = await fetch(`${VERCEL}${path}`, { signal: AbortSignal.timeout(10000) });
-      if (!r.ok) { console.warn(`BoursoVercel ${ticker}: HTTP ${r.status} sur ${path}`); continue; }
+      if (!r.ok) { console.warn(`BoursoVercel ${ticker}: HTTP ${r.status}`); continue; }
       const html = await r.text();
-      if (!html || html.length < 500) { console.warn(`BoursoVercel ${ticker}: réponse vide`); continue; }
-      if (/just a moment|cf-browser-verification|cloudflare ray/i.test(html)) { console.warn(`BoursoVercel ${ticker}: Cloudflare challenge`); continue; }
+      if (!html || html.length < 500) continue;
+      if (/just a moment|cf-browser-verification|cloudflare ray/i.test(html)) { console.warn(`BoursoVercel ${ticker}: Cloudflare`); continue; }
       const re = /data-ist-init="([^"]+)"/g;
       let m;
       while ((m = re.exec(html))) {
         try {
           const parsed = JSON.parse(decode(m[1]));
+          // Vérifier que c'est bien l'instrument demandé (ex: "1rPAI" pour AI.PA)
+          if (parsed.symbol && parsed.symbol.toUpperCase() !== sym.toUpperCase()) continue;
           const price = parseFloat(parsed.last ?? parsed.price ?? 0);
           if (!isFinite(price) || price <= 0) continue;
           const changePercent = parseFloat(parsed.variationPercent ?? parsed.variation ?? 0);
           const name = parsed.name || ticker;
-          console.log(`BoursoVercel ${ticker} OK: ${price}€`);
+          console.log(`BoursoVercel ${ticker} OK (${sym}): ${price}€`);
           return { price, changePercent, name, currency:'EUR', timestamp:Date.now(), source:'bourso-vercel' };
         } catch(e) { continue; }
       }
-      console.warn(`BoursoVercel ${ticker}: data-ist-init introuvable dans ${path}`);
+      console.warn(`BoursoVercel ${ticker}: symbole ${sym} introuvable dans data-ist-init`);
     } catch(e) { console.warn(`BoursoVercel ${ticker}: erreur`, e.message); }
   }
   return null;
@@ -2247,12 +2251,12 @@ async function fetchPrice(ticker) {
     try {
       const r = await src.fn();
       if (r) {
-        // Sanity check : prix aberrant par rapport au PRU moyen connu (facteur 20×)
+        // Sanity check : prix aberrant par rapport au PRU moyen connu (facteur 50×)
         const pos = computePositions().find(p => p.ticker === ticker);
         if (pos && pos.computedAvgPrice > 0) {
           const ratio = r.price / pos.computedAvgPrice;
-          if (ratio > 20 || ratio < 0.05) {
-            console.warn(`fetchPrice: prix ${r.price}€ pour ${ticker} suspect vs PRU ${pos.computedAvgPrice.toFixed(2)}€ (ratio ${ratio.toFixed(1)}×), ignoré`);
+          if (ratio > 50 || ratio < 0.02) {
+            console.warn(`fetchPrice: prix ${r.price}€ pour ${ticker} REJETÉ — PRU=${pos.computedAvgPrice.toFixed(2)}€ ratio=${ratio.toFixed(1)}× via ${src.name}`);
             continue;
           }
         }

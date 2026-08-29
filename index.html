@@ -1854,7 +1854,9 @@ async function loadEtfGainCurves() {
 
   const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))].sort();
   if (!allDates.length) {
-    toast('Impossible de récupérer les cours historiques', 'error');
+    // Invalider le cache pour forcer un vrai fetch au prochain essai
+    positions.forEach(p => { if (S.data.priceHistoryCache?.[p.ticker]) delete S.data.priceHistoryCache[p.ticker]; });
+    toast('Impossible de récupérer les cours historiques — réessaie dans quelques secondes', 'error', 6000);
     if (btn) { btn.disabled = false; btn.textContent = '📡 Charger'; } return;
   }
 
@@ -8951,23 +8953,34 @@ function simulateDCABenchmark(deposits, prices) {
 async function fetchHistoricalPrices(ticker, fromDate, toDate) {
   const from = Math.floor(new Date(fromDate).getTime() / 1000) - 86400 * 3;
   const to   = Math.floor(new Date(toDate + 'T23:59:59').getTime() / 1000);
-  const urls = [
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`,
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`,
-  ];
-  for (const url of urls) {
+  const parseHistorical = (body) => {
     try {
-      const body = await proxyFetch(url);
-      if (!body) continue;
       const data = JSON.parse(body);
+      if (data?.chart?.error) return null;
       const res = data.chart?.result?.[0];
-      if (!res?.timestamp) continue;
+      if (!res?.timestamp) return null;
       const prices = {};
       res.timestamp.forEach((t, i) => {
         const c = res.indicators.quote[0].close[i];
         if (c != null) prices[new Date(t * 1000).toISOString().slice(0, 10)] = c;
       });
-      if (Object.keys(prices).length > 0) return prices;
+      return Object.keys(prices).length > 0 ? prices : null;
+    } catch(e) { return null; }
+  };
+  const urls = [
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`,
+  ];
+  for (const url of urls) {
+    // Essai direct d'abord (Yahoo supporte CORS pour les données historiques)
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(12000), headers: { Accept: 'application/json' } });
+      if (r.ok) { const p = parseHistorical(await r.text()); if (p) return p; }
+    } catch(e) {}
+    // Fallback via proxies CORS
+    try {
+      const body = await proxyFetch(url);
+      if (body) { const p = parseHistorical(body); if (p) return p; }
     } catch(e) {}
   }
   return null;

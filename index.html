@@ -3009,13 +3009,32 @@ async function diagPrix() {
     }
     // Test stooq pour .PA
     if (/\.PA$/i.test(pos.ticker)) {
-      const st = pos.ticker.replace(/\.PA$/i,'.fr').toLowerCase();
+      const base4 = pos.ticker.replace(/\.PA$/i,'').toLowerCase();
+      for (const sfx of ['.fr','.pa']) {
+        try {
+          const body = await proxyFetch(`https://stooq.com/q/d/l/?s=${base4}${sfx}&i=d`);
+          const lines = (body||'').trim().split('\n').length - 1;
+          if (lines > 1) { addLine(`<span style="color:#22c55e">✓ ${pos.ticker} [stooq${sfx}]: ${lines} lignes</span>`); break; }
+          else addLine(`<span style="color:#f59e0b">✗ ${pos.ticker} [stooq${sfx}]: ${(body||'').slice(0,60).replace(/</g,'&lt;')}</span>`);
+        } catch(e) { addLine(`<span style="color:#ef4444">✗ ${pos.ticker} [stooq${sfx}]: ${e.message}</span>`); }
+      }
+    }
+    // Test Boursorama /dl/ via Vercel proxy (pour tickers absents de Yahoo/Stooq)
+    {
+      const VERCEL = 'https://pea-etf-proxy.vercel.app';
+      const base5 = pos.ticker.replace(/\.(PA|DE|AS|BR|MI)$/i,'');
+      const isETF5 = Array.isArray(PEA_KB?.etfs) && PEA_KB.etfs.some(e => e.ticker === pos.ticker);
+      const sym5 = isETF5 ? `1rT${base5}` : `1rP${base5}`;
       try {
-        const body = await proxyFetch(`https://stooq.com/q/d/l/?s=${st}&i=d`);
-        const lines = (body||'').trim().split('\n').length - 1;
-        if (lines > 1) addLine(`<span style="color:#22c55e">✓ ${pos.ticker} [stooq]: ${lines} lignes</span>`);
-        else addLine(`<span style="color:#f59e0b">✗ ${pos.ticker} [stooq]: ${(body||'').slice(0,60).replace(/</g,'&lt;')}</span>`);
-      } catch(e) { addLine(`<span style="color:#ef4444">✗ ${pos.ticker} [stooq]: ${e.message}</span>`); }
+        const r = await fetch(`${VERCEL}/bourse/action/graph/dl/GetTicksEOD?symbol=${sym5}&length=400&period=0&guid=`, {signal:AbortSignal.timeout(12000)});
+        if (!r.ok) { addLine(`<span style="color:#f59e0b">✗ ${pos.ticker} [bourso/dl]: HTTP ${r.status}</span>`); }
+        else {
+          const j = await r.json();
+          const ticks = j?.d?.Ticks?.d || j?.d?.ticks?.d || j?.Ticks?.d;
+          if (Array.isArray(ticks) && ticks.length > 0) addLine(`<span style="color:#22c55e">✓ ${pos.ticker} [bourso/dl]: ${ticks.length} ticks</span>`);
+          else addLine(`<span style="color:#f59e0b">✗ ${pos.ticker} [bourso/dl]: vide — ${JSON.stringify(j).slice(0,60).replace(/</g,'&lt;')}</span>`);
+        }
+      } catch(e) { addLine(`<span style="color:#ef4444">✗ ${pos.ticker} [bourso/dl]: ${e.message}</span>`); }
     }
   }));
   // Retirer la ligne "test en cours"

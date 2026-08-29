@@ -2988,24 +2988,34 @@ async function diagPrix() {
       addLine(`<span style="color:#ef4444">✗ ${t.name}: ${e.message||'erreur'}</span>`);
     }
   }));
-  // Test données historiques pour chaque position
-  addLine('<br><b>— Historique (courbes) par position —</b>');
+  // Test données historiques — direct ET proxy pour chaque position
+  addLine('<br><b>— Historique par position (via proxy) —</b>');
   await Promise.allSettled(positions.map(async pos => {
-    for (const range of ['1y','2y','5y']) {
+    for (const range of ['1y','2y']) {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(pos.ticker)}?interval=1d&range=${range}`;
       try {
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(pos.ticker)}?interval=1d&range=${range}`;
-        const r = await fetch(url, {signal:AbortSignal.timeout(10000), headers:{Accept:'application/json'}});
-        const txt = await r.text();
-        let j; try { j = JSON.parse(txt); } catch(e) {}
-        const hasData = j?.chart?.result?.[0]?.timestamp?.length > 0;
-        const err = j?.chart?.error?.code || (r.ok ? '' : `HTTP ${r.status}`);
-        if (hasData) {
-          addLine(`<span style="color:#22c55e">✓ ${pos.ticker} [${range}]: ${j.chart.result[0].timestamp.length} pts</span>`);
+        const body = await proxyFetch(url);
+        if (!body) { addLine(`<span style="color:#f59e0b">✗ ${pos.ticker} [proxy ${range}]: proxy null</span>`); continue; }
+        let j; try { j = JSON.parse(body); } catch(e) {}
+        const pts = j?.chart?.result?.[0]?.timestamp?.length || 0;
+        const err = j?.chart?.error?.code || '';
+        if (pts > 0) {
+          addLine(`<span style="color:#22c55e">✓ ${pos.ticker} [proxy ${range}]: ${pts} pts</span>`);
           return;
         } else {
-          addLine(`<span style="color:#f59e0b">✗ ${pos.ticker} [${range}]: ${err || 'vide'} — ${txt.slice(0,80).replace(/</g,'&lt;')}</span>`);
+          addLine(`<span style="color:#f59e0b">✗ ${pos.ticker} [proxy ${range}]: ${err||'vide'} — ${body.slice(0,60).replace(/</g,'&lt;')}</span>`);
         }
-      } catch(e) { addLine(`<span style="color:#ef4444">✗ ${pos.ticker} [${range}]: ${e.message}</span>`); }
+      } catch(e) { addLine(`<span style="color:#ef4444">✗ ${pos.ticker} [proxy ${range}]: ${e.message}</span>`); }
+    }
+    // Test stooq pour .PA
+    if (/\.PA$/i.test(pos.ticker)) {
+      const st = pos.ticker.replace(/\.PA$/i,'.fr').toLowerCase();
+      try {
+        const body = await proxyFetch(`https://stooq.com/q/d/l/?s=${st}&i=d`);
+        const lines = (body||'').trim().split('\n').length - 1;
+        if (lines > 1) addLine(`<span style="color:#22c55e">✓ ${pos.ticker} [stooq]: ${lines} lignes</span>`);
+        else addLine(`<span style="color:#f59e0b">✗ ${pos.ticker} [stooq]: ${(body||'').slice(0,60).replace(/</g,'&lt;')}</span>`);
+      } catch(e) { addLine(`<span style="color:#ef4444">✗ ${pos.ticker} [stooq]: ${e.message}</span>`); }
     }
   }));
   // Retirer la ligne "test en cours"
@@ -9038,19 +9048,23 @@ async function fetchHistoricalPrices(ticker, fromDate, toDate) {
   const to   = Math.floor(new Date(toDate + 'T23:59:59').getTime() / 1000);
 
   // Source 1 : Yahoo Finance via proxy CORS (range) — direct CORS bloqué sur iOS/Safari
-  for (const range of ['1y','2y','5y','max']) {
-    try {
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=${range}`;
-      const body = await proxyFetch(url);
-      if (body) { const p = filterFrom(parseChart(body)); if (p) return p; }
-    } catch(e) {}
+  for (const yHost of ['query1.finance.yahoo.com','query2.finance.yahoo.com']) {
+    for (const range of ['1y','2y','5y','max']) {
+      try {
+        const url = `https://${yHost}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=${range}`;
+        const body = await proxyFetch(url);
+        if (body) { const p = filterFrom(parseChart(body)); if (p) return p; }
+      } catch(e) {}
+    }
   }
 
   // Source 2 : Yahoo Finance via proxy CORS (period1/period2)
-  try {
-    const body = await proxyFetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`);
-    if (body) { const p = parseChart(body); if (p) return p; }
-  } catch(e) {}
+  for (const yHost of ['query1.finance.yahoo.com','query2.finance.yahoo.com']) {
+    try {
+      const body = await proxyFetch(`https://${yHost}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`);
+      if (body) { const p = parseChart(body); if (p) return p; }
+    } catch(e) {}
+  }
 
   // Source 3 : Boursorama téléchargement (endpoint /dl/) via proxy Vercel
   const VERCEL = 'https://pea-etf-proxy.vercel.app';
@@ -9078,21 +9092,23 @@ async function fetchHistoricalPrices(ticker, fromDate, toDate) {
     } catch(e) {}
   }
 
-  // Source 4 : Stooq.com CSV via proxy (actions + ETFs .PA → .fr)
+  // Source 4 : Stooq.com CSV via proxy (actions + ETFs .PA → .fr ou .pa)
   if (/\.(PA|FR)$/i.test(ticker)) {
-    const st = ticker.replace(/\.(PA|FR)$/i, '.fr').toLowerCase();
-    try {
-      const body = await proxyFetch(`https://stooq.com/q/d/l/?s=${st}&i=d`);
-      if (body && body.includes(',')) {
-        const prices = {};
-        for (const line of body.trim().split('\n').slice(1)) {
-          const parts = line.split(',');
-          const date = parts[0]; const c = parseFloat(parts[4]);
-          if (date && isFinite(c) && c > 0 && date >= fromDate) prices[date] = c;
+    const base4 = ticker.replace(/\.(PA|FR)$/i, '').toLowerCase();
+    for (const sfx of ['.fr', '.pa']) {
+      try {
+        const body = await proxyFetch(`https://stooq.com/q/d/l/?s=${base4}${sfx}&i=d`);
+        if (body && body.includes(',') && !body.includes('No data')) {
+          const prices = {};
+          for (const line of body.trim().split('\n').slice(1)) {
+            const parts = line.split(',');
+            const date = parts[0]; const c = parseFloat(parts[4]);
+            if (date && isFinite(c) && c > 0 && date >= fromDate) prices[date] = c;
+          }
+          if (Object.keys(prices).length > 0) return prices;
         }
-        if (Object.keys(prices).length > 0) return prices;
-      }
-    } catch(e) {}
+      } catch(e) {}
+    }
   }
 
   return null;

@@ -8950,10 +8950,49 @@ function simulateDCABenchmark(deposits, prices) {
 // ======================================================
 // RECONSTRUCTION HISTORIQUE
 // ======================================================
+async function fetchHistoricalPricesBourso(ticker, days) {
+  // Utilise le proxy Vercel (même que pour les cours actuels — prouvé fonctionnel)
+  const VERCEL = 'https://pea-etf-proxy.vercel.app';
+  const base = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
+  const isKnownETF = Array.isArray(PEA_KB?.etfs) && PEA_KB.etfs.some(e => e.ticker === ticker);
+  const sym = isKnownETF ? `1rT${base}` : `1rP${base}`;
+  const url = `${VERCEL}/bourse/action/graph/ws/GetTicksEOD?symbol=${sym}&length=${days}&period=0&guid=`;
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!r.ok) return null;
+    const json = await r.json();
+    // Format Boursorama GetTicksEOD : { d: { Ticks: { d: [[ts, o, h, l, close, vol], ...] } } }
+    const ticks = json?.d?.Ticks?.d || json?.d?.ticks?.d || json?.Ticks?.d || json?.ticks?.d;
+    if (!Array.isArray(ticks) || !ticks.length) return null;
+    const prices = {};
+    for (const tick of ticks) {
+      // tick = [timestamp_sec, open, high, low, close, volume] ou {Date, Close}
+      if (Array.isArray(tick) && tick.length >= 5) {
+        const ts = tick[0]; const close = tick[4];
+        if (ts && isFinite(close) && close > 0)
+          prices[new Date(ts * 1000).toISOString().slice(0, 10)] = close;
+      } else if (tick?.Date && tick?.Close) {
+        const ts = typeof tick.Date === 'string' ? parseInt(tick.Date.replace(/\D/g,'')) : tick.Date;
+        const close = parseFloat(tick.Close);
+        if (ts && isFinite(close) && close > 0)
+          prices[new Date(ts).toISOString().slice(0, 10)] = close;
+      }
+    }
+    return Object.keys(prices).length > 0 ? prices : null;
+  } catch(e) { return null; }
+}
+
 async function fetchHistoricalPrices(ticker, fromDate, toDate) {
   const from = Math.floor(new Date(fromDate).getTime() / 1000) - 86400 * 3;
   const to   = Math.floor(new Date(toDate + 'T23:59:59').getTime() / 1000);
-  const parseHistorical = (body) => {
+  const days = Math.ceil((to - from) / 86400) + 10;
+
+  // Source 1 : Boursorama via proxy Vercel (le plus fiable)
+  const bourso = await fetchHistoricalPricesBourso(ticker, days);
+  if (bourso) return bourso;
+
+  // Source 2 : Yahoo Finance (direct puis proxy CORS)
+  const parseYahooHist = (body) => {
     try {
       const data = JSON.parse(body);
       if (data?.chart?.error) return null;
@@ -8972,15 +9011,13 @@ async function fetchHistoricalPrices(ticker, fromDate, toDate) {
     `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`,
   ];
   for (const url of urls) {
-    // Essai direct d'abord (Yahoo supporte CORS pour les données historiques)
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(12000), headers: { Accept: 'application/json' } });
-      if (r.ok) { const p = parseHistorical(await r.text()); if (p) return p; }
+      if (r.ok) { const p = parseYahooHist(await r.text()); if (p) return p; }
     } catch(e) {}
-    // Fallback via proxies CORS
     try {
       const body = await proxyFetch(url);
-      if (body) { const p = parseHistorical(body); if (p) return p; }
+      if (body) { const p = parseYahooHist(body); if (p) return p; }
     } catch(e) {}
   }
   return null;

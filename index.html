@@ -9034,34 +9034,55 @@ async function fetchHistoricalPrices(ticker, fromDate, toDate) {
     return Object.keys(out).length > 0 ? out : p; // garde tout si filtre trop restrictif
   };
 
-  // Source 1 : Yahoo Finance avec paramètre range (CORS OK — même mécanisme que range=1d)
-  // Essaie plusieurs ranges pour couvrir les ETFs récents ou anciens
-  const ranges = days > 365*4 ? ['5y','max'] : days > 365*2 ? ['2y','5y'] : ['1y','2y','5y'];
-  for (const range of ranges) {
-    for (const host of ['query1','query2']) {
-      try {
-        const url = `https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=${range}`;
-        const r = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { Accept: 'application/json' } });
-        if (r.ok) { const p = filterFrom(parseChart(await r.text())); if (p) return p; }
-      } catch(e) {}
-    }
-    // Dès qu'un range fonctionne on s'arrête — si les plus courts échouent, on essaie le suivant
-  }
-
-  // Source 2 : Yahoo Finance period1/period2 via proxy CORS
   const from = Math.floor(fromMs / 1000);
   const to   = Math.floor(new Date(toDate + 'T23:59:59').getTime() / 1000);
-  const periodUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`;
+
+  // Source 1 : Yahoo Finance via proxy CORS (range) — direct CORS bloqué sur iOS/Safari
+  for (const range of ['1y','2y','5y','max']) {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=${range}`;
+      const body = await proxyFetch(url);
+      if (body) { const p = filterFrom(parseChart(body)); if (p) return p; }
+    } catch(e) {}
+  }
+
+  // Source 2 : Yahoo Finance via proxy CORS (period1/period2)
   try {
-    const body = await proxyFetch(periodUrl);
+    const body = await proxyFetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`);
     if (body) { const p = parseChart(body); if (p) return p; }
   } catch(e) {}
 
-  // Source 3 : Stooq.com (CSV, actions .PA → .fr)
-  if (/\.(PA|FR)$/i.test(ticker)) {
-    const stooqTicker = ticker.replace(/\.(PA|FR)$/i, '.fr').toLowerCase();
+  // Source 3 : Boursorama téléchargement (endpoint /dl/) via proxy Vercel
+  const VERCEL = 'https://pea-etf-proxy.vercel.app';
+  const base = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
+  const isKnownETF = Array.isArray(PEA_KB?.etfs) && PEA_KB.etfs.some(e => e.ticker === ticker);
+  const sym = isKnownETF ? `1rT${base}` : `1rP${base}`;
+  for (const endpoint of [
+    `/bourse/action/graph/dl/GetTicksEOD?symbol=${sym}&length=${days}&period=0&guid=`,
+    `/bourse/action/graph/ws/GetTicksEOD?symbol=${sym}&length=${days}&period=0&guid=`,
+  ]) {
     try {
-      const body = await proxyFetch(`https://stooq.com/q/d/l/?s=${stooqTicker}&i=d`);
+      const r = await fetch(`${VERCEL}${endpoint}`, { signal: AbortSignal.timeout(10000) });
+      if (!r.ok) continue;
+      const json = await r.json();
+      const ticks = json?.d?.Ticks?.d || json?.d?.ticks?.d || json?.Ticks?.d;
+      if (!Array.isArray(ticks) || !ticks.length) continue;
+      const prices = {};
+      for (const t of ticks) {
+        if (Array.isArray(t) && t.length >= 5) {
+          const c = t[4]; const d = new Date(t[0]*1000).toISOString().slice(0,10);
+          if (isFinite(c) && c > 0 && d >= fromDate) prices[d] = c;
+        }
+      }
+      if (Object.keys(prices).length > 0) return prices;
+    } catch(e) {}
+  }
+
+  // Source 4 : Stooq.com CSV via proxy (actions + ETFs .PA → .fr)
+  if (/\.(PA|FR)$/i.test(ticker)) {
+    const st = ticker.replace(/\.(PA|FR)$/i, '.fr').toLowerCase();
+    try {
+      const body = await proxyFetch(`https://stooq.com/q/d/l/?s=${st}&i=d`);
       if (body && body.includes(',')) {
         const prices = {};
         for (const line of body.trim().split('\n').slice(1)) {

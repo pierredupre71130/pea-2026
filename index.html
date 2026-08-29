@@ -994,7 +994,7 @@ function defData() {
     terCache: {},
     budgetExpenses: [],
     budgetSettings: { monthlyIncome: 0, paydayStart: 1, cardName: '', cardDebitDay: null, cardEncours: 0 },
-    priceHistoryCache: {},
+    priceHistory: {},
     capitals: {
       pea:       { amount: 0, lastUpdated: null },
       perCGOS:   { amount: 0, monthlyAdd: 0, paused: false, lastMonthlyAdd: null,
@@ -1835,21 +1835,32 @@ async function loadEtfGainCurves() {
   const toDate = new Date().toISOString().slice(0, 10);
 
   const COLORS = ['#3b82f6','#22c55e','#f59e0b','#a855f7','#ef4444','#06b6d4','#f97316','#ec4899'];
-  if (!S.data.priceHistoryCache) S.data.priceHistoryCache = {};
-  const TTL = 24 * 3600 * 1000;
+  if (!S.data.priceHistory) S.data.priceHistory = {};
   const priceHistories = {};
   let done = 0;
   const total = positions.length;
   await Promise.allSettled(positions.map(async (pos) => {
-    const cached = S.data.priceHistoryCache[pos.ticker];
-    if (cached && cached.timestamp && (Date.now() - cached.timestamp) < TTL) {
-      priceHistories[pos.ticker] = cached.data;
+    const stored = S.data.priceHistory[pos.ticker] || {};
+    const storedDates = Object.keys(stored).sort();
+    const lastStored = storedDates[storedDates.length - 1] || null;
+    // Si on a des données et que la dernière date est récente (aujourd'hui ou hier), on ne télécharge rien
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0,10);
+    if (lastStored && lastStored >= yesterday) {
+      priceHistories[pos.ticker] = stored;
     } else {
-      const hist = await fetchHistoricalPrices(pos.ticker, firstDate, toDate);
+      // Fetch seulement à partir du lendemain de la dernière date stockée (ou depuis firstDate)
+      const fetchFrom = lastStored
+        ? new Date(new Date(lastStored).getTime() + 86400000).toISOString().slice(0,10)
+        : firstDate;
+      const hist = await fetchHistoricalPrices(pos.ticker, fetchFrom, toDate);
       if (hist && Object.keys(hist).length > 0) {
-        priceHistories[pos.ticker] = hist;
-        S.data.priceHistoryCache[pos.ticker] = { data: hist, timestamp: Date.now() };
+        // Fusionner nouvelles données avec données existantes
+        S.data.priceHistory[pos.ticker] = { ...stored, ...hist };
+      } else if (storedDates.length > 0) {
+        // Pas de nouvelles données mais on a l'historique — on l'utilise
+        S.data.priceHistory[pos.ticker] = stored;
       }
+      priceHistories[pos.ticker] = S.data.priceHistory[pos.ticker] || null;
     }
     done++;
     if (btn) btn.innerHTML = `<span class="spinner"></span> ${done}/${total}…`;
@@ -1858,8 +1869,8 @@ async function loadEtfGainCurves() {
 
   const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))].sort();
   if (!allDates.length) {
-    // Invalider le cache pour forcer un vrai fetch au prochain essai
-    positions.forEach(p => { if (S.data.priceHistoryCache?.[p.ticker]) delete S.data.priceHistoryCache[p.ticker]; });
+    // Invalider les données pour forcer un vrai fetch au prochain essai
+    positions.forEach(p => { if (S.data.priceHistory?.[p.ticker]) delete S.data.priceHistory[p.ticker]; });
     toast('Impossible de récupérer les cours historiques — réessaie dans quelques secondes', 'error', 6000);
     if (btn) { btn.disabled = false; btn.textContent = '📡 Charger'; } return;
   }
@@ -1922,8 +1933,7 @@ function makeEtfGainChart() {
 
 function restoreEtfGainData() {
   if (window._etfGainData) return; // already loaded this session
-  if (!S.data.priceHistoryCache) return;
-  const TTL = 24 * 3600 * 1000;
+  if (!S.data.priceHistory) return;
   const positions = computePositions();
   if (!positions.length) return;
   const txs = (S.data.transactions || []).filter(t => t.type === 'buy' || t.type === 'sell');
@@ -1932,9 +1942,9 @@ function restoreEtfGainData() {
   const COLORS = ['#3b82f6','#22c55e','#f59e0b','#a855f7','#ef4444','#06b6d4','#f97316','#ec4899'];
   const priceHistories = {};
   for (const pos of positions) {
-    const cached = S.data.priceHistoryCache[pos.ticker];
-    if (cached && cached.timestamp && (Date.now() - cached.timestamp) < TTL) {
-      priceHistories[pos.ticker] = cached.data;
+    const stored = S.data.priceHistory[pos.ticker];
+    if (stored && Object.keys(stored).length > 0) {
+      priceHistories[pos.ticker] = stored;
     }
   }
   const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))].sort();
@@ -6828,7 +6838,7 @@ function importJSON(inp) {
     try {
       const d = JSON.parse(e.target.result);
       if (!confirm('Importer ces données ? Les données actuelles seront remplacées.')) return;
-      S.data = { ...defData(), ...d, settings:{ ...defData().settings, ...d.settings }, priceCache: d.priceCache||{}, priceHistoryCache: d.priceHistoryCache||{} };
+      S.data = { ...defData(), ...d, settings:{ ...defData().settings, ...d.settings }, priceCache: d.priceCache||{}, priceHistory: d.priceHistory||d.priceHistoryCache&&Object.fromEntries(Object.entries(d.priceHistoryCache).map(([k,v])=>[k,v?.data||v]))||{} };
       saveData(); toast('Import réussi ✓'); navigate('dashboard');
     } catch(err) { toast('Fichier JSON invalide', 'error'); }
   };

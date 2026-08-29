@@ -2982,6 +2982,30 @@ async function diagPrix() {
       addLine(`<span style="color:#ef4444">✗ ${t.name}: ${e.message||'erreur'}</span>`);
     }
   }));
+  // Test données historiques
+  addLine('<br><b>— Historique (courbes) —</b>');
+  const toDate = new Date().toISOString().slice(0,10);
+  const fromDate = new Date(Date.now() - 30*86400000).toISOString().slice(0,10);
+  const VERCEL = 'https://pea-etf-proxy.vercel.app';
+  const base = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i,'');
+  const isETF = Array.isArray(PEA_KB?.etfs) && PEA_KB.etfs.some(e=>e.ticker===ticker);
+  const sym = isETF ? `1rT${base}` : `1rP${base}`;
+  // Test Boursorama GetTicksEOD
+  try {
+    const url = `${VERCEL}/bourse/action/graph/ws/GetTicksEOD?symbol=${sym}&length=30&period=0&guid=`;
+    const r = await fetch(url, {signal:AbortSignal.timeout(10000)});
+    const txt = await r.text();
+    addLine(`<span style="color:#94a3b8">Boursorama EOD (HTTP ${r.status}): ${txt.slice(0,120).replace(/</g,'&lt;')}</span>`);
+  } catch(e) { addLine(`<span style="color:#ef4444">✗ Boursorama EOD: ${e.message}</span>`); }
+  // Test Yahoo Finance historique direct
+  try {
+    const from = Math.floor(new Date(fromDate).getTime()/1000);
+    const to   = Math.floor(new Date(toDate+'T23:59:59').getTime()/1000);
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`;
+    const r = await fetch(url, {signal:AbortSignal.timeout(10000), headers:{Accept:'application/json'}});
+    const txt = await r.text();
+    addLine(`<span style="color:#94a3b8">Yahoo Hist (HTTP ${r.status}): ${txt.slice(0,120).replace(/</g,'&lt;')}</span>`);
+  } catch(e) { addLine(`<span style="color:#ef4444">✗ Yahoo Hist direct: ${e.message}</span>`); }
   // Retirer la ligne "test en cours"
   log.innerHTML = log.innerHTML.replace('⏳ Test en cours…<br>', '');
   addLine('<br>✅ Terminé');

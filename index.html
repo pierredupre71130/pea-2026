@@ -9053,8 +9053,12 @@ async function fetchHistoricalPricesBourso(ticker, days) {
 async function fetchHistoricalPrices(ticker, fromDate, toDate) {
   const fromMs = new Date(fromDate).getTime() - 86400000 * 3;
   const days   = Math.ceil((Date.now() - fromMs) / 86400000) + 5;
+  const VERCEL = 'https://pea-etf-proxy.vercel.app';
+  const base   = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
+  const isETF  = Array.isArray(PEA_KB?.etfs) && PEA_KB.etfs.some(e => e.ticker === ticker);
+  const sym    = isETF ? `1rT${base}` : `1rP${base}`;
 
-  const parseChart = (body) => {
+  const parseYahoo = (body) => {
     try {
       const data = JSON.parse(body);
       if (data?.chart?.error) return null;
@@ -9069,95 +9073,74 @@ async function fetchHistoricalPrices(ticker, fromDate, toDate) {
     } catch(e) { return null; }
   };
 
+  const parseBourso = (json) => {
+    const ticks = json?.d?.Ticks?.d || json?.d?.ticks?.d || json?.Ticks?.d;
+    if (!Array.isArray(ticks) || !ticks.length) return null;
+    const prices = {};
+    for (const t of ticks) {
+      if (Array.isArray(t) && t.length >= 5) {
+        const c = t[4]; const d = new Date(t[0]*1000).toISOString().slice(0,10);
+        if (isFinite(c) && c > 0 && d >= fromDate) prices[d] = c;
+      }
+    }
+    return Object.keys(prices).length > 5 ? prices : null;
+  };
+
   const filterFrom = (p) => {
     if (!p) return null;
     const out = {};
     for (const [d, v] of Object.entries(p)) { if (d >= fromDate) out[d] = v; }
-    return Object.keys(out).length > 0 ? out : p; // garde tout si filtre trop restrictif
+    return Object.keys(out).length > 5 ? out : (Object.keys(p).length > 5 ? p : null);
   };
 
-  const from = Math.floor(fromMs / 1000);
-  const to   = Math.floor(new Date(toDate + 'T23:59:59').getTime() / 1000);
+  // Toutes les sources lancées EN PARALLÈLE — le premier qui répond gagne
+  const ok = r => { if (!r || Object.keys(r).length < 5) throw new Error('empty'); return r; };
 
-  // Source 1 : Yahoo Finance via proxy CORS — on commence par 2y (diagnostique: 1y échoue, 2y=511pts)
-  for (const range of ['2y','5y','1y','max']) {
-    for (const yHost of ['query1.finance.yahoo.com','query2.finance.yahoo.com']) {
-      try {
-        const url = `https://${yHost}/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=${range}`;
-        const body = await proxyFetch(url);
-        if (body) { const p = filterFrom(parseChart(body)); if (p) return p; }
-      } catch(e) {}
-    }
-  }
-
-  // Source 3 : Boursorama téléchargement (endpoint /dl/) via proxy Vercel
-  const VERCEL = 'https://pea-etf-proxy.vercel.app';
-  const base = ticker.replace(/\.(PA|DE|AS|BR|MI)$/i, '');
-  const isKnownETF = Array.isArray(PEA_KB?.etfs) && PEA_KB.etfs.some(e => e.ticker === ticker);
-  const sym = isKnownETF ? `1rT${base}` : `1rP${base}`;
-  for (const endpoint of [
-    `/bourse/action/graph/dl/GetTicksEOD?symbol=${sym}&length=${days}&period=0&guid=`,
-    `/bourse/action/graph/ws/GetTicksEOD?symbol=${sym}&length=${days}&period=0&guid=`,
-  ]) {
-    try {
-      const r = await fetch(`${VERCEL}${endpoint}`, { signal: AbortSignal.timeout(10000) });
-      if (!r.ok) continue;
-      const json = await r.json();
-      const ticks = json?.d?.Ticks?.d || json?.d?.ticks?.d || json?.Ticks?.d;
-      if (!Array.isArray(ticks) || !ticks.length) continue;
-      const prices = {};
-      for (const t of ticks) {
-        if (Array.isArray(t) && t.length >= 5) {
-          const c = t[4]; const d = new Date(t[0]*1000).toISOString().slice(0,10);
-          if (isFinite(c) && c > 0 && d >= fromDate) prices[d] = c;
-        }
-      }
-      if (Object.keys(prices).length > 0) return prices;
-    } catch(e) {}
-  }
-
-  // Source 4 : Boursorama GetTicksEOD via proxy CORS direct (tickers absents de Yahoo comme PAEEM.PA)
-  for (const boursoUrl of [
-    `https://www.boursorama.com/bourse/action/graph/dl/GetTicksEOD?symbol=${sym}&length=${days}&period=0&guid=`,
-    `https://www.boursorama.com/bourse/action/graph/ws/GetTicksEOD?symbol=${sym}&length=${days}&period=0&guid=`,
-  ]) {
-    try {
-      const body = await proxyFetch(boursoUrl);
-      if (!body) continue;
-      const json = JSON.parse(body);
-      const ticks = json?.d?.Ticks?.d || json?.d?.ticks?.d || json?.Ticks?.d;
-      if (!Array.isArray(ticks) || !ticks.length) continue;
-      const prices = {};
-      for (const t of ticks) {
-        if (Array.isArray(t) && t.length >= 5) {
-          const c = t[4]; const d = new Date(t[0]*1000).toISOString().slice(0,10);
-          if (isFinite(c) && c > 0 && d >= fromDate) prices[d] = c;
-        }
-      }
-      if (Object.keys(prices).length > 0) return prices;
-    } catch(e) {}
-  }
-
-  // Source 5 : Stooq.com CSV via proxy (actions + ETFs .PA → .fr ou .pa)
-  if (/\.(PA|FR)$/i.test(ticker)) {
-    const base4 = ticker.replace(/\.(PA|FR)$/i, '').toLowerCase();
-    for (const sfx of ['.fr', '.pa']) {
-      try {
-        const body = await proxyFetch(`https://stooq.com/q/d/l/?s=${base4}${sfx}&i=d`);
-        if (body && body.includes(',') && !body.includes('No data')) {
-          const prices = {};
-          for (const line of body.trim().split('\n').slice(1)) {
-            const parts = line.split(',');
-            const date = parts[0]; const c = parseFloat(parts[4]);
-            if (date && isFinite(c) && c > 0 && date >= fromDate) prices[date] = c;
+  const sources = [
+    // Boursorama via Vercel (rapide, direct, sans proxy CORS)
+    (async () => {
+      const r = await fetch(`${VERCEL}/bourse/action/graph/dl/GetTicksEOD?symbol=${sym}&length=${days}&period=0&guid=`, {signal:AbortSignal.timeout(8000)});
+      if (!r.ok) throw new Error('no');
+      return ok(parseBourso(await r.json()));
+    })(),
+    // Yahoo Finance 2y via proxy CORS (prouvé: 511pts dans diagnostic)
+    (async () => {
+      const body = await proxyFetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=2y`);
+      return ok(filterFrom(parseYahoo(body)));
+    })(),
+    // Yahoo Finance 5y via proxy CORS (fallback range)
+    (async () => {
+      const body = await proxyFetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=5y`);
+      return ok(filterFrom(parseYahoo(body)));
+    })(),
+    // Boursorama via proxy CORS direct (pour tickers absents de Yahoo)
+    (async () => {
+      const body = await proxyFetch(`https://www.boursorama.com/bourse/action/graph/dl/GetTicksEOD?symbol=${sym}&length=${days}&period=0&guid=`);
+      if (!body) throw new Error('no');
+      return ok(parseBourso(JSON.parse(body)));
+    })(),
+    // Stooq CSV via proxy (.PA → .fr)
+    ...((/\.(PA|FR)$/i.test(ticker)) ? [
+      (async () => {
+        const b4 = base.toLowerCase();
+        for (const sfx of ['.fr','.pa']) {
+          const body = await proxyFetch(`https://stooq.com/q/d/l/?s=${b4}${sfx}&i=d`);
+          if (body && body.includes(',') && !body.includes('No data')) {
+            const prices = {};
+            for (const line of body.trim().split('\n').slice(1)) {
+              const parts = line.split(',');
+              const date = parts[0]; const c = parseFloat(parts[4]);
+              if (date && isFinite(c) && c > 0 && date >= fromDate) prices[date] = c;
+            }
+            if (Object.keys(prices).length > 5) return prices;
           }
-          if (Object.keys(prices).length > 0) return prices;
         }
-      } catch(e) {}
-    }
-  }
+        throw new Error('no stooq');
+      })()
+    ] : []),
+  ];
 
-  return null;
+  try { return await Promise.any(sources); } catch(e) { return null; }
 }
 
 async function reconstructHistoricalSnapshots() {

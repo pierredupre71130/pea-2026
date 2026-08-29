@@ -1838,17 +1838,21 @@ async function loadEtfGainCurves() {
   if (!S.data.priceHistoryCache) S.data.priceHistoryCache = {};
   const TTL = 24 * 3600 * 1000;
   const priceHistories = {};
+  let done = 0;
+  const total = positions.length;
   await Promise.allSettled(positions.map(async (pos) => {
     const cached = S.data.priceHistoryCache[pos.ticker];
     if (cached && cached.timestamp && (Date.now() - cached.timestamp) < TTL) {
       priceHistories[pos.ticker] = cached.data;
-      return;
+    } else {
+      const hist = await fetchHistoricalPrices(pos.ticker, firstDate, toDate);
+      if (hist && Object.keys(hist).length > 0) {
+        priceHistories[pos.ticker] = hist;
+        S.data.priceHistoryCache[pos.ticker] = { data: hist, timestamp: Date.now() };
+      }
     }
-    const hist = await fetchHistoricalPrices(pos.ticker, firstDate, toDate);
-    if (hist && Object.keys(hist).length > 0) {
-      priceHistories[pos.ticker] = hist;
-      S.data.priceHistoryCache[pos.ticker] = { data: hist, timestamp: Date.now() };
-    }
+    done++;
+    if (btn) btn.innerHTML = `<span class="spinner"></span> ${done}/${total}…`;
   }));
   saveData();
 
@@ -9033,16 +9037,17 @@ async function fetchHistoricalPrices(ticker, fromDate, toDate) {
   };
 
   // Source 1 : Yahoo Finance avec paramètre range (CORS OK — même mécanisme que range=1d)
-  const range = days > 365*4 ? '5y' : days > 365*2 ? '2y' : '1y';
-  const rangeUrls = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=${range}`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=${range}`,
-  ];
-  for (const url of rangeUrls) {
-    try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(12000), headers: { Accept: 'application/json' } });
-      if (r.ok) { const p = filterFrom(parseChart(await r.text())); if (p) return p; }
-    } catch(e) {}
+  // Essaie plusieurs ranges pour couvrir les ETFs récents ou anciens
+  const ranges = days > 365*4 ? ['5y','max'] : days > 365*2 ? ['2y','5y'] : ['1y','2y','5y'];
+  for (const range of ranges) {
+    for (const host of ['query1','query2']) {
+      try {
+        const url = `https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=${range}`;
+        const r = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { Accept: 'application/json' } });
+        if (r.ok) { const p = filterFrom(parseChart(await r.text())); if (p) return p; }
+      } catch(e) {}
+    }
+    // Dès qu'un range fonctionne on s'arrête — si les plus courts échouent, on essaie le suivant
   }
 
   // Source 2 : Yahoo Finance period1/period2 via proxy CORS

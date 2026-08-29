@@ -9007,16 +9007,10 @@ async function fetchHistoricalPricesBourso(ticker, days) {
 }
 
 async function fetchHistoricalPrices(ticker, fromDate, toDate) {
-  const from = Math.floor(new Date(fromDate).getTime() / 1000) - 86400 * 3;
-  const to   = Math.floor(new Date(toDate + 'T23:59:59').getTime() / 1000);
-  const days = Math.ceil((to - from) / 86400) + 10;
+  const fromMs = new Date(fromDate).getTime() - 86400000 * 3;
+  const days   = Math.ceil((Date.now() - fromMs) / 86400000) + 5;
 
-  // Source 1 : Boursorama via proxy Vercel (le plus fiable)
-  const bourso = await fetchHistoricalPricesBourso(ticker, days);
-  if (bourso) return bourso;
-
-  // Source 2 : Yahoo Finance (direct puis proxy CORS)
-  const parseYahooHist = (body) => {
+  const parseChart = (body) => {
     try {
       const data = JSON.parse(body);
       if (data?.chart?.error) return null;
@@ -9030,20 +9024,53 @@ async function fetchHistoricalPrices(ticker, fromDate, toDate) {
       return Object.keys(prices).length > 0 ? prices : null;
     } catch(e) { return null; }
   };
-  const urls = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`,
+
+  const filterFrom = (p) => {
+    if (!p) return null;
+    const out = {};
+    for (const [d, v] of Object.entries(p)) { if (d >= fromDate) out[d] = v; }
+    return Object.keys(out).length > 0 ? out : p; // garde tout si filtre trop restrictif
+  };
+
+  // Source 1 : Yahoo Finance avec paramètre range (CORS OK — même mécanisme que range=1d)
+  const range = days > 365*4 ? '5y' : days > 365*2 ? '2y' : '1y';
+  const rangeUrls = [
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=${range}`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=${range}`,
   ];
-  for (const url of urls) {
+  for (const url of rangeUrls) {
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(12000), headers: { Accept: 'application/json' } });
-      if (r.ok) { const p = parseYahooHist(await r.text()); if (p) return p; }
-    } catch(e) {}
-    try {
-      const body = await proxyFetch(url);
-      if (body) { const p = parseYahooHist(body); if (p) return p; }
+      if (r.ok) { const p = filterFrom(parseChart(await r.text())); if (p) return p; }
     } catch(e) {}
   }
+
+  // Source 2 : Yahoo Finance period1/period2 via proxy CORS
+  const from = Math.floor(fromMs / 1000);
+  const to   = Math.floor(new Date(toDate + 'T23:59:59').getTime() / 1000);
+  const periodUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${from}&period2=${to}`;
+  try {
+    const body = await proxyFetch(periodUrl);
+    if (body) { const p = parseChart(body); if (p) return p; }
+  } catch(e) {}
+
+  // Source 3 : Stooq.com (CSV, actions .PA → .fr)
+  if (/\.(PA|FR)$/i.test(ticker)) {
+    const stooqTicker = ticker.replace(/\.(PA|FR)$/i, '.fr').toLowerCase();
+    try {
+      const body = await proxyFetch(`https://stooq.com/q/d/l/?s=${stooqTicker}&i=d`);
+      if (body && body.includes(',')) {
+        const prices = {};
+        for (const line of body.trim().split('\n').slice(1)) {
+          const parts = line.split(',');
+          const date = parts[0]; const c = parseFloat(parts[4]);
+          if (date && isFinite(c) && c > 0 && date >= fromDate) prices[date] = c;
+        }
+        if (Object.keys(prices).length > 0) return prices;
+      }
+    } catch(e) {}
+  }
+
   return null;
 }
 

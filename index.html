@@ -1869,7 +1869,9 @@ async function loadEtfGainCurves() {
   }));
   saveData();
 
-  const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))].sort();
+  // Ne montrer que les dates à partir du premier achat (pas les années vides avant)
+  const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))]
+    .filter(d => d >= firstDate).sort();
   if (!allDates.length) {
     // Invalider les données pour forcer un vrai fetch au prochain essai
     positions.forEach(p => { if (S.data.priceHistory?.[p.ticker]) delete S.data.priceHistory[p.ticker]; });
@@ -1950,7 +1952,8 @@ function restoreEtfGainData() {
       priceHistories[pos.ticker] = stored;
     }
   }
-  const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))].sort();
+  const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))]
+    .filter(d => d >= firstDate).sort();
   if (!allDates.length) return;
   const datasets = positions.map((pos, i) => {
     const hist = priceHistories[pos.ticker];

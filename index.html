@@ -1891,6 +1891,13 @@ async function loadEtfGainCurves() {
     saveData();
   }
 
+  // Injecter le cours actuel d'aujourd'hui comme dernier point (cohérent avec "PAR TITRE")
+  for (const pos of positions) {
+    if (pos.currentPrice && priceHistories[pos.ticker]) {
+      priceHistories[pos.ticker][toDate] = pos.currentPrice;
+    }
+  }
+
   // Ne montrer que les dates à partir du premier achat
   const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))]
     .filter(d => d >= firstDate).sort();
@@ -1970,6 +1977,15 @@ function restoreEtfGainData() {
     const stored = S.data.priceHistory[pos.ticker];
     if (stored && Object.keys(stored).length > 0) {
       priceHistories[pos.ticker] = stored;
+    }
+  }
+  // Cours actuel comme dernier point
+  const todayStr = today();
+  const allPositions = computePositions();
+  for (const pos of positions) {
+    const live = allPositions.find(p => p.ticker === pos.ticker);
+    if (live?.currentPrice && priceHistories[pos.ticker]) {
+      priceHistories[pos.ticker][todayStr] = live.currentPrice;
     }
   }
   const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))]

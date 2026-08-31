@@ -1870,8 +1870,10 @@ async function loadEtfGainCurves() {
   });
 
   if (needsFetch.length > 0) {
-    if (btn) btn.innerHTML = `<span class="spinner"></span> Chargement (${needsFetch.length})…`;
-    await Promise.allSettled(needsFetch.map(async (pos) => {
+    // Fetch SÉQUENTIEL (un par un) pour éviter le rate-limit des proxies CORS
+    for (let i = 0; i < needsFetch.length; i++) {
+      const pos = needsFetch[i];
+      if (btn) btn.innerHTML = `<span class="spinner"></span> ${pos.ticker} (${i+1}/${needsFetch.length})…`;
       const stored = S.data.priceHistory[pos.ticker] || {};
       const storedDates = Object.keys(stored).sort();
       const lastStored = storedDates[storedDates.length - 1] || null;
@@ -1883,7 +1885,9 @@ async function loadEtfGainCurves() {
         S.data.priceHistory[pos.ticker] = { ...stored, ...hist };
         priceHistories[pos.ticker] = { ...(priceHistories[pos.ticker] || {}), ...hist };
       }
-    }));
+      // Petite pause entre tickers pour ne pas saturer les proxies
+      if (i < needsFetch.length - 1) await new Promise(r => setTimeout(r, 600));
+    }
     saveData();
   }
 

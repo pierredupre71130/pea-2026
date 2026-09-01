@@ -6345,6 +6345,7 @@ function renderSettings() {
           <div style="font-size:0.78rem;color:var(--muted);margin-bottom:12px">Tes données sont synchronisées automatiquement entre tous tes appareils via un Gist GitHub privé.</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-secondary btn-sm" onclick="pushGist().then(()=>toast('Synchronisé !','success'))">🔄 Sync maintenant</button>
+            <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText(getGistToken()).then(()=>toast('Token copié dans le presse-papier','success'))">📋 Copier le token</button>
             <button class="btn btn-danger btn-sm" onclick="disconnectGist()">Déconnecter</button>
           </div>
           ` : `

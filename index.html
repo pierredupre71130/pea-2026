@@ -1865,8 +1865,10 @@ async function loadEtfGainCurves() {
   const needsFetch = positions.filter(pos => {
     const dates = Object.keys(priceHistories[pos.ticker] || {}).filter(d => d >= firstDate).sort();
     const last = dates[dates.length - 1];
+    const earliest = dates[0];
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0,10);
-    return !last || last < yesterday;
+    const missingOldHistory = !earliest || (new Date(earliest) - new Date(firstDate)) / 86400000 > 30;
+    return !last || last < yesterday || missingOldHistory;
   });
 
   if (needsFetch.length > 0) {
@@ -1875,11 +1877,14 @@ async function loadEtfGainCurves() {
       const pos = needsFetch[i];
       if (btn) btn.innerHTML = `<span class="spinner"></span> ${pos.ticker} (${i+1}/${needsFetch.length})…`;
       const stored = S.data.priceHistory[pos.ticker] || {};
-      const storedDates = Object.keys(stored).sort();
+      const storedDates = Object.keys(stored).filter(d => d >= firstDate).sort();
+      const earliest = storedDates[0];
       const lastStored = storedDates[storedDates.length - 1] || null;
-      const fetchFrom = lastStored
-        ? new Date(new Date(lastStored).getTime() + 86400000).toISOString().slice(0,10)
-        : firstDate;
+      const missingOldHistory = !earliest || (new Date(earliest) - new Date(firstDate)) / 86400000 > 30;
+      // Si l'historique ancien manque, on repart de firstDate ; sinon on complète depuis le dernier point
+      const fetchFrom = missingOldHistory
+        ? firstDate
+        : new Date(new Date(lastStored).getTime() + 86400000).toISOString().slice(0,10);
       const hist = await fetchHistoricalPrices(pos.ticker, fetchFrom, toDate);
       if (hist && Object.keys(hist).length > 0) {
         S.data.priceHistory[pos.ticker] = { ...stored, ...hist };

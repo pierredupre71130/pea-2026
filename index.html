@@ -1891,15 +1891,10 @@ async function loadEtfGainCurves() {
     saveData();
   }
 
-  // Injecter le cours actuel d'aujourd'hui comme dernier point (cohérent avec "PAR TITRE")
-  for (const pos of positions) {
-    if (pos.currentPrice && priceHistories[pos.ticker]) {
-      priceHistories[pos.ticker][toDate] = pos.currentPrice;
-    }
-  }
-
   // Ne montrer que les dates à partir du premier achat
-  const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))]
+  // Ajouter aujourd'hui dans les dates si pas encore présent
+  const todayPt = toDate;
+  const allDates = [...new Set([...Object.values(priceHistories).flatMap(h => Object.keys(h)), todayPt])]
     .filter(d => d >= firstDate).sort();
   if (!allDates.length) {
     toast('Aucune donnée historique disponible — actualise les cours d\'abord', 'error', 5000);
@@ -1912,6 +1907,8 @@ async function loadEtfGainCurves() {
     const posTxs = txs.filter(t => t.ticker === pos.ticker);
     const color = COLORS[i % COLORS.length];
     const data = allDates.map(date => {
+      // Dernier point = valeur exacte de computePositions() pour cohérence avec "PAR TITRE"
+      if (date === todayPt && pos.pnl != null) return parseFloat(pos.pnl.toFixed(2));
       const price = hist[date];
       if (price == null) return null;
       const buys  = posTxs.filter(t => t.date <= date && t.type === 'buy');
@@ -1979,24 +1976,21 @@ function restoreEtfGainData() {
       priceHistories[pos.ticker] = stored;
     }
   }
-  // Cours actuel comme dernier point
   const todayStr = today();
-  const allPositions = computePositions();
-  for (const pos of positions) {
-    const live = allPositions.find(p => p.ticker === pos.ticker);
-    if (live?.currentPrice && priceHistories[pos.ticker]) {
-      priceHistories[pos.ticker][todayStr] = live.currentPrice;
-    }
-  }
-  const allDates = [...new Set(Object.values(priceHistories).flatMap(h => Object.keys(h)))]
+  const allPositionsLive = computePositions();
+  // Ajouter aujourd'hui dans les dates
+  const allDates = [...new Set([...Object.values(priceHistories).flatMap(h => Object.keys(h)), todayStr])]
     .filter(d => d >= firstDate).sort();
   if (!allDates.length) return;
   const datasets = positions.map((pos, i) => {
     const hist = priceHistories[pos.ticker];
     if (!hist) return null;
+    const live = allPositionsLive.find(p => p.ticker === pos.ticker);
     const posTxs = txs.filter(t => t.ticker === pos.ticker);
     const color = COLORS[i % COLORS.length];
     const data = allDates.map(date => {
+      // Dernier point = pnl exact de computePositions() pour cohérence avec "PAR TITRE"
+      if (date === todayStr && live?.pnl != null) return parseFloat(live.pnl.toFixed(2));
       const price = hist[date];
       if (price == null) return null;
       const buys  = posTxs.filter(t => t.date <= date && t.type === 'buy');

@@ -9123,7 +9123,13 @@ async function fetchHistoricalPrices(ticker, fromDate, toDate) {
     if (!p) return null;
     const out = {};
     for (const [d, v] of Object.entries(p)) { if (d >= fromDate) out[d] = v; }
-    return Object.keys(out).length > 5 ? out : (Object.keys(p).length > 5 ? p : null);
+    if (Object.keys(out).length < 5) return Object.keys(p).length > 5 ? p : null;
+    // Reject if the earliest date in result is more than 30 days after fromDate
+    // (means source doesn't cover old enough history — let Promise.any wait for 5y)
+    const earliest = Object.keys(out).sort()[0];
+    const gapDays = (new Date(earliest) - new Date(fromDate)) / 86400000;
+    if (gapDays > 30) return null;
+    return out;
   };
 
   // Toutes les sources lancées EN PARALLÈLE — le premier qui répond gagne

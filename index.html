@@ -8989,9 +8989,22 @@ let _benchmarkTicker = 'CW8.PA';
 async function fetchBenchmarkHistory(fromDate) {
   if (_benchmarkCache && _benchmarkCacheFrom === fromDate) return _benchmarkCache;
 
-  // Tickers MSCI World EUR PEA-éligibles — JAMAIS les tickers déjà en portefeuille
-  // (WPEA.PA, PANX.PA, PAEEM.PA, AI.PA exclus pour éviter comparaison circulaire)
-  const benchTickers = ['CW8.PA', 'EWLD.PA', 'MWRD.PA'];
+  const VERCEL = 'https://pea-etf-proxy.vercel.app';
+  const days = Math.ceil((Date.now() - new Date(fromDate).getTime()) / 86400000) + 10;
+
+  const parseBourso = (json) => {
+    const ticks = json?.d?.Ticks?.d || json?.d?.ticks?.d || json?.Ticks?.d;
+    if (!Array.isArray(ticks) || ticks.length < 10) return null;
+    const prices = {};
+    for (const t of ticks) {
+      if (Array.isArray(t) && t.length >= 5) {
+        const c = t[4]; const d = new Date(t[0]*1000).toISOString().slice(0,10);
+        if (isFinite(c) && c > 0) prices[d] = c;
+      }
+    }
+    return Object.keys(prices).length > 10 ? prices : null;
+  };
+
   const parseYahooBench = (body) => {
     try {
       const data = JSON.parse(body);
@@ -9006,18 +9019,23 @@ async function fetchBenchmarkHistory(fromDate) {
     } catch(e) { return null; }
   };
 
-  // Utiliser range=2y (prouvé fiable) plutôt que period1/period2
-  for (const t of benchTickers) {
+  const save = (prices, ticker) => { _benchmarkCache = prices; _benchmarkCacheFrom = fromDate; _benchmarkTicker = ticker; return prices; };
+
+  // Source 1 : Boursorama via Vercel (direct, sans proxy CORS — le plus fiable)
+  for (const [sym, ticker] of [['1rTCW8','CW8.PA'], ['1rTEWLD','EWLD.PA']]) {
+    try {
+      const r = await fetch(`${VERCEL}/bourse/action/graph/dl/GetTicksEOD?symbol=${sym}&length=${days}&period=0&guid=`, {signal:AbortSignal.timeout(8000)});
+      if (r.ok) { const prices = parseBourso(await r.json()); if (prices) return save(prices, ticker); }
+    } catch(e) {}
+  }
+
+  // Source 2 : Yahoo Finance via proxy CORS (fallback)
+  for (const t of ['CW8.PA', 'EWLD.PA', 'MWRD.PA']) {
     for (const host of ['query2', 'query1']) {
       try {
         const body = await proxyFetch(`https://${host}.finance.yahoo.com/v8/finance/chart/${t}?interval=1d&range=2y`);
         const prices = parseYahooBench(body);
-        if (prices) {
-          _benchmarkCache = prices;
-          _benchmarkCacheFrom = fromDate;
-          _benchmarkTicker = t;
-          return prices;
-        }
+        if (prices) return save(prices, t);
       } catch(e) {}
     }
   }

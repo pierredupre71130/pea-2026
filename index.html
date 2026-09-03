@@ -9082,13 +9082,14 @@ function simulateDCABenchmark(deposits, prices) {
   if (!curP) return null;
   const currentValue = cumulShares * curP;
   cfs.push({ date: today(), amount: currentValue });
+  const totalInvested = sorted.reduce((s, d) => s + d.amount, 0);
   const getValueAt = (dateStr) => {
     const acc = events.filter(e => e.date <= dateStr);
     if (!acc.length) return 0;
     const p2 = getP(dateStr);
     return p2 ? acc[acc.length - 1].shares * p2 : 0;
   };
-  return { currentValue, shares: cumulShares, currentPrice: curP, cashflows: cfs, getValueAt };
+  return { currentValue, shares: cumulShares, currentPrice: curP, cashflows: cfs, getValueAt, totalInvested };
 }
 
 // ======================================================
@@ -9443,6 +9444,7 @@ async function renderPerformance() {
           <div style="font-size:0.75rem;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Hypothèse MSCI World</div>
           <div style="font-size:1.5rem;font-weight:700;color:var(--accent)">${fc(bench.currentValue)}</div>
           <div style="font-size:0.78rem;color:var(--muted);margin-top:5px">TRI ${benchTRI != null ? fp(benchTRI * 100) : '—'} · ${fn(bench.shares, 3)} parts ${_benchmarkTicker} @ ${fc(bench.currentPrice)}</div>
+          <div style="font-size:0.78rem;color:var(--muted);margin-top:3px">Prix moy. d'achat simulé : ${bench.totalInvested ? fc(bench.totalInvested / bench.shares) : '—'}</div>
         </div>
       </div>
       <div style="padding:12px 16px;background:${alpha != null && alpha > 0 ? 'rgba(22,201,93,0.08)' : 'rgba(240,58,58,0.08)'};border-radius:6px;font-size:0.85rem;line-height:1.5">
@@ -9451,6 +9453,9 @@ async function renderPerformance() {
             ? `✅ Votre portefeuille surperforme de <strong style="color:var(--success)">${fc(total - bench.currentValue)}</strong> et un TRI supérieur de <strong style="color:var(--success)">${fp(alpha * 100)}</strong> par rapport au MSCI World.`
             : `⚠️ Le MSCI World aurait rapporté <strong style="color:var(--danger)">${fc(bench.currentValue - total)}</strong> de plus, soit un TRI supérieur de <strong style="color:var(--danger)">${fp(-alpha * 100)}</strong>.`
           : 'Benchmark non disponible pour la comparaison.'}
+      </div>
+      <div style="margin-top:10px;font-size:0.75rem;color:var(--muted);line-height:1.5">
+        ℹ️ Le benchmark remplace <em>chaque achat réel</em> (PANX, PAEEM, AI.PA…) par du ${_benchmarkTicker} à la même date et au même montant. Si certains achats ont eu lieu quand ${_benchmarkTicker} était moins cher (début de période), le prix moyen simulé sera plus bas que votre cours actuel de WPEA.PA.
       </div>
     </div>` : ''}
 

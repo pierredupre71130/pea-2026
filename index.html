@@ -8945,57 +8945,40 @@ function computeVolatility(snapshots) {
 
 function computeYearlyReturns(snapshots) {
   if (!snapshots || snapshots.length < 2) return [];
+  const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
   const byYear = {};
-  for (const s of snapshots) {
+  for (const s of sorted) {
     const y = s.date.slice(0, 4);
     if (!byYear[y]) byYear[y] = [];
     byYear[y].push(s);
   }
-
-  // Date du tout premier snapshot (pour détecter portefeuille créé dans l'année)
-  const globalFirstDate = [...snapshots].sort((a, b) => a.date.localeCompare(b.date))[0].date;
-
-  // Flux DCA : préférer les dépôts explicites, sinon reconstruire depuis les transactions
-  const explicitDeposits = (S.data.deposits || []).filter(d => d.type === 'deposit');
-  const dcaFlows = explicitDeposits.length > 1
-    ? explicitDeposits
-    : [...new Set((S.data.transactions || []).filter(t => t.type === 'buy').map(t => t.date))].sort()
-        .map(date => ({
-          date, type: 'deposit',
-          amount: (S.data.transactions || []).filter(t => t.type === 'buy' && t.date === date)
-            .reduce((s, t) => s + t.quantity * t.price + (t.fees || 0), 0)
-        }));
+  const sv = (s) => (s.portValue || 0) + Math.max(0, s.cash || 0);
+  const globalFirst = sorted[0];
 
   return Object.entries(byYear).map(([year, snaps]) => {
-    snaps.sort((a, b) => a.date.localeCompare(b.date));
-    const sv = (s) => (s.portValue || 0) + Math.max(0, s.cash || 0);
     const lastSnap = snaps[snaps.length - 1];
     const endVal = sv(lastSnap);
-    const endDate = new Date(lastSnap.date);
+    const isFirstYear = snaps[0].date === globalFirst.date;
 
-    // Si le portefeuille a démarré cette année-là → startVal = 0, sinon valeur début d'année
-    const isNewPortfolio = snaps[0].date === globalFirstDate;
-    const startVal = isNewPortfolio ? 0 : sv(snaps[0]);
-    const startDate = new Date(snaps[0].date);
-    const totalDays = Math.max(1, (endDate - startDate) / 86400000);
-
-    // Méthode de Dietz modifiée : tous les flux de l'année (y compris jour J si nouveau portefeuille)
-    let cashFlows = 0, weightedCF = 0;
-    for (const d of dcaFlows) {
-      if (d.date.slice(0, 4) !== year) continue;
-      // Pour un portefeuille existant, ignorer les flux antérieurs au 1er snapshot de l'année
-      if (!isNewPortfolio && d.date < snaps[0].date) continue;
-      if (d.date > lastSnap.date) continue;
-      const sign = d.type === 'deposit' ? 1 : -1;
-      const daysLeft = Math.max(0, (endDate - new Date(d.date)) / 86400000);
-      cashFlows += sign * d.amount;
-      weightedCF += sign * d.amount * (daysLeft / totalDays);
+    // Pour la première année : startVal = 0, dépôts de l'année = total déposé au dernier snapshot
+    // Pour les années suivantes : startVal = valeur au 1er snapshot de l'année
+    //   dépôts de l'année = différence de deposited entre début et fin d'année
+    let startVal, yearDeposited;
+    if (isFirstYear) {
+      startVal = 0;
+      yearDeposited = lastSnap.deposited || 0;
+    } else {
+      startVal = sv(snaps[0]);
+      const startDeposited = snaps[0].deposited || 0;
+      const endDeposited = lastSnap.deposited || 0;
+      yearDeposited = Math.max(0, endDeposited - startDeposited);
     }
 
-    const denom = startVal + weightedCF;
-    const perf = denom > 0 ? (endVal - startVal - cashFlows) / denom * 100 : null;
+    // Dietz simplifié : dépôts supposés au milieu de la période
+    const denom = startVal + yearDeposited * 0.5;
+    const perf = denom > 0 ? (endVal - startVal - yearDeposited) / denom * 100 : null;
 
-    return { year, startVal, endVal, perf, deposited: lastSnap.deposited || cashFlows };
+    return { year, startVal, endVal, perf, deposited: lastSnap.deposited || yearDeposited };
   }).sort((a, b) => a.year.localeCompare(b.year));
 }
 

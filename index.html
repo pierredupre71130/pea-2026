@@ -9039,6 +9039,15 @@ async function fetchBenchmarkHistory(fromDate) {
       } catch(e) {}
     }
   }
+
+  // Source 3 : priceHistory déjà stockée pour un ETF MSCI World du portefeuille
+  // Permet la comparaison même sans accès réseau — priorité aux tickers MSCI World
+  const msciWorldTickers = ['WPEA.PA', 'CW8.PA', 'EWLD.PA'];
+  for (const t of msciWorldTickers) {
+    const stored = S.data.priceHistory[t];
+    if (stored && Object.keys(stored).length > 10) return save(stored, t);
+  }
+
   return null;
 }
 

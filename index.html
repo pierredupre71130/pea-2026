@@ -9596,7 +9596,7 @@ async function renderPerformance() {
   requestAnimationFrame(() => {
     makePerfCompareChart(snaps, null);
     updateFiscalCalc(document.getElementById('fiscal-amount')?.value);
-    updateProjections(document.getElementById('proj-monthly')?.value || ${avgMonthly});
+    updateProjections(document.getElementById('proj-monthly')?.value || avgMonthly);
   });
 }
 

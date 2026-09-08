@@ -9083,13 +9083,14 @@ function simulateDCABenchmark(deposits, prices) {
   const currentValue = cumulShares * curP;
   cfs.push({ date: today(), amount: currentValue });
   const totalInvested = sorted.reduce((s, d) => s + d.amount, 0);
+  const purchaseDetail = sorted.map(dep => ({ date: dep.date, amount: dep.amount, price: getP(dep.date), shares: dep.amount / (getP(dep.date) || 1) }));
   const getValueAt = (dateStr) => {
     const acc = events.filter(e => e.date <= dateStr);
     if (!acc.length) return 0;
     const p2 = getP(dateStr);
     return p2 ? acc[acc.length - 1].shares * p2 : 0;
   };
-  return { currentValue, shares: cumulShares, currentPrice: curP, cashflows: cfs, getValueAt, totalInvested };
+  return { currentValue, shares: cumulShares, currentPrice: curP, cashflows: cfs, getValueAt, totalInvested, purchaseDetail };
 }
 
 // ======================================================
@@ -9457,6 +9458,25 @@ async function renderPerformance() {
       <div style="margin-top:10px;font-size:0.75rem;color:var(--muted);line-height:1.5">
         ℹ️ Le benchmark remplace <em>chaque achat réel</em> (PANX, PAEEM, AI.PA…) par du ${_benchmarkTicker} à la même date et au même montant. Si certains achats ont eu lieu quand ${_benchmarkTicker} était moins cher (début de période), le prix moyen simulé sera plus bas que votre cours actuel de WPEA.PA.
       </div>
+      <details style="margin-top:10px">
+        <summary style="font-size:0.78rem;color:var(--accent);cursor:pointer;user-select:none">🔍 Détail des achats simulés (vérification des prix)</summary>
+        <div style="margin-top:8px;overflow-x:auto">
+          <table style="width:100%;font-size:0.75rem;border-collapse:collapse">
+            <thead><tr style="color:var(--muted);text-align:left">
+              <th style="padding:4px 8px">Date</th>
+              <th style="padding:4px 8px;text-align:right">Montant</th>
+              <th style="padding:4px 8px;text-align:right">Prix ${_benchmarkTicker}</th>
+              <th style="padding:4px 8px;text-align:right">Parts achetées</th>
+            </tr></thead>
+            <tbody>${bench.purchaseDetail.map(r => `<tr style="border-top:1px solid var(--border)">
+              <td style="padding:4px 8px">${r.date}</td>
+              <td style="padding:4px 8px;text-align:right">${fc(r.amount)}</td>
+              <td style="padding:4px 8px;text-align:right;color:${r.price < 560 ? 'var(--danger)' : 'var(--muted)'}">${fc(r.price)}</td>
+              <td style="padding:4px 8px;text-align:right">${fn(r.shares, 3)}</td>
+            </tr>`).join('')}</tbody>
+          </table>
+        </div>
+      </details>
     </div>` : ''}
 
     <!-- PERFORMANCES ANNUELLES -->

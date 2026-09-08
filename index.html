@@ -9445,7 +9445,7 @@ async function renderPerformance() {
 
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px">
       ${kpiCard('Plus-value totale', `${pnl >= 0 ? '+' : ''}${fc(pnl)}`, `${fp(pnlP)} sur ${fc(totalCost)} investis`, cc(pnl, 'var(--success)', 'var(--danger)'))}
-      ${kpiCard('Rendement annualisé', tri != null ? fp(tri * 100) : '—', `TRI · ${daysInvested} jours d'investissement`, cc(tri, 'var(--success)', 'var(--danger)'))}
+      ${kpiCard('Rendement sur la période', fp(pnlP), `${daysInvested} jours · depuis le ${fd(firstDate)}`, cc(pnl, 'var(--success)', 'var(--danger)'))}
       ${kpiCard('Valeur du PEA', fc(total), `Dont ${fc(Math.max(0, cash))} de liquidités`, 'var(--accent)')}
     </div>
 

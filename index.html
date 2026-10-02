@@ -1637,17 +1637,26 @@ function makeAllocationChart(positions) {
   destroyChart('alloc');
   const ctx = document.getElementById('chart-alloc');
   if (!ctx || !positions.length) return;
+  // Group same-index ETFs (e.g. WPEA.PA + DCAM.PA → "MSCI World")
+  const groupMap = {};
+  positions.forEach(p => {
+    const key = PEA_KB.etfs.find(e => e.ticker === p.ticker)?.index || p.ticker;
+    groupMap[key] = (groupMap[key] || 0) + p.marketValue;
+  });
+  const labels = Object.keys(groupMap);
+  const data = labels.map(k => groupMap[k]);
+  const total = data.reduce((a, b) => a + b, 0);
   S.charts['alloc'] = new Chart(ctx, {
     type: 'doughnut',
     data: {
-      labels: positions.map(p => p.ticker),
-      datasets: [{ data: positions.map(p => p.marketValue), backgroundColor: COLORS.slice(0, positions.length), borderWidth: 0, hoverOffset: 6 }]
+      labels,
+      datasets: [{ data, backgroundColor: COLORS.slice(0, labels.length), borderWidth: 0, hoverOffset: 6 }]
     },
     options: {
       responsive: true, maintainAspectRatio: false, cutout: '62%',
       plugins: {
         legend: { position:'right', labels:{ color:'#94a3b8', font:{ size:11 }, padding:10, boxWidth:11 } },
-        tooltip: { callbacks: { label: c => ` ${c.label}: ${fc(c.raw)} (${(c.parsed/_sum(positions)*100).toFixed(1)}%)` } }
+        tooltip: { callbacks: { label: c => ` ${c.label}: ${fc(c.raw)} (${total > 0 ? (c.parsed / total * 100).toFixed(1) : 0}%)` } }
       }
     }
   });
@@ -1657,14 +1666,21 @@ function makeEtfPieChart(positions) {
   destroyChart('etf-pie');
   const ctx = document.getElementById('chart-etf-pie');
   if (!ctx) return;
-  // Identifier les ETFs via planItems (même logique que renderPortfolio)
   const posWithType = positions.map(p => {
     const plan = S.data.planItems.find(pl => pl.ticker === p.ticker);
     return { ...p, isEtf: plan ? plan.isEtf !== false : true };
   });
   const etfPos = posWithType.filter(p => p.isEtf && p.marketValue > 0);
   if (!etfPos.length) return;
-  const etfTotal = etfPos.reduce((s, p) => s + p.marketValue, 0);
+  // Group same-index ETFs (e.g. WPEA.PA + DCAM.PA → "MSCI World")
+  const groupMap = {};
+  etfPos.forEach(p => {
+    const key = PEA_KB.etfs.find(e => e.ticker === p.ticker)?.index || p.ticker;
+    groupMap[key] = (groupMap[key] || 0) + p.marketValue;
+  });
+  const labels = Object.keys(groupMap);
+  const data = labels.map(k => groupMap[k]);
+  const etfTotal = data.reduce((a, b) => a + b, 0);
 
   const pieLabelsPlugin = {
     id: 'pieLabels',
@@ -1696,14 +1712,14 @@ function makeEtfPieChart(positions) {
   S.charts['etf-pie'] = new Chart(ctx, {
     type: 'pie',
     data: {
-      labels: etfPos.map(p => p.ticker),
-      datasets: [{ data: etfPos.map(p => p.marketValue), backgroundColor: COLORS.slice(0, etfPos.length), borderColor: 'rgba(15,23,42,0.6)', borderWidth: 2, hoverOffset: 8 }]
+      labels,
+      datasets: [{ data, backgroundColor: COLORS.slice(0, labels.length), borderColor: 'rgba(15,23,42,0.6)', borderWidth: 2, hoverOffset: 8 }]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: c => ` ${c.label}: ${fc(c.raw)} (${(c.raw/etfTotal*100).toFixed(1)}%)` } }
+        tooltip: { callbacks: { label: c => ` ${c.label}: ${fc(c.raw)} (${etfTotal > 0 ? (c.raw / etfTotal * 100).toFixed(1) : 0}%)` } }
       }
     },
     plugins: [pieLabelsPlugin]
@@ -2737,6 +2753,52 @@ function renderDashboard() {
 // ======================================================
 // PAGE — PORTFOLIO
 // ======================================================
+function renderEtfGroupedRows(etfPos, bucketTotal, pfTotal, renderRow) {
+  const groups = new Map();
+  etfPos.forEach(p => {
+    const key = PEA_KB.etfs.find(e => e.ticker === p.ticker)?.index || p.ticker;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  });
+  let html = '';
+  for (const [key, positions] of groups) {
+    if (positions.length > 1) {
+      const gVal  = positions.reduce((s, p) => s + p.marketValue, 0);
+      const gCost = positions.reduce((s, p) => s + (p.avgPrice ?? 0) * p.quantity, 0);
+      const gPnl  = gCost > 0 ? gVal - gCost : null;
+      const gPnlPct = gCost > 0 ? (gVal - gCost) / gCost * 100 : null;
+      const gWPF  = pfTotal > 0 ? gVal / pfTotal * 100 : 0;
+      const tickers = positions.map(p => p.ticker).join(' + ');
+      html += `<tr style="background:rgba(59,130,246,0.08);border-top:2px solid var(--accent)">
+        <td colspan="2" style="padding:8px 12px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="background:var(--accent);color:#fff;border-radius:4px;padding:2px 8px;font-size:0.68rem;font-weight:800;letter-spacing:0.04em">${esc(key)}</span>
+            <span style="font-size:0.73rem;color:var(--muted)">${esc(tickers)}</span>
+          </div>
+        </td>
+        <td colspan="4" style="font-size:0.72rem;color:var(--muted);text-align:center">— groupe —</td>
+        <td><strong>${fc(gVal)}</strong></td>
+        <td class="${gPnl !== null ? sign(gPnl) : 'neutral'}">${gPnl !== null ? fc(gPnl) : '—'}</td>
+        <td class="${gPnlPct !== null ? sign(gPnlPct) : 'neutral'}">${gPnlPct !== null ? fp(gPnlPct) : '—'}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:5px">
+            <span style="font-size:0.78rem;font-weight:700">${gWPF.toFixed(1)}%</span>
+            <span style="font-size:0.65rem;color:var(--muted)">PF</span>
+            <div class="progress" style="width:36px"><div class="progress-fill" style="width:${Math.min(gWPF, 100)}%;background:var(--accent)"></div></div>
+          </div>
+        </td>
+        <td></td>
+      </tr>`;
+      positions.forEach(p => {
+        html += renderRow(p, bucketTotal).replace('<tr>', '<tr style="border-left:3px solid var(--accent)">');
+      });
+    } else {
+      html += renderRow(positions[0], bucketTotal);
+    }
+  }
+  return html;
+}
+
 function renderPortfolio() {
   const positions = computePositions();
   const total = positions.reduce((s,p)=>s+p.marketValue,0);
@@ -2829,7 +2891,7 @@ function renderPortfolio() {
       ${etfPos.length ? `<div class="card" style="margin-bottom:12px">
         <div style="font-size:0.72rem;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px">ETFs — ${fc(totalEtf)} (${total>0?(totalEtf/total*100).toFixed(1):0}% du PF)</div>
         <div class="table-wrap"><table>${tableHead}
-          <tbody>${etfPos.map(p => renderRow(p, totalEtf)).join('')}</tbody>
+          <tbody>${renderEtfGroupedRows(etfPos, totalEtf, total, renderRow)}</tbody>
         </table></div>
       </div>` : ''}
 
@@ -3447,6 +3509,25 @@ function renderPlanning() {
     <!-- ETF SECTION -->
     <div class="card mb16">
       <div class="section-title mb16">ETFs — Répartition cible &amp; Simulation d'achat</div>
+      ${(()=>{
+        // Group same-index ETFs and show subtotal banner if multiple ETFs share an index
+        const idxGroups = {};
+        etfItems.forEach(item => {
+          const idx = PEA_KB.etfs.find(e => e.ticker === item.ticker)?.index;
+          if (idx) { if (!idxGroups[idx]) idxGroups[idx] = []; idxGroups[idx].push(item); }
+        });
+        const multiGroups = Object.entries(idxGroups).filter(([,v]) => v.length > 1);
+        if (!multiGroups.length) return '';
+        return multiGroups.map(([idx, items]) => {
+          const combined = items.reduce((s, i) => s + (i.allocationPct || 0), 0);
+          const tickers = items.map(i => i.ticker).join(' + ');
+          return `<div class="info-box" style="background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.3);margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="background:var(--accent);color:#fff;border-radius:4px;padding:2px 8px;font-size:0.68rem;font-weight:800">${esc(idx)}</span>
+            <span style="font-size:0.8rem"><strong>${combined.toFixed(1)}%</strong> combinés</span>
+            <span style="font-size:0.72rem;color:var(--muted)">(${esc(tickers)})</span>
+          </div>`;
+        }).join('');
+      })()}
       ${etfItems.length ? `
         ${(()=>{ const under200=etfItems.filter(p=>totalEtfPct>0&&(p.allocationPct/totalEtfPct)*etfBudget<200&&(p.allocationPct||0)>0); return under200.length?`<div class="info-box info-warning" style="margin-bottom:10px">⚡ ${under200.length} ETF${under200.length>1?'s':''} avec allocation théorique < 200€/mois : ${under200.map(p=>`<strong>${p.ticker}</strong> (~${Math.round(p.allocationPct/totalEtfPct*etfBudget)}€)`).join(', ')} — l'achat sera forcé à 200€ min (⚡ Min. forcé)</div>`:''; })()}
         ${outOf3.length > 0
